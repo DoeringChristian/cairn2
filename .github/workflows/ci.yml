@@ -48,7 +48,7 @@ jobs:
       - run: uv sync --locked --extra all
       - run: npm ci --prefix ui
       - run: npm run build --prefix ui
-      - run: npx --prefix ui playwright install --with-deps chromium
+      - run: npx --prefix ui playwright install --with-deps chromium webkit
       - name: Seed two report publications for history and comment tests
         run: |
           uv run python examples/build_report_showcase.py --repo /tmp/cairn-ci --project neural-rendering --publish

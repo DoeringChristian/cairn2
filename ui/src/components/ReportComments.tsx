@@ -40,10 +40,16 @@ function useDraft(artifact:string,anchor:CommentAnchor,initial?:Comment) {
 export function CommentComposer({artifact,anchor,position,onClose,initial,portalTarget}: {artifact:string;anchor:CommentAnchor;position:{x:number;y:number};onClose:(saved:boolean)=>void;initial?:Comment;portalTarget?:HTMLElement|null}) {
   const field=useRef<HTMLTextAreaElement>(null),popover=useRef<HTMLDivElement>(null),draft=useDraft(artifact,anchor,initial);
   useEffect(()=>{field.current?.focus({preventScroll:true});},[]);
+  const [viewport, setViewport] = useState(() => ({x: window.visualViewport?.offsetLeft ?? 0, y: window.visualViewport?.offsetTop ?? 0, width: window.visualViewport?.width ?? innerWidth, height: window.visualViewport?.height ?? innerHeight}));
+  useEffect(() => {
+    const update = () => setViewport({x: window.visualViewport?.offsetLeft ?? 0, y: window.visualViewport?.offsetTop ?? 0, width: window.visualViewport?.width ?? innerWidth, height: window.visualViewport?.height ?? innerHeight});
+    window.visualViewport?.addEventListener('resize', update);window.visualViewport?.addEventListener('scroll', update);window.addEventListener('resize', update);
+    return () => {window.visualViewport?.removeEventListener('resize', update);window.visualViewport?.removeEventListener('scroll', update);window.removeEventListener('resize', update);};
+  }, []);
   const close=async()=>{const saved=await draft.flush();if(saved)onClose(!!draft.body.trim());};
   const closeCurrent=useRef(close);closeCurrent.current=close;
   useEffect(()=>{const outside=(event:PointerEvent)=>{if(!popover.current?.contains(event.target as Node))void closeCurrent.current();};document.addEventListener('pointerdown',outside,true);return()=>document.removeEventListener('pointerdown',outside,true);},[]);
-  return createPortal(<div ref={popover} className="comment-popover" role="group" aria-label="Add report comment" style={{left:Math.max(8,Math.min(innerWidth-328,position.x)),top:Math.max(8,Math.min(innerHeight-230,position.y+40))}}><header><span className="comment-save-status" role="status">{draft.status==='Saved'?<Check size={14} aria-label="Saved"/>:draft.status}</span><MediaIconButton label="Delete comment" icon={Trash2} onMouseDown={e=>e.preventDefault()} onClick={async()=>{if(await draft.remove())onClose(false);}}/></header><textarea ref={field} aria-label="Comment" placeholder="Write a comment…" maxLength={65536} rows={3} value={draft.body} onChange={e=>draft.setBody(e.target.value)} onBlur={()=>void draft.flush()} onKeyDown={e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();void close();}}}/>{draft.error&&<ErrorNote error={draft.error}/>}</div>,portalTarget||document.body);
+  return createPortal(<div ref={popover} className="comment-popover" role="group" aria-label="Add report comment" style={{left:Math.max(viewport.x+8,Math.min(viewport.x+viewport.width-328,position.x)),top:Math.max(viewport.y+8,Math.min(viewport.y+viewport.height-230,position.y+40)),maxWidth:viewport.width-16,maxHeight:viewport.height-16}}><header><span className="comment-save-status" role="status">{draft.status==='Saved'?<Check size={14} aria-label="Saved"/>:draft.status}</span><MediaIconButton label="Delete comment" icon={Trash2} onMouseDown={e=>e.preventDefault()} onClick={async()=>{if(await draft.remove())onClose(false);}}/></header><textarea ref={field} aria-label="Comment" placeholder="Write a comment…" maxLength={65536} rows={3} value={draft.body} onChange={e=>draft.setBody(e.target.value)} onBlur={()=>void draft.flush()} onKeyDown={e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();void close();}}}/>{draft.error&&<ErrorNote error={draft.error}/>}</div>,portalTarget||document.body);
 }
 type Marker={comment:Comment;x:number;y:number};
 export function ReportComments({artifact,container}: {artifact:string;project:string;container:RefObject<HTMLElement>}) {
@@ -59,12 +65,12 @@ export function ReportComments({artifact,container}: {artifact:string;project:st
     const place=()=>{frame=0;const box=article.getBoundingClientRect(),next:Marker[]=[];
       for(const comment of items){const rect=ranges.get(comment.id)?.getBoundingClientRect();const top=rect?.top??box.top;
         if(top < -24 || top > innerHeight-24)continue;
-        let y=Math.max(8,top);while(next.some(m=>Math.abs(m.y-y)<30))y+=30;
-        next.push({comment,x:Math.min(innerWidth-36,box.right+8),y});
+        let y=Math.max(8,top);while(next.some(m=>Math.abs(m.y-y)<48))y+=48;
+        next.push({comment,x:Math.min(innerWidth-52,box.right+8),y});
       }setMarkers(next);
     };
     const schedule=()=>{if(!frame)frame=requestAnimationFrame(place);};
-    const reveal=(event:Event)=>{const id=(event as CustomEvent<string>).detail,comment=items.find(c=>c.id===id);if(comment){const box=article.getBoundingClientRect(),rect=ranges.get(id)?.getBoundingClientRect();setEditing({comment,x:Math.min(innerWidth-36,box.right+8),y:Math.max(8,rect?.top||box.top)});}};
+    const reveal=(event:Event)=>{const id=(event as CustomEvent<string>).detail,comment=items.find(c=>c.id===id);if(comment){const box=article.getBoundingClientRect(),rect=ranges.get(id)?.getBoundingClientRect();setEditing({comment,x:Math.min(innerWidth-52,box.right+8),y:Math.max(8,rect?.top||box.top)});}};
     place();const observer=new ResizeObserver(schedule);observer.observe(article);window.addEventListener('scroll',schedule,{passive:true});window.addEventListener('resize',schedule);window.addEventListener('cairn:show-comment',reveal);
     return()=>{cancelAnimationFrame(frame);observer.disconnect();window.removeEventListener('scroll',schedule);window.removeEventListener('resize',schedule);window.removeEventListener('cairn:show-comment',reveal);};
   },[container,items,ranges]);

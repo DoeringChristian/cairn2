@@ -19,7 +19,7 @@ export function SelectionCopy({container,version}: {container:RefObject<HTMLElem
       const formula=element?.closest<HTMLElement>('[data-latex]');const endElement=end.nodeType===3?end.parentElement:end as Element;
       const quote=formula&&formula===endElement?.closest('[data-latex]')?`$${formula.dataset.latex}$`:(fragment.textContent||selected.toString()).replace(/\s+/g,' ').trim();
       savedRange.current=range.cloneRange();
-      const rect=range.getBoundingClientRect();setCopied(false);setSelection({anchor:{quote,path:source.dataset.sourcePath,line_start:Number(source.dataset.lineStart),line_end:Number(endElement?.closest<HTMLElement>('[data-line-end]')?.dataset.lineEnd||source.dataset.lineStart)},text:`${source.dataset.sourcePath}:${source.dataset.lineStart} "${quote}" [cairn:${version}]`,x:Math.max(8,Math.min(innerWidth-84,rect.right+6)),y:Math.max(8,Math.min(innerHeight-48,rect.bottom+6))});
+      const rect=range.getBoundingClientRect();setCopied(false);setSelection({anchor:{quote,path:source.dataset.sourcePath,line_start:Number(source.dataset.lineStart),line_end:Number(endElement?.closest<HTMLElement>('[data-line-end]')?.dataset.lineEnd||source.dataset.lineStart)},text:`${source.dataset.sourcePath}:${source.dataset.lineStart} "${quote}" [cairn:${version}]`,x:Math.max(8,Math.min(innerWidth-102,rect.right+6)),y:Math.max(8,Math.min(innerHeight-52,rect.bottom+6))});
     }
     document.addEventListener('selectionchange',inspect);window.addEventListener('scroll',inspect,{passive:true});
     return()=>{document.removeEventListener('selectionchange',inspect);window.removeEventListener('scroll',inspect);};

@@ -1,0 +1,59 @@
+/* Mobile adaptations of the shared components; desktop palette stays unchanged. */
+.section-head, .section-head > *, .app-section, .detail-bar > *, .toolbar > * { min-width: 0; }
+.section-head h2, .detail-bar > code, .report-card h2, .tag-chip { overflow-wrap: anywhere; }
+.table-wrap, .graph-scroll, .tabs { max-width: 100%; }
+@media (max-width: 760px) {
+  main { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+  body { padding-bottom: env(safe-area-inset-bottom); }
+  .rail { padding-top: max(8px, env(safe-area-inset-top)); max-height: 100dvh; }
+  .section-head h2 { font-size: clamp(26px, 7vw, 36px); }
+  .toolbar > *, .toolbar > form { flex: 1 1 100%; width: 100%; }
+  .toolbar input[type="search"] { width: 100%; }
+  .pagination { flex-wrap: wrap; }
+  .pagination > .hint { flex: 1 1 100%; margin: 0; }
+  .select, .select-list { max-width: 100%; }
+  .select-list { min-width: 0; }
+  .select-list li { overflow-wrap: anywhere; }
+  input, textarea, .field input, .tag-row input, .comment-popover textarea, .prism-lightbox input[type="number"] { font-size: 16px; }
+  .action-button, .action-button.small, .select-button, .select-list li, .rail-toggle, .rail nav a,
+  .text-button, .tag-clear, button.tag-chip, .tag-chip button, .tag-row form button,
+  .report-toc a, .report-toc-toggle, .graph-toggle button, .copy-id { min-height: 44px; }
+  .tag-row input { min-height: 44px; }
+  .tag-row form button, .tag-chip button { min-width: 44px; justify-content: center; }
+  .tag-chip { max-width: 100%; }
+  .rail-links { flex-wrap: wrap; }
+  .image-copy, .prism-media-open, .report-comment-marker,
+  .comment-popover .media-icon-button, .prism-lightbox .media-icon-button,
+  .prism-zoom-toolbar button { width: 44px; height: 44px; min-height: 44px; flex-shrink: 0; }
+  .native-output-shell { margin-left: 52px; }
+  .native-output-shell > .output-comment-button { left: -52px; }
+  .syntax-code > .code-copy { top: 3px; }
+  .native-document .syntax-code pre { padding-top: 52px; }
+  .comment-popover { max-height: calc(100dvh - 16px); overflow-y: auto; }
+  .comment-popover textarea { min-height: 80px; }
+}
+@media (max-width: 600px) {
+  /* Lists become cards; genuinely tabular records retain contained horizontal scrolling. */
+  .artifact-list .table-wrap { overflow: visible; background: none; }
+  .artifact-list table, .artifact-list tbody { display: block; min-width: 0; width: 100%; }
+  .artifact-list thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .artifact-list tr { display: grid; gap: 10px; margin: 14px 0; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
+  .artifact-list td { display: grid; grid-template-columns: 88px minmax(0, 1fr); align-items: start; gap: 8px; padding: 0; border: 0; white-space: normal; overflow-wrap: anywhere; }
+  .artifact-list td::before { content: attr(data-label); color: var(--muted); font-size: 11px; padding-top: 4px; }
+  .artifact-list td:first-child { display: block; font-size: 16px; }
+  .artifact-list td:first-child::before { display: none; }
+  .artifact-list td:first-child a { display: flex; align-items: center; min-height: 44px; }
+  .artifact-list .artifact-tags.compact { min-width: 0; max-width: 100%; }
+  .artifact-list td .pill { justify-self: start; }
+}
+@media (pointer: coarse), (max-width: 760px) {
+  .prism-lightbox { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+  .prism-lightbox .media-icon-button.action-button, .prism-lightbox .prism-zoom-toolbar button { min-width: 44px; min-height: 44px; }
+  .prism-lightbox .media-timeline-handle { width: 24px; height: 44px; top: -4px; border: 7px solid transparent; background-clip: padding-box; }
+}
+@media (max-height: 500px) and (pointer: coarse) {
+  .prism-lightbox { width: 100%; max-width: 100%; height: 100dvh; max-height: 100dvh; border-radius: 0; }
+  .prism-lightbox-header, .prism-lightbox-footer, .prism-video-transport { padding: 4px 10px; gap: 4px; }
+  .prism-lightbox-stage { min-height: 60px; }
+  .prism-gesture-hint { display: none; }
+}
