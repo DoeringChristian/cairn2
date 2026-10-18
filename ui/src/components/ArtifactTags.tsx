@@ -1,3 +1,4 @@
+import { invalidateLists } from '../listCache';
 import { useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import { api, type Artifact } from '../api';
@@ -9,7 +10,7 @@ export function ArtifactTags({artifact,onChange,compact=false,onTagClick}: {arti
   const tags=artifactTags(artifact);
   async function save(next:string[]){
     setBusy(true);setError(undefined);
-    try{await api(`/ui-api/artifacts/${artifact.id}/tags`,{method:'PATCH',body:JSON.stringify({tags:next,expected_etag:artifact.annotations_etag})});setDraft('');onChange();}
+    try{await api(`/ui-api/artifacts/${artifact.id}/tags`,{method:'PATCH',body:JSON.stringify({tags:next,expected_etag:artifact.annotations_etag})});invalidateLists();setDraft('');onChange();}
     catch(e){setError(e as Error);onChange();}
     finally{setBusy(false);}
   }

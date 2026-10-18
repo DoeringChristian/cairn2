@@ -318,3 +318,35 @@ test('run list is bounded and slow loads survive auto refresh', async ({page}) =
   await expect(page.getByRole('link', {name:'specific-run', exact:true})).toBeVisible();
   expect(forbidden).toEqual([]);
 });
+
+test('list cache survives category navigation and reload, refresh bypasses it', async ({page}) => {
+  const requests: string[] = [];
+  await page.route('**/ui-api/artifacts?*', async route => {
+    const query = new URL(route.request().url()).searchParams;
+    const category = query.get('category')!;
+    requests.push(category);
+    await route.fulfill({json: {items: [{id: category, project:'cache-demo', namespace:category,
+      name:`cached-${category}`, state:'live', number:null, created_at:'2026-10-18T12:00:00Z',
+      annotations:{tags:[]}, annotations_etag:'test'}], total:1}});
+  });
+  await page.goto('/p/cache-demo?view=runs');
+  await expect(page.getByRole('link', {name:'cached-runs', exact:true})).toBeVisible();
+  await page.getByRole('button', {name:'Auto-refresh · 5s', exact:true}).click();
+  await page.getByRole('tab', {name:'Reports', exact:true}).click();
+  await expect(page.getByText('cached-reports', {exact:true})).toBeVisible();
+  await page.getByRole('tab', {name:'Artifacts', exact:true}).click();
+  await expect(page.getByRole('link', {name:'cached-artifacts', exact:true})).toBeVisible();
+  await page.getByRole('tab', {name:'Runs', exact:true}).click();
+  await expect(page.getByRole('link', {name:'cached-runs', exact:true})).toBeVisible();
+  expect(requests).toEqual(['runs','reports','artifacts']);
+  await page.reload();
+  await expect(page.getByRole('link', {name:'cached-runs', exact:true})).toBeVisible();
+  expect(requests).toEqual(['runs','reports','artifacts']);
+  await page.getByRole('button', {name:'Auto-refresh · 5s', exact:true}).click();
+  await page.getByRole('button', {name:'Refresh', exact:true}).click();
+  await expect.poll(() => requests.length).toBe(4);
+  expect(requests.at(-1)).toBe('runs');
+  await page.getByRole('tab', {name:'Reports', exact:true}).click();
+  await expect(page.getByText('cached-reports', {exact:true})).toBeVisible();
+  expect(requests).toHaveLength(4);
+});

@@ -1,3 +1,4 @@
+import { cachedList, cacheList, invalidateList } from '../listCache';
 import { ArtifactTags, artifactTags } from '../components/ArtifactTags';
 import { useRefresh, useRefreshMode } from '../refresh';
 import { useEffect, useState } from 'react';
@@ -30,12 +31,14 @@ export function ProjectPage() {
   const page = Number.isSafeInteger(pageNumber) && pageNumber > 0 ? pageNumber : 0;
   const [tagDraft, setTagDraft] = useState('');
   const query = new URLSearchParams({project, category: tab, search: querySearch, offset: String(page * 50), limit: '50'});
-  selectedTags.forEach(tag => query.append('tag', tag));
+  [...selectedTags].sort().forEach(tag => query.append('tag', tag));
   const path = `/ui-api/artifacts?${query}`;
   const [result, setResult] = useState<{path: string; items: ArtifactSummary[]; total: number}>();
   const [error, setError] = useState<Error>(), [loading, setLoading] = useState(true);
-  const items = result?.path === path ? result.items : [];
-  const total = result?.path === path ? result.total : 0;
+  const visible = result?.path === path ? result : cachedList(path);
+  const items = visible?.items ?? [];
+  const total = visible?.total ?? 0;
+  function refreshList() {invalidateList(path);refresh(n => n + 1);}
   useEffect(() => {
     document.title = `${project} · Cairn`;
     const controller = new AbortController();
@@ -44,7 +47,7 @@ export function ProjectPage() {
       setError(undefined);
       try {
         const data = await api<{items: ArtifactSummary[]; total: number}>(path, {signal: controller.signal});
-        if (!controller.signal.aborted) setResult({...data, path});
+        if (!controller.signal.aborted) {cacheList(path, data);setResult({...data, path});}
       } catch (e) {if (!controller.signal.aborted) setError(e as Error);}
       finally {
         if (!controller.signal.aborted) {
@@ -58,8 +61,11 @@ export function ProjectPage() {
       if (document.visibilityState === 'visible') void load();
       else timer = window.setTimeout(poll, 5000);
     }
-    setLoading(true);
-    void load();
+    const cached = cachedList(path);
+    if (cached) {
+      setResult({...cached, path});setLoading(false);setError(undefined);
+      if (!paused) timer = window.setTimeout(poll, 5000);
+    } else {setLoading(true);void load();}
     return () => {controller.abort();window.clearTimeout(timer);};
   }, [path, revision, paused]);
   const availableTags=[...new Set(items.flatMap(artifactTags))].sort();
@@ -67,7 +73,7 @@ export function ProjectPage() {
   function changePage(value: number) {const next=new URLSearchParams(params);next.set('page', String(value));setParams(next);}
   const filtered = items;
   return <main><Hero eyebrow={<Crumbs items={[{label:'Projects',to:'/'},{label:project}]}/>} title={project} subtitle="Reports, experiments, and the evidence that connects them."/>
-    <Section title={tab==='reports'?'Your reports':tab==='runs'?'Experiment runs':'Artifact library'} actions={<Button small onClick={() => refresh(n=>n+1)}>Refresh</Button>}><Tabs label="Artifact categories" value={tab} onChange={view => {const next=new URLSearchParams(params);next.set('view',view);next.delete('page');setParams(next);}} tabs={['reports','runs','artifacts','all'].map(value => ({value,label:value[0].toUpperCase()+value.slice(1)}))}/>
+    <Section title={tab==='reports'?'Your reports':tab==='runs'?'Experiment runs':'Artifact library'} actions={<Button small onClick={refreshList}>Refresh</Button>}><Tabs label="Artifact categories" value={tab} onChange={view => {const next=new URLSearchParams(params);next.set('view',view);next.delete('page');setParams(next);}} tabs={['reports','runs','artifacts','all'].map(value => ({value,label:value[0].toUpperCase()+value.slice(1)}))}/>
     <Toolbar><SearchInput label={tab==='reports'?'Search reports':'Search artifacts'} value={search} onChange={value=>{setSearch(value);if(page)changePage(0);}}/><form onSubmit={e=>{e.preventDefault();const tag=tagDraft.trim();if(tag&&!selectedTags.includes(tag))toggleTag(tag);setTagDraft('');}}><SearchInput label="Filter by tag" value={tagDraft} onChange={setTagDraft}/></form></Toolbar>
     {(!!availableTags.length||!!selectedTags.length)&&<div className="tag-filters" aria-label="Filter by tags"><span className="muted">Tags</span>{[...new Set([...availableTags,...selectedTags])].map(tag=><button type="button" className="tag-chip" key={tag} aria-pressed={selectedTags.includes(tag)} onClick={()=>toggleTag(tag)}>{tag}</button>)}{!!selectedTags.length&&<button type="button" className="tag-clear" onClick={()=>{const next=new URLSearchParams(params);next.delete('tag');next.delete('page');setParams(next);}}>Clear tags</button>}</div>}
     {loading && !items.length && <Loading/>}{error && <ErrorNote error={error}/>}{!loading && !error && !filtered.length && <Hint>No matching {tab === 'reports' ? 'reports' : 'artifacts'} in this view.</Hint>}
@@ -75,7 +81,7 @@ export function ProjectPage() {
       const metadata=a;
       return <ReportCard key={a.id} to={artifactPath(project,a.id)} project={project} title={typeof metadata?.title==='string'?metadata.title:a.name} description={typeof metadata?.description==='string'?metadata.description:undefined} status={a.outcome || a.state} updated={`${a.number ? 'Latest · v'+a.number+' · ' : ''}${when(a.finished_at || a.created_at)}`}/>;
     })}</ReportGrid>}
-    {!!filtered.length && tab!=='reports' && <DataTable head={['Name','Namespace','State / version','Tags','Created']}>{filtered.map(a=><tr key={a.id}><td><Link to={artifactPath(project,a.id)}><strong>{a.name}</strong></Link></td><td><Pill tone="alias">{a.namespace}</Pill></td><td><Pill tone={a.state === 'finished' ? 'default':'pending'}>{a.number ? `v${a.number} · ${a.outcome || a.state}` : a.state}</Pill></td><td><ArtifactTags artifact={a} compact onTagClick={toggleTag} onChange={()=>refresh(n=>n+1)}/></td><td className="muted nowrap">{when(a.created_at)}</td></tr>)}</DataTable>}
+    {!!filtered.length && tab!=='reports' && <DataTable head={['Name','Namespace','State / version','Tags','Created']}>{filtered.map(a=><tr key={a.id}><td><Link to={artifactPath(project,a.id)}><strong>{a.name}</strong></Link></td><td><Pill tone="alias">{a.namespace}</Pill></td><td><Pill tone={a.state === 'finished' ? 'default':'pending'}>{a.number ? `v${a.number} · ${a.outcome || a.state}` : a.state}</Pill></td><td><ArtifactTags artifact={a} compact onTagClick={toggleTag} onChange={refreshList}/></td><td className="muted nowrap">{when(a.created_at)}</td></tr>)}</DataTable>}
     <div className="pagination"><Hint>{total ? `${page*50+1}–${Math.min((page+1)*50,total)} of ${total}` : '0 results'}</Hint><Button disabled={page===0||loading} onClick={()=>changePage(page-1)}>Previous</Button><Button disabled={(page+1)*50>=total||loading} onClick={()=>changePage(page+1)}>Next</Button></div>
     </Section></main>;
 }

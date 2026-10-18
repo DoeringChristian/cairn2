@@ -1,3 +1,4 @@
+import { invalidateLists, scopeListCache } from './listCache';
 import { setRefreshPaused, useRefresh, useRefreshMode } from './refresh';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, NavLink, Route, Routes, useLocation } from 'react-router-dom';
@@ -7,7 +8,7 @@ import { ProjectsPage, ProjectPage } from './pages/Projects';
 import { ArtifactPage } from './pages/Artifact';
 import { PalettePage } from './pages/Palette';
 
-type Session = { authenticated: boolean; no_auth: boolean };
+type Session = { authenticated: boolean; no_auth: boolean; repository_id: string };
 let initialSession: Promise<Session> | undefined;
 function bootstrapSession() {
   if (!initialSession) {
@@ -24,7 +25,7 @@ function Login({ onLogin }: {onLogin: () => void}) {
   const [busy, setBusy] = useState(false);
   async function submit(event: FormEvent) {
     event.preventDefault(); setBusy(true); setError(undefined);
-    try { await post('/ui-api/login', {token}); setToken(''); onLogin(); }
+    try { await post('/ui-api/login', {token}); invalidateLists();setToken(''); onLogin(); }
     catch (error) { setError(error as Error); } finally { setBusy(false); }
   }
   return <main><Hero eyebrow="Your research, together" title="Welcome to Cairn." subtitle="Explore the experiments, artifacts, and reports in your repository." />
@@ -50,12 +51,12 @@ export function App() {
   const [noAuth, setNoAuth] = useState(false);
   const [error, setError] = useState<Error>();
   useEffect(() => {
-    bootstrapSession().then(session => {setAuth(true); setNoAuth(session.no_auth);}).catch(e => {setAuth(false); if (e.status !== 401) setError(e);});
-    const expired = () => setAuth(false);
+    bootstrapSession().then(session => {scopeListCache(session.repository_id);setAuth(true); setNoAuth(session.no_auth);}).catch(e => {setAuth(false); if (e.status !== 401) setError(e);});
+    const expired = () => {invalidateLists();setAuth(false);};
     window.addEventListener('cairn:unauthorized', expired);
     return () => window.removeEventListener('cairn:unauthorized', expired);
   }, []);
-  async function logout() { try { await post('/ui-api/logout', {}); setAuth(false); } catch(e) { setError(e as Error); } }
+  async function logout() { try { await post('/ui-api/logout', {}); invalidateLists();setAuth(false); } catch(e) { setError(e as Error); } }
   return <><a className="skip-link" href="#content">Skip to content</a><Rail authenticated={auth === true} noAuth={noAuth} logout={logout}/><div id="content" className="page-host">
     {error && <ErrorNote error={error}/>}{auth === null ? <main><Loading what="Connecting to Cairn"/></main> : auth === false ? <Login onLogin={() => {setError(undefined); setAuth(true);}}/> : <Routes>
       <Route path="/" element={<ProjectsPage/>}/><Route path="/login" element={<ProjectsPage/>}/><Route path="/p/:project" element={<ProjectPage/>}/>
