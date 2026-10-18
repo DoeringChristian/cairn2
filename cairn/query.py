@@ -272,13 +272,7 @@ def discovery_predicate(where, metadata, annotations, artifact_id, dialect, memb
                         members.c.value_key == value_key,
                     )
                 )
-            # SQLite versions differ in how JSON paths handle escaped object keys.
-    # Traverse those keys directly instead of relying on path-string escaping.
-    if all(
-        _array_index(token) is None
-        and not any(character in '"\\' or ord(character) < 32 for character in token)
-        for token in tokens
-    ):
+            if all(_array_index(token) is None for token in tokens):
                 # Whole-column containment uses GIN; the exact array guard
                 # preserves portable array membership semantics.
                 pattern = [node["value"]]
