@@ -247,3 +247,23 @@ test('copy controls preserve full code and IDs, media comment bugs sit left, tag
     await request.patch(`/ui-api/artifacts/${run.id}/tags`,{data:{tags:(current.annotations.tags||[]).filter((t:string)=>t!==tag),expected_etag:current.annotations_etag}});
   }
 });
+
+
+test('artifact tab switches and refresh keep one tag editor',async({page,request})=>{
+  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering')).json();
+  const artifact=items.find((item:any)=>item.namespace!=='reports');
+  const errors:string[]=[];
+  page.on('console',message=>{if(message.type()==='error')errors.push(message.text());});
+  await page.goto(`/p/neural-rendering/a/${artifact.id}`);
+  await page.getByLabel('New tag',{exact:true}).fill('draft-kept-across-tabs');
+  for(let index=0;index<6;index++){
+    for(const tab of ['Records','Overview']){
+      await page.getByRole('tab',{name:tab,exact:true}).click();
+      await expect(page.getByLabel('New tag',{exact:true})).toHaveCount(1);
+      await expect(page.getByLabel('New tag',{exact:true})).toHaveValue('draft-kept-across-tabs');
+    }
+  }
+  await page.getByRole('button',{name:'Refresh',exact:true}).click();
+  await expect(page.getByLabel('New tag',{exact:true})).toHaveCount(1);
+  expect(errors.filter(message=>/same key/.test(message))).toEqual([]);
+});

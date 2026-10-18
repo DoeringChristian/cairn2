@@ -63,18 +63,18 @@ export function ArtifactPage() {
     {error && <ErrorNote error={error}/>}
     <div className="detail-bar"><code className="wrap-any">{ref}</code><Select label="Artifact version" value={selected.id} choices={choices} onChange={target => navigate(artifactPath(selected.project, target))}/><Button small onClick={() => setRefresh(n => n + 1)}>Refresh</Button></div>
     <div className="detail-facts"><span>{live ? 'Started' : 'Finished'} {when(selected.finished_at || selected.created_at)}</span><span>{selected.cutoff} entries</span><CopyId value={selected.id} short/></div>
-    <ArtifactTags key={selected.id} artifact={selected} onChange={()=>setRefresh(n=>n+1)}/>
+    <ArtifactTags key={`tags:${selected.id}`} artifact={selected} onChange={()=>setRefresh(n=>n+1)}/>
     {live && <Hint>This artifact is {selected.state}. Its ID stays the same when it finishes.</Hint>}
     <Tabs label="Artifact detail" tabs={tabs} value={tab} onChange={tab => { const next = new URLSearchParams(params); next.set('tab', tab); setParams(next); }}/>
     {tab === 'overview' && <>
       {report ? <Section title="Published report" actions={<LinkButton href={`/ui-api/reports/${selected.id}/index.html`}>HTML export</LinkButton>}><DocumentReader project={selected.project} version={selected.id} blobs={typed?.blobs || []}/></Section> : <>
-        {run && <RecordsPanel key={selected.id} reference={selected.id} project={selected.project} run overview live={live} refresh={refresh}/>}
+        {run && <RecordsPanel key={`records:${selected.id}`} reference={selected.id} project={selected.project} run overview live={live} refresh={refresh}/>}
         <Section title={run ? 'Final result' : 'Value'}><ValueView value={value}/></Section>
       </>}
       {metadata.config !== undefined && <Section title="Configuration"><JsonBlock value={metadata.config}/></Section>}
       {manifest && Object.keys(manifest.captures).length > 0 && <Section title="Captures">{Object.entries(manifest.captures).map(([name, value]) => <Section key={name} title={name}><ValueView value={value}/></Section>)}</Section>}
     </>}
-    {tab === 'records' && <RecordsPanel key={selected.id} reference={selected.id} project={selected.project} run={false} live={live} refresh={refresh}/>}
+    {tab === 'records' && <RecordsPanel key={`records:${selected.id}`} reference={selected.id} project={selected.project} run={false} live={live} refresh={refresh}/>}
     {tab === 'files' && <Section title="Files"><BlobTable blobs={[...unique.values()]}/>{live && <Hint>Captured values are available in the capture records while this artifact is live. Finished artifacts collect them here.</Hint>}</Section>}
     {tab === 'metadata' && <><Section title="Metadata"><JsonBlock value={metadata}/></Section><Section title="Identity"><KeyValueTable rows={[["Artifact ID", <CopyId value={selected.id}/>], ["State", selected.state], ["Version label", selected.number ? `v${selected.number}` : 'Not finished'], ["Project", selected.project], ["Namespace", selected.namespace]]}/></Section><Section title="Annotations"><JsonBlock value={selected.annotations}/></Section><Section title="Raw descriptor"><JsonBlock value={selected}/></Section></>}
     {tab === 'lineage' && <Section title="Lineage"><Graph root={selected.id} project={selected.project}/><Section title="Pinned inputs">{manifest?.dependencies.length ? <DataTable head={['Artifact', 'Role']}>{manifest.dependencies.map(d => <tr key={d.artifact_id + d.role}><td><CopyId value={d.artifact_id}/><Link to={artifactPath(selected.project,d.artifact_id)} aria-label="Open input artifact"> ↗</Link></td><td><Pill tone="alias">{d.role}</Pill></td></tr>)}</DataTable> : <Hint>{live ? 'The graph includes the dependencies recorded so far.' : 'No input dependencies recorded.'}</Hint>}</Section></Section>}
