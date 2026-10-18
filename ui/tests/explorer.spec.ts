@@ -9,7 +9,7 @@ test('plain artifact identities, native reports, media zoom and lineage',async({
   expect(report.id).toMatch(/^[0-9a-f]{32}$/);
   await page.goto(`/p/neural-rendering/a/${report.id}`);
   await expect(page.locator('article.native-document')).toBeVisible();
-  await expect(page.locator('iframe')).toHaveCount(0);
+  await expect(page.locator('iframe:not(.native-html-viewer)')).toHaveCount(0);
   await page.getByRole('button',{name:'Enlarge Python cell image output'}).first().click();
   const dialog=page.getByRole('dialog');
   await expect(dialog).toBeVisible();

@@ -1,0 +1,72 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - run: uv sync --locked --all-extras
+      - run: uv run pytest -q
+      - run: uv build
+      - name: Check wheel contains bundled UI
+        run: |
+          uv run python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          with ZipFile(next(Path("dist").glob("*.whl"))) as wheel:
+              names = wheel.namelist()
+              assert "cairn/ui_static/index.html" in names
+              assert any(name.startswith("cairn/ui_static/assets/") for name in names)
+          PY
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --locked --all-extras
+      - run: npm ci --prefix ui
+      - run: npm run build --prefix ui
+      - run: npx --prefix ui playwright install --with-deps chromium
+      - name: Seed two report publications for history and comment tests
+        run: |
+          uv run python examples/build_report_showcase.py --repo /tmp/cairn-ci --project neural-rendering --publish
+          uv run python examples/build_report_showcase.py --repo /tmp/cairn-ci --project neural-rendering --publish
+      - name: Browser tests
+        run: |
+          uv run cairn --repo /tmp/cairn-ci server --host 127.0.0.1 --port 18765 --no-auth > /tmp/cairn-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" || true' EXIT
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:18765/ui-api/session > /dev/null; then break; fi
+            sleep 1
+          done
+          npm test --prefix ui
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-diagnostics
+          path: |
+            ui/test-results/
+            /tmp/cairn-server.log
