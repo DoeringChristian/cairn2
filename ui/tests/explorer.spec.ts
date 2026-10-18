@@ -267,3 +267,21 @@ test('artifact tab switches and refresh keep one tag editor',async({page,request
   await expect(page.getByLabel('New tag',{exact:true})).toHaveCount(1);
   expect(errors.filter(message=>/same key/.test(message))).toEqual([]);
 });
+
+test('lineage controls stay put when explanation changes',async({page,request})=>{
+  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering')).json();
+  const artifact=items.find((a:any)=>a.namespace!=='reports'),run='f'.repeat(32);
+  await page.route('**/ui-api/lineage/**',route=>route.fulfill({json:{nodes:{
+    [artifact.id]:{name:'result',version:1,kind:'artifact',inputs:[run],consumers:[]},
+    [run]:{name:'runs/training',version:1,kind:'run',inputs:[],consumers:[artifact.id]}
+  },truncated:false}}));
+  await page.goto(`/p/neural-rendering/a/${artifact.id}?tab=lineage`);
+  const toggle=page.getByRole('button',{name:'Data only',exact:true});
+  await expect(toggle).toBeVisible();
+  const before=await toggle.boundingBox();
+  await toggle.click();
+  await expect(page.getByText('No data inputs or consumers (only runs, hidden here).',{exact:true})).toBeVisible();
+  const after=await toggle.boundingBox();
+  expect(after!.x).toBe(before!.x);
+  expect(after!.y).toBe(before!.y);
+});

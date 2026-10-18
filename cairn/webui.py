@@ -13,7 +13,13 @@ from pathlib import Path
 
 import sqlalchemy as sa
 from fastapi import Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from starlette.background import BackgroundTask
 
 from .model import NotFound, Unauthorized, ValidationError, safe_path
@@ -70,7 +76,8 @@ class BrowserAccess:
             request = Request(scope)
             path, method = _route_path(scope), scope["method"]
             shell = method in {"GET", "HEAD"} and (
-                path in {"/", "/login", "/palette"} or path.startswith(("/p/", "/assets/"))
+                path in {"/", "/login", "/palette", "/favicon.svg", "/favicon.ico"}
+                or path.startswith(("/p/", "/assets/"))
             )
             login = path == "/ui-api/login" and method == "POST"
             read = (method in {"GET", "HEAD"} and path.startswith(("/v1/", "/ui-api/"))) or (
@@ -438,6 +445,14 @@ def install(app, repository, token, *, no_auth=False):
             },
             background=BackgroundTask(manager.__exit__, None, None, None),
         )
+
+    @app.api_route("/favicon.svg", methods=["GET", "HEAD"])
+    def favicon():
+        return FileResponse(STATIC / "favicon.svg", media_type="image/svg+xml")
+
+    @app.api_route("/favicon.ico", methods=["GET", "HEAD"])
+    def legacy_favicon():
+        return RedirectResponse("/favicon.svg")
 
     @app.get("/assets/{path:path}")
     def asset(path: str):

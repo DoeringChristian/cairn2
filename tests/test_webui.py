@@ -14,6 +14,12 @@ def test_browser_sessions_and_plain_artifact_identity(tmp_path):
         app = create_app(repo, token="test-token", ui=True)
         with TestClient(app) as browser:
             assert browser.get("/ui-api/projects").status_code == 401
+            for path in ("/favicon.svg", "/favicon.ico"):
+                icon = browser.get(path)
+                assert icon.status_code == 200
+                assert icon.headers["content-type"].startswith("image/svg+xml")
+                assert "<svg" in icon.text
+                assert browser.head(path).status_code == 200
             link = "test-token"
             assert browser.post("/ui-api/login", json={"link_token": link}).status_code == 200
             assert browser.post("/ui-api/login", json={"link_token": link}).status_code == 200
