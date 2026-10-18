@@ -156,7 +156,9 @@ def test_published_run_provenance_preserves_start_time_bytes(source_tree, tmp_pa
         assert metadata["config"] == {"rate": 0.2}
         archive = reader.download("provenance/source.tar.gz", to=tmp_path / "saved.tar.gz")
         assert unpack(archive.read_bytes())["train.py"] == b"rate = 0.2\n"
-        assert reader.records()[0]["data"] == {"loss": 1}
+        record = reader.records()[0]["data"]
+        assert record["loss"] == 1
+        assert isinstance(record["_wall_time"], float)
         if remote:
             assert client.delivery.pending() == 0
 

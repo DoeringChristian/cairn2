@@ -68,7 +68,11 @@ artifact. Writer handles and sequence numbers exist only for reliable delivery.
 ## Records and values
 
 Entries are `{sequence, kind, data}`. Kinds are `record`, `metadata`, `capture`,
-and `dependency`. Record data is an arbitrary JSON object; `step` is optional and
+and `dependency`. The Python client’s `log()` and `track()` add `_wall_time` to record data
+when absent: floating-point Unix seconds from the client clock at the log call.
+Explicit values are preserved; durable delivery/retries retain the recorded value.
+Low-level repository/HTTP writes do not inject it. This is distinct from the
+server-assigned record `created_at`. Record data is an arbitrary JSON object; `step` is optional and
 has no special storage semantics. Metadata shallow-merges. Captures are
 `{name, value}`; dependencies are `{artifact_id, role}`. The repository assigns
 one monotonically increasing ordinal across all producers of an artifact.

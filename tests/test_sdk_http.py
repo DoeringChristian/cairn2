@@ -1,4 +1,5 @@
 import threading
+import time
 from contextlib import closing
 
 import httpx
@@ -28,8 +29,10 @@ def test_remote_journal_recovery_lost_ack_and_immutable_file(tmp_path, monkeypat
             with client.delivery._dispatch:
                 monkeypatch.setattr(client.backend, "info", offline)
                 artifact.capture(source)
+                logged_after = time.time()
                 for index in range(50):
                     artifact.log({"sample": index, "split": "test"})
+                logged_before = time.time()
                 visible = client.backend.query(artifact.id, kind="record")
                 assert visible["items"] == []
             with pytest.raises(Pending):
@@ -58,6 +61,9 @@ def test_remote_journal_recovery_lost_ack_and_immutable_file(tmp_path, monkeypat
                 assert reader.read() == {"complete": True}
                 records = reader.records()
                 assert [record["data"]["sample"] for record in records] == list(range(50))
+                assert all(
+                    logged_after <= row["data"]["_wall_time"] <= logged_before for row in records
+                )
                 assert reader.download(
                     "captured.txt", to=tmp_path / "restored.txt"
                 ).read_text() == ("captured before disconnection")

@@ -12,7 +12,8 @@ def client(tmp_path):
         yield client
 
 
-def test_default_init_config_and_arbitrary_records(tmp_path):
+def test_default_init_config_and_arbitrary_records(tmp_path, monkeypatch):
+    monkeypatch.setattr("cairn.sdk.time.time", lambda: 1720000000.125)
     config = {"optimizer": {"rate": 0.01}}
     run = cairn.init(
         tmp_path / "repo", name="training", config=config, metadata={"owner": "research"}
@@ -33,6 +34,7 @@ def test_default_init_config_and_arbitrary_records(tmp_path):
             assert manifest["metadata"]["environment"]["python"]
             assert manifest["metadata"]["status_note"] == "done"
             records = reader.records()
+            assert all(record["data"]["_wall_time"] == 1720000000.125 for record in records)
             assert "step" not in records[0]["data"]
             assert records[1]["data"]["step"] == 2
             assert records[2]["data"]["table"].load() == [{"a": 1}]
@@ -150,4 +152,21 @@ def test_validation_keeps_writer_open_and_reads_do_not_invent_step(client):
         artifact.finish(outcome="invalid")
     artifact.log({"x": 1})
     result = artifact.finish()
-    assert client.resolve(result["id"]).records()[0]["data"] == {"x": 1}
+    assert client.resolve(result["id"]).records()[0]["data"]["x"] == 1
+
+
+def test_log_preserves_explicit_wall_time_and_does_not_mutate_input(client, monkeypatch):
+    monkeypatch.setattr("cairn.sdk.time.time", lambda: 1720000000.125)
+    data = {"loss": 0.2}
+    artifact = client.start("runs", "clock")
+    artifact.log(data)
+    artifact.log(loss=0.1, _wall_time=1700000000.5)
+    artifact.log({"loss": 0.05, "_wall_time": 0})
+    artifact.finish()
+    records = client.resolve(artifact.id).records()
+    assert data == {"loss": 0.2}
+    assert [row["data"]["_wall_time"] for row in records] == [1720000000.125, 1700000000.5, 0]
+    filtered = client.resolve(artifact.id).records(
+        where={"path": "/_wall_time", "op": "gt", "value": 1710000000}
+    )
+    assert len(filtered) == 1 and filtered[0]["data"]["loss"] == 0.2

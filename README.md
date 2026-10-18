@@ -37,6 +37,10 @@ module is `cairn`.
 
 ## Record an experiment
 
+Python `log()` and `track()` automatically include `_wall_time` (Unix seconds
+from the client clock). It is queryable as `/_wall_time`, stays unchanged during
+upload retries, and can be supplied explicitly for imported measurements.
+
 ```python
 import cairn
 

@@ -7,6 +7,7 @@ import copy
 import hashlib
 import os
 import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -227,6 +228,7 @@ class Artifact:
         if overlap:
             raise ValidationError(f"Duplicate record fields: {sorted(overlap)}")
         record = {**data, **fields}
+        record.setdefault("_wall_time", time.time())
         if step is not None:
             if "step" in record and record["step"] != step:
                 raise ValidationError("The record and step argument disagree")
