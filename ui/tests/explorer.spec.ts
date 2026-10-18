@@ -97,8 +97,8 @@ test('showcase renders themed interactive Plotly output',async({page,request})=>
   const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto(`/p/neural-rendering/a/${report.id}`);
   const plot=page.getByRole('img',{name:'Interactive Plotly figure'}).first();
-  await expect(plot.locator('.scatterlayer .trace')).toHaveCount(2,{timeout:20000});
   await plot.scrollIntoViewIfNeeded();
+  await expect(plot.locator('.scatterlayer .trace')).toHaveCount(2,{timeout:20000});
   await expect(plot.locator('.modebar')).toBeVisible();
   const background=await plot.locator('.main-svg').first().evaluate(el=>getComputedStyle(el).backgroundColor);
   expect(background).toBe('rgb(255, 254, 249)');
@@ -191,6 +191,7 @@ test('custom HTML executes in isolation, resizes and offers WebGPU',async({page,
   await expect.poll(()=>page.locator('iframe.native-html-viewer').evaluate(el=>el.getBoundingClientRect().height)).toBeGreaterThan(before);
   await frame.getByRole('slider').fill('3');
   const surface=page.getByRole('img',{name:'Interactive Plotly figure'}).nth(1);
+  await surface.scrollIntoViewIfNeeded();
   await expect(surface.locator('canvas').first()).toBeVisible({timeout:20000});
 });
 
@@ -349,4 +350,23 @@ test('list cache survives category navigation and reload, refresh bypasses it', 
   await page.getByRole('tab', {name:'Reports', exact:true}).click();
   await expect(page.getByText('cached-reports', {exact:true})).toBeVisible();
   expect(requests).toHaveLength(4);
+});
+
+test('report text does not wait for history or media and survives a slow reload', async ({page,request}) => {
+  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
+  const report=items.find((a:any)=>a.name==='report-field-guide');
+  let release!:()=>void;
+  const pending = new Promise<void>(resolve=>{release=resolve;});
+  await page.route('**/ui-api/artifacts/*/history', async route=>{await pending;await route.continue().catch(()=>{});});
+  await page.route('**/ui-api/reports/*/output/**', route=>route.abort());
+  try {
+    await page.goto(`/p/neural-rendering/a/${report.id}`);
+    await expect(page.locator('article.native-document')).toBeVisible({timeout:2000});
+    await expect(page.locator('article.native-document')).toContainText('report');
+    // The saved preview/descriptor render even when their revalidation cannot complete.
+    await page.route('**/v1/resolutions', route=>route.abort());
+    await page.route('**/ui-api/reports/*/preview.json', route=>route.abort());
+    await page.reload();
+    await expect(page.locator('article.native-document')).toBeVisible({timeout:2000});
+  } finally {release();}
 });

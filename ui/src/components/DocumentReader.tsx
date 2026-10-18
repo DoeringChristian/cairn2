@@ -18,7 +18,7 @@ import { SelectionCopy } from './SelectionCopy';
 import { ErrorNote, Hint, Loading } from './States';
 type Source={path:string;line_start:number;line_end:number};
 type Node={source?:Source;type:string;tag:string;nesting:number;content:string;attributes?:Record<string,string>;attrs?:Record<string,string>|[string,string][]|null;children?:Node[];info?:string;meta?:Record<string,number>;hidden?:boolean};
-type Output={output_type:string;name?:string;text?:string|string[];ename?:string;evalue?:string;data?:Record<string,unknown>};
+type Output={ui_payload?:{path:string;mime:string};output_type:string;name?:string;text?:string|string[];ename?:string;evalue?:string;data?:Record<string,unknown>};
 type Block={id:string;kind:string;source:Source;text?:string;nodes?:Node[];code?:string;label?:string;options?:{echo?:boolean;output?:boolean;'fig-cap'?:string;'tbl-cap'?:string};outputs?:Output[]};
 type Document={format:string;version:number;title:string;blocks:Block[];labels:Record<string,{text:string}>};
 const md=new MarkdownIt({html:false,linkify:false}).use(footnote);
@@ -77,6 +77,12 @@ function nodesToReact(nodes:Node[],base:string,source:Source,blobs:BlobRef[],lab
 function OutputView({output,base,source,blobs,labels,htmlUrl}: {output:Output;base:string;source:Source;blobs:BlobRef[];labels:Document['labels'];htmlUrl:string}) {
   if(output.output_type==='stream')return <pre className={`native-output ${output.name||''}`}>{join(output.text)}</pre>;
   if(output.output_type==='error')return <pre className="native-output error">{output.ename}: {output.evalue}</pre>;
+  if (output.ui_payload) {
+    const {path,mime}=output.ui_payload,src=`${base}output/${path}`;
+    if(mime==='application/vnd.plotly.v1+json')return <OutputComment source={{file:source.path,line:source.line_start}} label="Plotly figure"><PlotlyFigure src={src}/></OutputComment>;
+    if(mime.startsWith('image/'))return <ZoomImage className="native-output-image" src={src} alt="Python cell image output" source={{file:source.path,line:source.line_start}}/>;
+    return <MediaPlayback src={src} mime={mime} label={mime.startsWith('audio/')?'Report audio':'Report video'} source={{file:source.path,line:source.line_start}}/>;
+  }
   const data=output.data||{};
   if(data['application/vnd.plotly.v1+json'])return <OutputComment source={{file:source.path,line:source.line_start}} label="Plotly figure"><PlotlyFigure spec={data['application/vnd.plotly.v1+json']}/></OutputComment>;
   for(const mime of ['video/mp4','video/webm','audio/wav','audio/mpeg','audio/ogg']) if(data[mime]) {
@@ -94,8 +100,8 @@ function OutputView({output,base,source,blobs,labels,htmlUrl}: {output:Output;ba
 export function DocumentReader({version,blobs,project}: {version:string;blobs:BlobRef[];project:string}) {
   const container=useRef<HTMLElement>(null);
   const base=`/ui-api/reports/${encodeURIComponent(version)}/`;
-  const {data,error,loading}=useResource<Document>(base+'document.json');
-  if(loading)return <Loading what="Loading report"/>;if(error)return <ErrorNote error={error}/>;
+  const {data,error,loading}=useResource<Document>(base+'preview.json',0,true);
+  if(loading&&!data)return <Loading what="Loading report"/>;if(error&&!data)return <ErrorNote error={error}/>;
   if(!data||data.format!=='cairn/document'||data.version!==1)return <Hint>This document format is not supported by this reader.</Hint>;
   return <ReportArtifactContext.Provider value={version}><div className="report-reader-layout"><ReportToc container={container} documentKey={data}/><article ref={container} className="native-document report-prose" aria-label={data.title}>{data.blocks.map((block,blockIndex)=>{
     const caption=block.options?.['fig-cap']||block.options?.['tbl-cap'];

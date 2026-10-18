@@ -206,3 +206,89 @@ def test_artifact_summaries_are_bounded_filtered_and_exclude_payloads(tmp_path):
                 browser.get("/ui-api/artifacts", params={**params, "limit": 1000}).status_code
                 == 400
             )
+
+
+def test_lightweight_report_preview_preserves_bundle_and_media(tmp_path):
+    import base64
+    import json
+
+    with closing(Repository(tmp_path)) as repo:
+        media = b"example image or video bytes" * 100000
+        document = {
+            "format": "cairn/document",
+            "version": 1,
+            "title": "Fast report",
+            "labels": {},
+            "blocks": [
+                {
+                    "id": "cell",
+                    "kind": "code",
+                    "source": {"path": "report.qmd", "line_start": 1, "line_end": 1},
+                    "outputs": [
+                        {
+                            "output_type": "display_data",
+                            "data": {"image/png": base64.b64encode(media).decode()},
+                        },
+                        {
+                            "output_type": "display_data",
+                            "data": {"video/mp4": base64.b64encode(media).decode()},
+                        },
+                    ],
+                }
+            ],
+        }
+        original = json.dumps(document).encode()
+        blob = {**repo.put_blob(original), "name": "document.json"}
+        started = repo.start("demo", "reports", "fast")
+        identity = started["artifact"]["id"]
+        repo.close_writer(identity, started["writer"]["id"], 0)
+        repo.finish(
+            identity,
+            value={
+                "$cairn": 1,
+                "format": "report/bundle",
+                "version": 1,
+                "data": {},
+                "blobs": [blob],
+                "refs": [],
+            },
+        )
+        base = f"/ui-api/reports/{identity}"
+        with TestClient(create_app(repo, token="test-token", ui=True)) as browser:
+            assert browser.get(base + "/preview.json").status_code == 401
+            browser.post("/ui-api/login", json={"token": "test-token"})
+            preview = browser.get(base + "/preview.json")
+            assert preview.status_code == 200
+            assert len(preview.content) < 1000
+            assert preview.json()["blocks"][0]["outputs"][0]["ui_payload"]["mime"] == "image/png"
+            assert preview.headers["cache-control"] == "private, max-age=0, must-revalidate"
+            assert (
+                browser.get(
+                    base + "/preview.json", headers={"If-None-Match": preview.headers["etag"]}
+                ).status_code
+                == 304
+            )
+            for index in (0, 1):
+                output = browser.get(base + f"/output/0/{index}")
+                assert output.content == media
+                partial = browser.get(base + f"/output/0/{index}", headers={"Range": "bytes=10-19"})
+                assert partial.status_code == 206 and partial.content == media[10:20]
+                suffix = browser.get(base + f"/output/0/{index}", headers={"Range": "bytes=-10"})
+                assert suffix.status_code == 206 and suffix.content == media[-10:]
+                assert (
+                    browser.get(
+                        base + f"/output/0/{index}", headers={"Range": "bytes=99999999-"}
+                    ).status_code
+                    == 416
+                )
+            assert browser.get(base + "/document.json").content == original
+            history = browser.get(f"/ui-api/artifacts/{identity}/history").json()
+            assert history[0]["id"] == identity
+            assert "value" not in history[0]["manifest"]
+            browser.post("/ui-api/logout")
+            assert (
+                browser.get(
+                    base + "/preview.json", headers={"If-None-Match": preview.headers["etag"]}
+                ).status_code
+                == 401
+            )

@@ -19,6 +19,7 @@ from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
     RedirectResponse,
+    Response,
     StreamingResponse,
 )
 from starlette.background import BackgroundTask
@@ -120,7 +121,14 @@ class BrowserAccess:
                             *message.get("headers", []),
                             (b"x-content-type-options", b"nosniff"),
                             (b"referrer-policy", b"no-referrer"),
-                            (b"cache-control", b"no-store"),
+                            *(
+                                [(b"cache-control", b"no-store")]
+                                if not any(
+                                    key.lower() == b"cache-control"
+                                    for key, _ in message.get("headers", [])
+                                )
+                                else []
+                            ),
                         ],
                     }
                 await send(message)
@@ -344,6 +352,36 @@ def install(app, repository, token, *, no_auth=False):
                 items.append(item)
         return {"items": items, "total": total}
 
+    @app.get("/ui-api/artifacts/{artifact_id}/history")
+    def artifact_history(artifact_id: str):
+        selected = repository.resolve(artifact_id)
+        columns = [
+            artifacts.c[key]
+            for key in (
+                "id",
+                "project",
+                "namespace",
+                "name",
+                "state",
+                "number",
+                "cutoff",
+                "finished_at",
+            )
+        ]
+        with repository._transaction() as connection:
+            rows = connection.execute(
+                sa.select(*columns, artifacts.c.manifest["outcome"].as_string().label("outcome"))
+                .where(
+                    artifacts.c.project == selected["project"],
+                    artifacts.c.namespace == selected["namespace"],
+                    artifacts.c.name == selected["name"],
+                    artifacts.c.state == "finished",
+                    artifacts.c.deleted_at.is_(None),
+                )
+                .order_by(artifacts.c.number)
+            ).mappings()
+            return [{**row, "manifest": {"outcome": row["outcome"]}} for row in rows]
+
     @app.get("/ui-api/lineage/{artifact_id}/{depth}")
     def lineage(artifact_id: str, depth: int):
         from .storage import artifact_refs
@@ -498,6 +536,73 @@ def install(app, repository, token, *, no_auth=False):
             connection.execute(comments_table.delete().where(comments_table.c.id == comment_id))
         return {"deleted": True}
 
+    from .ui_preview import ReportPreviews
+
+    previews = ReportPreviews(repository)
+
+    def preview_digest(artifact_id):
+        target = report_target(artifact_id)
+        value = target["manifest"]["value"]
+        document = next(
+            (b for b in value.get("blobs", []) if b.get("name") == "document.json"), None
+        )
+        if not document:
+            raise NotFound("Report document not found")
+        return document["digest"]
+
+    def preview_response(payload, mime, etag, request):
+        headers = {
+            "Cache-Control": "private, max-age=0, must-revalidate",
+            "ETag": etag,
+            "Content-Security-Policy": "sandbox; default-src 'none'",
+            "Accept-Ranges": "bytes",
+        }
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
+        span = request.headers.get("range")
+        if span and request.headers.get("if-range", etag) == etag:
+            import re
+
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", span)
+            if not match or not any(match.groups()):
+                return Response(
+                    status_code=416, headers={**headers, "Content-Range": f"bytes */{len(payload)}"}
+                )
+            first, last = match.groups()
+            start = int(first) if first else max(0, len(payload) - int(last))
+            end = min(int(last), len(payload) - 1) if first and last else len(payload) - 1
+            if start > end or start >= len(payload):
+                return Response(
+                    status_code=416, headers={**headers, "Content-Range": f"bytes */{len(payload)}"}
+                )
+            headers["Content-Range"] = f"bytes {start}-{end}/{len(payload)}"
+            return Response(
+                payload[start : end + 1], status_code=206, media_type=mime, headers=headers
+            )
+        return Response(payload, media_type=mime, headers=headers)
+
+    @app.get("/ui-api/reports/{artifact_id}/preview.json")
+    def report_preview(artifact_id: str, request: Request):
+        digest = preview_digest(artifact_id)
+        etag = f'"ui-preview-v1-{digest}"'
+        # Authenticate and resolve first, but skip document parsing on a cache hit.
+        if request.headers.get("if-none-match") == etag:
+            return preview_response(b"", "application/json", etag, request)
+        document, _ = previews.get(digest)
+        return preview_response(document, "application/json", etag, request)
+
+    @app.get("/ui-api/reports/{artifact_id}/output/{block_index}/{output_index}")
+    def report_output(artifact_id: str, block_index: int, output_index: int, request: Request):
+        digest = preview_digest(artifact_id)
+        _, outputs = previews.get(digest)
+        key = f"{block_index}/{output_index}"
+        if key not in outputs:
+            raise NotFound("Report output not found")
+        payload, mime = outputs[key]
+        return preview_response(
+            payload, mime, f'"ui-output-v1-{digest}-{block_index}-{output_index}"', request
+        )
+
     @app.get("/ui-api/reports/{artifact_id}/html/{block_index}/{output_index}")
     def interactive_html(artifact_id: str, block_index: int, output_index: int):
         target = report_target(artifact_id)
@@ -507,8 +612,7 @@ def install(app, repository, token, *, no_auth=False):
         )
         if not document or block_index < 0 or output_index < 0:
             raise NotFound("HTML output not found")
-        with repository.open_blob(document["digest"]) as stream:
-            data = json.load(stream)
+        data = json.loads(previews.get(document["digest"])[0])
         try:
             content = data["blocks"][block_index]["outputs"][output_index]["data"]["text/html"]
         except (KeyError, IndexError, TypeError):
@@ -532,7 +636,7 @@ def install(app, repository, token, *, no_auth=False):
         )
 
     @app.get("/ui-api/reports/{artifact_id}/{path:path}")
-    def report_file(artifact_id: str, path: str):
+    def report_file(artifact_id: str, path: str, request: Request):
         descriptor = repository.resolve(artifact_id)
         if descriptor.get("state") != "finished" or descriptor["id"] != artifact_id:
             raise NotFound("Report previews require an exact finished artifact ID")
@@ -548,6 +652,12 @@ def install(app, repository, token, *, no_auth=False):
         if len(matches) != 1:
             raise NotFound("Report file not found")
         blob = matches[0]
+        cache_headers = {
+            "Cache-Control": "private, max-age=0, must-revalidate",
+            "ETag": f'"{blob["digest"]}"',
+        }
+        if request.headers.get("if-none-match") == cache_headers["ETag"]:
+            return Response(status_code=304, headers=cache_headers)
         manager = repository.open_blob(blob["digest"])
         stream = manager.__enter__()
 
@@ -563,6 +673,7 @@ def install(app, repository, token, *, no_auth=False):
             content(),
             media_type=media,
             headers={
+                **cache_headers,
                 "Content-Security-Policy": "sandbox allow-same-origin; default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; frame-src 'self'; media-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'",
             },
             background=BackgroundTask(manager.__exit__, None, None, None),
@@ -581,7 +692,9 @@ def install(app, repository, token, *, no_auth=False):
         target = (STATIC / "assets" / safe_path(path)).resolve()
         if not target.is_relative_to((STATIC / "assets").resolve()) or not target.is_file():
             raise NotFound("UI asset not found")
-        return FileResponse(target)
+        return FileResponse(
+            target, headers={"Cache-Control": "public, max-age=31536000, immutable"}
+        )
 
     @app.get("/{path:path}")
     def shell(path: str):

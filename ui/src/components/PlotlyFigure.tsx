@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Data, Layout } from 'plotly.js';
+import { api } from '../api';
 import { ErrorNote } from './States';
 
 /** Interactive notebook MIME output, with Cairn defaults and no remote script loading. */
-export function PlotlyFigure({spec}: {spec:unknown}) {
+export function PlotlyFigure({spec,src}: {spec?:unknown;src?:string}) {
   const host=useRef<HTMLDivElement>(null),[error,setError]=useState<Error>();
   useEffect(()=>{
     const node=host.current!;let closed=false,resize:ResizeObserver|undefined,purge:(()=>void)|undefined;
-    (async()=>{
+    const controller = new AbortController();
+    const render = async()=>{
       const Plotly=await import('plotly.js-dist-min');if(closed)return;
-      const figure=spec as {data:Data[];layout?:Partial<Layout>};
+      const figure=(src?await api(src,{signal:controller.signal}):spec) as {data:Data[];layout?:Partial<Layout>};if(closed)return;
       if(!figure||!Array.isArray(figure.data))throw new Error('Invalid Plotly figure');
       const css=getComputedStyle(node),color=(name:string)=>css.getPropertyValue(name).trim();
       const axis={gridcolor:color('--line'),zerolinecolor:color('--line'),linecolor:color('--line'),automargin:true};
@@ -18,8 +20,9 @@ export function PlotlyFigure({spec}: {spec:unknown}) {
       await Plotly.newPlot(node,structuredClone(figure.data),structuredClone(layout),{responsive:true,displaylogo:false,displayModeBar:true,scrollZoom:false,toImageButtonOptions:{format:'svg',filename:'cairn-figure',width:1000,height:600,scale:1}});
       purge=()=>Plotly.purge(node);if(closed){purge();return;}
       resize=new ResizeObserver(()=>{void Plotly.Plots.resize(node);});resize.observe(node);
-    })().catch(e=>{if(!closed)setError(e);});
-    return()=>{closed=true;resize?.disconnect();purge?.();};
-  },[spec]);
+    };
+    const observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting)){observer.disconnect();void render().catch(e=>{if(!closed)setError(e);});}},{rootMargin:'300px'});observer.observe(node);
+    return()=>{closed=true;controller.abort();observer.disconnect();resize?.disconnect();purge?.();};
+  },[spec,src]);
   return <div className="native-plotly-card">{error&&<ErrorNote error={error}/>}<div ref={host} className="native-plotly" role="img" aria-label="Interactive Plotly figure"/></div>;
 }

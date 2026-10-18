@@ -1,8 +1,9 @@
+import { readView, writeView } from '../viewCache';
 import { ArtifactTags } from '../components/ArtifactTags';
 import { CopyId } from '../components/CopyId';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { useRefresh } from '../refresh';
+import { useRefreshMode } from '../refresh';
 import { Graph } from '../components/Graph';
 import { api, post, envelope, projectPath, artifactPath, when, type Artifact, type BlobRef, type Json } from '../api';
 import { BlobTable, Button, Crumbs, DataTable, DocumentReader, ErrorNote, Hero, Hint, JsonBlock, KeyValueTable, LinkButton, Loading, Pill, Section, Select, StatusPill, Tabs, ValueView } from '../components';
@@ -18,24 +19,41 @@ export function ArtifactPage() {
   const tab = params.get('tab') || 'overview';
   const [detail, setDetail] = useState<Detail>(), [error, setError] = useState<Error>();
   const [refresh, setRefresh] = useState(0);
-  const current = detail?.target === target ? detail : undefined;
-  const pulse = useRefresh();
+  const cacheKey=`artifact:${project}:${target}`;
+  const cached=readView<Artifact>(cacheKey);
+  const current = detail?.target === target ? detail : cached ? {target,selected:cached,history:[]} : undefined;
+  const paused = useRefreshMode();
 
   useEffect(() => {
+    const controller = new AbortController();let timer: number;
+    async function load() {
+      try {
+        const [selected] = await post<Artifact[]>('/v1/resolutions', {refs:[target],project}, controller.signal);
+        if (!selected) throw new Error('Artifact not found');
+        if (!controller.signal.aborted) {
+          writeView(cacheKey,selected);
+          setError(undefined);
+          setDetail(previous => ({target,selected,history:previous?.selected.id===selected.id?previous.history:[]}));
+          document.title = `${selected.name} · Cairn`;
+        }
+      } catch (e) {if (!controller.signal.aborted) setError(e as Error);}
+      finally {if (!controller.signal.aborted && !paused) timer=window.setTimeout(poll,5000);}
+    }
+    function poll() {if(document.visibilityState==='visible')void load();else timer=window.setTimeout(poll,5000);}
+    void load();
+    return () => {controller.abort();window.clearTimeout(timer);};
+  }, [target, project, refresh, paused, cacheKey]);
+
+  // Version history is ancillary: it must never hold up report text or figures.
+  const selectedId = current?.selected.id;
+  useEffect(() => {
+    if (!selectedId) return;
     const controller = new AbortController();
-    setError(undefined);
-    (async () => {
-      const [selected] = await post<Artifact[]>('/v1/resolutions', { refs: [target], project }, controller.signal);
-      if (!selected) throw new Error('Artifact not found');
-      const query = new URLSearchParams({ ref: selected.id, project: selected.project });
-      const history = await api<Artifact[]>(`/v1/history?${query}`, { signal: controller.signal });
-      if (!controller.signal.aborted) {
-        setDetail({ target, selected, history });
-        document.title = `${selected.name} · Cairn`;
-      }
-    })().catch(e => { if (!controller.signal.aborted) setError(e); });
-    return () => controller.abort();
-  }, [target, project, refresh, pulse]);
+    api<Artifact[]>(`/ui-api/artifacts/${selectedId}/history`, {signal:controller.signal})
+      .then(history => {if(!controller.signal.aborted)setDetail(previous=>{const selected=previous?.selected??readView<Artifact>(cacheKey);return selected?.id===selectedId?{target,selected,history}:previous;});})
+      .catch(e=>{if(!controller.signal.aborted)setError(e as Error);});
+    return ()=>controller.abort();
+  }, [selectedId, refresh, cacheKey, target]);
 
   if (!current) return <main>{error ? <><ErrorNote error={error}/><Button onClick={() => setRefresh(n => n + 1)}>Retry</Button></> : <Loading what="Loading artifact"/>}</main>;
   const { selected, history } = current;
@@ -45,7 +63,7 @@ export function ArtifactPage() {
   const live = selected.state !== 'finished';
   const ref = `${selected.namespace}/${selected.name}${selected.number ? `@v${selected.number}` : ''}`;
   const choices = history.slice().reverse().map(a => ({ value: a.id, label: `v${a.number} · ${a.manifest?.outcome || a.state}` }));
-  if (!choices.some(c => c.value === selected.id)) choices.unshift({ value: selected.id, label: `${selected.state} · ${selected.id.slice(0, 12)}` });
+  if (!choices.some(c => c.value === selected.id)) choices.unshift({ value: selected.id, label: selected.number ? `v${selected.number} · ${selected.manifest?.outcome || selected.state}` : `${selected.state} · ${selected.id.slice(0, 12)}` });
   const tabs = [{ value: 'overview', label: report ? 'Report' : 'Overview' }, { value: 'records', label: 'Records' }, { value: 'files', label: 'Files' }, { value: 'lineage', label: 'Lineage' }, { value: 'versions', label: 'History', count: history.length }, { value: 'metadata', label: 'Metadata' }];
   const namedBlobs: BlobRef[] = [];
   const visit = (v: unknown) => {
@@ -67,7 +85,7 @@ export function ArtifactPage() {
     {live && <Hint>This artifact is {selected.state}. Its ID stays the same when it finishes.</Hint>}
     <Tabs label="Artifact detail" tabs={tabs} value={tab} onChange={tab => { const next = new URLSearchParams(params); next.set('tab', tab); setParams(next); }}/>
     {tab === 'overview' && <>
-      {report ? <Section title="Published report" actions={<LinkButton href={`/ui-api/reports/${selected.id}/index.html`}>HTML export</LinkButton>}><DocumentReader project={selected.project} version={selected.id} blobs={typed?.blobs || []}/></Section> : <>
+      {report ? <Section title="Published report" actions={<LinkButton href={`/ui-api/reports/${selected.id}/index.html`}>HTML export</LinkButton>}><DocumentReader key={selected.id} project={selected.project} version={selected.id} blobs={typed?.blobs || []}/></Section> : <>
         {run && <RecordsPanel key={`records:${selected.id}`} reference={selected.id} project={selected.project} run overview live={live} refresh={refresh}/>}
         <Section title={run ? 'Final result' : 'Value'}><ValueView value={value}/></Section>
       </>}

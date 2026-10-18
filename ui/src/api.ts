@@ -1,3 +1,4 @@
+import { readView, writeView } from './viewCache';
 import { useEffect, useState } from 'react';
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export type BlobRef = { digest: string; size: number; name?: string; media_type?: string };
@@ -25,16 +26,16 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   return response.json();
 }
 export const post = <T,>(path: string, body: unknown, signal?: AbortSignal) => api<T>(path, {method: 'POST', body: JSON.stringify(body), signal});
-export function useResource<T>(path: string | null, revision = 0) {
-  const [state, setState] = useState<{data?: T; error?: Error; loading: boolean}>({loading: true});
+export function useResource<T>(path: string | null, revision = 0, cache = false) {
+  const [state, setState] = useState<{data?: T; error?: Error; loading: boolean}>(() => ({data:cache && path ? readView<T>(path) : undefined, loading:!(cache && path && readView<T>(path))}));
   useEffect(() => {
     const controller = new AbortController();
     setState(previous => ({...previous, loading: !!path && !previous.data}));
-    if (path) api<T>(path, {signal: controller.signal}).then(data => setState({data, loading: false})).catch(error => {
-      if (!controller.signal.aborted) setState({error, loading: false});
+    if (path) api<T>(path, {signal: controller.signal}).then(data => {if(controller.signal.aborted)return;if(cache)writeView(path,data);setState({data, loading: false});}).catch(error => {
+      if (!controller.signal.aborted) setState(previous=>({...previous,error, loading: false}));
     });
     return () => controller.abort();
-  }, [path, revision]);
+  }, [path, revision, cache]);
   return state;
 }
 export const projectPath = (project: string) => `/p/${encodeURIComponent(project)}`;
