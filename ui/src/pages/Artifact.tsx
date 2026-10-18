@@ -26,18 +26,22 @@ export function ArtifactPage() {
 
   useEffect(() => {
     const controller = new AbortController();let timer: number;
+    let finished = readView<Artifact>(cacheKey)?.state === 'finished';
     async function load() {
       try {
         const [selected] = await post<Artifact[]>('/v1/resolutions', {refs:[target],project}, controller.signal);
         if (!selected) throw new Error('Artifact not found');
         if (!controller.signal.aborted) {
-          writeView(cacheKey,selected);
+          finished = selected.state === 'finished';
+          const cached = readView<Artifact>(cacheKey);
+          const stable = cached && JSON.stringify(cached) === JSON.stringify(selected) ? cached : selected;
+          if (stable !== cached) writeView(cacheKey,stable);
           setError(undefined);
-          setDetail(previous => ({target,selected,history:previous?.selected.id===selected.id?previous.history:[]}));
+          setDetail(previous => previous?.target === target && (previous.selected === stable || JSON.stringify(previous.selected) === JSON.stringify(stable)) ? previous : {target,selected:stable,history:previous?.selected.id===stable.id?previous.history:[]});
           document.title = `${selected.name} · Cairn`;
         }
       } catch (e) {if (!controller.signal.aborted) setError(e as Error);}
-      finally {if (!controller.signal.aborted && !paused) timer=window.setTimeout(poll,5000);}
+      finally {if (!controller.signal.aborted && !paused && !finished) timer=window.setTimeout(poll,5000);}
     }
     function poll() {if(document.visibilityState==='visible')void load();else timer=window.setTimeout(poll,5000);}
     void load();
@@ -50,7 +54,7 @@ export function ArtifactPage() {
     if (!selectedId) return;
     const controller = new AbortController();
     api<Artifact[]>(`/ui-api/artifacts/${selectedId}/history`, {signal:controller.signal})
-      .then(history => {if(!controller.signal.aborted)setDetail(previous=>{const selected=previous?.selected??readView<Artifact>(cacheKey);return selected?.id===selectedId?{target,selected,history}:previous;});})
+      .then(history => {if(!controller.signal.aborted)setDetail(previous=>{const selected=previous?.selected??readView<Artifact>(cacheKey);return selected?.id===selectedId?(previous?.target===target&&JSON.stringify(previous.history)===JSON.stringify(history)?previous:{target,selected,history}):previous;});})
       .catch(e=>{if(!controller.signal.aborted)setError(e as Error);});
     return ()=>controller.abort();
   }, [selectedId, refresh, cacheKey, target]);

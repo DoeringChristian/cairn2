@@ -31,7 +31,7 @@ export function useResource<T>(path: string | null, revision = 0, cache = false)
   useEffect(() => {
     const controller = new AbortController();
     setState(previous => ({...previous, loading: !!path && !previous.data}));
-    if (path) api<T>(path, {signal: controller.signal}).then(data => {if(controller.signal.aborted)return;if(cache)writeView(path,data);setState({data, loading: false});}).catch(error => {
+    if (path) api<T>(path, {signal: controller.signal}).then(data => {if(controller.signal.aborted)return;if(cache){const previous=readView<T>(path);if(previous!==undefined&&JSON.stringify(previous)===JSON.stringify(data))data=previous;else writeView(path,data);}setState(previous=>{const stable=previous.data===data||(cache&&previous.data!==undefined&&JSON.stringify(previous.data)===JSON.stringify(data))?previous.data:data;return previous.data===stable&&!previous.loading&&!previous.error?previous:{data:stable, loading:false};});}).catch(error => {
       if (!controller.signal.aborted) setState(previous=>({...previous,error, loading: false}));
     });
     return () => controller.abort();

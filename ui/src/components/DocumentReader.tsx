@@ -7,7 +7,7 @@ import { PlotlyFigure } from "./PlotlyFigure";
 import { ReportToc } from "./ReportToc";
 import { ZoomImage } from './ZoomImage';
 import { MediaPlayback } from './MediaPlayback';
-import { createElement, Fragment, useRef, type ReactNode } from 'react';
+import { createElement, Fragment, memo, useMemo, useRef, type ReactNode } from 'react';
 import MarkdownIt from 'markdown-it';
 import footnote from 'markdown-it-footnote';
 import DOMPurify from 'dompurify';
@@ -97,13 +97,11 @@ function OutputView({output,base,source,blobs,labels,htmlUrl}: {output:Output;ba
   if(data['text/markdown'])return <>{nodesToReact(md.parse(join(data['text/markdown']),{}) as unknown as Node[],base,source,blobs,labels)}</>;
   return <pre className="native-output">{data['application/json']?JSON.stringify(data['application/json'],null,2):join(data['text/plain'])}</pre>;
 }
-export function DocumentReader({version,blobs,project}: {version:string;blobs:BlobRef[];project:string}) {
+export const DocumentReader = memo(function DocumentReader({version,blobs,project}: {version:string;blobs:BlobRef[];project:string}) {
   const container=useRef<HTMLElement>(null);
   const base=`/ui-api/reports/${encodeURIComponent(version)}/`;
   const {data,error,loading}=useResource<Document>(base+'preview.json',0,true);
-  if(loading&&!data)return <Loading what="Loading report"/>;if(error&&!data)return <ErrorNote error={error}/>;
-  if(!data||data.format!=='cairn/document'||data.version!==1)return <Hint>This document format is not supported by this reader.</Hint>;
-  return <ReportArtifactContext.Provider value={version}><div className="report-reader-layout"><ReportToc container={container} documentKey={data}/><article ref={container} className="native-document report-prose" aria-label={data.title}>{data.blocks.map((block,blockIndex)=>{
+  const renderedBlocks=useMemo(()=>data?.format==='cairn/document'&&data.version===1?data.blocks.map((block,blockIndex)=>{
     const caption=block.options?.['fig-cap']||block.options?.['tbl-cap'];
     return <div className="native-block" key={block.id} id={block.label||block.id} data-source-path={block.source.path} data-line-start={block.source.line_start} data-line-end={block.source.line_end}>
       {block.kind==='markdown'?nodesToReact(block.nodes||[],base,block.source,blobs,data.labels):<>
@@ -112,5 +110,9 @@ export function DocumentReader({version,blobs,project}: {version:string;blobs:Bl
         {caption&&<p className="native-caption">{block.label&&data.labels[block.label]?`${data.labels[block.label].text}: `:''}{inlineText(caption,data.labels)}</p>}
       </>}
     </div>;
-  })}<SelectionCopy container={container} version={version}/></article><ReportComments container={container} artifact={version} project={project}/></div></ReportArtifactContext.Provider>;
-}
+  }):null,[data,base,blobs]);
+  if(loading&&!data)return <Loading what="Loading report"/>;if(error&&!data)return <ErrorNote error={error}/>;
+  if(!data||data.format!=='cairn/document'||data.version!==1)return <Hint>This document format is not supported by this reader.</Hint>;
+  return <ReportArtifactContext.Provider value={version}><div className="report-reader-layout"><ReportToc container={container} documentKey={data}/><article ref={container} className="native-document report-prose" aria-label={data.title}>{renderedBlocks}<SelectionCopy container={container} version={version}/></article><ReportComments container={container} artifact={version} project={project}/></div></ReportArtifactContext.Provider>;
+}, (previous,next)=>previous.version===next.version&&previous.project===next.project&&
+  (previous.blobs===next.blobs||JSON.stringify(previous.blobs)===JSON.stringify(next.blobs)));

@@ -370,3 +370,46 @@ test('report text does not wait for history or media and survives a slow reload'
     await expect(page.locator('article.native-document')).toBeVisible({timeout:2000});
   } finally {release();}
 });
+
+test('finished report polling stops and metadata refresh does not re-render prose', async ({page,request}) => {
+  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
+  const report=items.find((a:any)=>a.name==='report-field-guide');
+  let checks=0, description='Original description';
+  await page.clock.install();
+  await page.addInitScript(() => {
+    (window as any).reportHtmlParses=0;
+    const parse=DOMParser.prototype.parseFromString;
+    DOMParser.prototype.parseFromString=function(...args:Parameters<typeof parse>){(window as any).reportHtmlParses++;return parse.apply(this,args);};
+  });
+  await page.route('**/v1/resolutions', route => {checks++;return route.fulfill({json:[{...report,annotations:{...report.annotations,description}}]});});
+  await page.goto(`/p/neural-rendering/a/${report.id}`);
+  await expect(page.locator('article.native-document')).toBeVisible();
+  const parses=await page.evaluate(()=>(window as any).reportHtmlParses);
+  expect(parses).toBeGreaterThan(0);
+  const initial=checks;
+  await page.clock.fastForward(16000);
+  expect(checks).toBe(initial);
+  description='Refreshed description';
+  await page.getByRole('button',{name:'Refresh',exact:true}).click();
+  await expect(page.locator('.hero')).toContainText(description);
+  expect(checks).toBe(initial+1);
+  expect(await page.evaluate(()=>(window as any).reportHtmlParses)).toBe(parses);
+});
+
+test('live artifact keeps polling until it finishes', async ({page,request}) => {
+  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
+  const report=items.find((a:any)=>a.name==='report-field-guide');
+  let checks=0;
+  await page.clock.install();
+  await page.route('**/v1/resolutions', route => {checks++;return route.fulfill({json:[{...report,state:checks<3?'live':'finished'}]});});
+  await page.goto(`/p/neural-rendering/a/${report.id}`);
+  await expect(page.locator('article.native-document')).toBeVisible();
+  expect(checks).toBe(1);
+  await page.clock.fastForward(5100);
+  await expect.poll(()=>checks).toBe(2);
+  await page.clock.fastForward(5100);
+  await expect.poll(()=>checks).toBe(3);
+  await expect(page.getByText('This artifact is live. Its ID stays the same when it finishes.',{exact:true})).toHaveCount(0);
+  await page.clock.fastForward(16000);
+  expect(checks).toBe(3);
+});
