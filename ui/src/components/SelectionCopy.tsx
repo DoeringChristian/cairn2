@@ -1,3 +1,4 @@
+import { commentColumnX, selectedTextRect } from './commentLayout';
 import { CommentButton } from './CommentButton';
 import { createPortal } from "react-dom";
 import { Check, Copy } from "lucide-react";
@@ -20,10 +21,10 @@ export function SelectionCopy({container,version}: {container:RefObject<HTMLElem
       const formula=element?.closest<HTMLElement>('[data-latex]');const endElement=end.nodeType===3?end.parentElement:end as Element;
       const quote=formula&&formula===endElement?.closest('[data-latex]')?`$${formula.dataset.latex}$`:(fragment.textContent||selected.toString()).replace(/\s+/g,' ').trim();
       savedRange.current=range.cloneRange();
-      const rect=range.getBoundingClientRect();setCopied(false);setSelection({anchor:{quote,path:source.dataset.sourcePath,line_start:Number(source.dataset.lineStart),line_end:Number(endElement?.closest<HTMLElement>('[data-line-end]')?.dataset.lineEnd||source.dataset.lineStart)},text:`${source.dataset.sourcePath}:${source.dataset.lineStart} "${quote}" [cairn:${version}]`,x:Math.max(8,Math.min(innerWidth-102,rect.right+6)),y:Math.max(8,Math.min(innerHeight-52,rect.bottom+6))});
+      const rect=selectedTextRect(range);if(!rect){setSelection(undefined);return;}setCopied(false);setSelection({anchor:{quote,path:source.dataset.sourcePath,line_start:Number(source.dataset.lineStart),line_end:Number(endElement?.closest<HTMLElement>('[data-line-end]')?.dataset.lineEnd||source.dataset.lineStart)},text:`${source.dataset.sourcePath}:${source.dataset.lineStart} "${quote}" [cairn:${version}]`,x:Math.max(8,commentColumnX(container.current!)-(innerWidth<=760?49:37)),y:Math.max(8,Math.min(innerHeight-52,rect.top))});
     }
-    document.addEventListener('selectionchange',inspect);window.addEventListener('scroll',inspect,{passive:true});
-    return()=>{document.removeEventListener('selectionchange',inspect);window.removeEventListener('scroll',inspect);};
+    document.addEventListener('selectionchange',inspect);window.addEventListener('scroll',inspect,{passive:true});window.addEventListener('resize',inspect);
+    return()=>{document.removeEventListener('selectionchange',inspect);window.removeEventListener('scroll',inspect);window.removeEventListener('resize',inspect);};
   },[container,version]);
   async function copy(){if(!selection)return;try{await navigator.clipboard.writeText(selection.text);setCopied(true);}catch{
     const text=document.createElement('textarea');text.value=selection.text;text.style.cssText='position:fixed;opacity:0';document.body.append(text);text.select();const ok=document.execCommand('copy');text.remove();setCopied(ok);

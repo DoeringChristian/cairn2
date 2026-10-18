@@ -131,6 +131,11 @@ test('comments autosave, highlight, reopen beside text, and delete across versio
   await expect(marker).toBeVisible();
   const appearance=(node:Element)=>{const css=getComputedStyle(node);return [css.width,css.height,css.color,css.backgroundColor,css.border,css.borderRadius,css.boxShadow];};
   expect(await page.locator('.output-comment-button').first().evaluate(appearance)).toEqual(await marker.evaluate(appearance));
+  const shell=page.locator('.native-output-shell').first();
+  await shell.evaluate(node=>(node as HTMLElement).style.width='180px');
+  const mediaMarker=shell.locator(':scope > .output-comment-button');
+  await expect.poll(async()=>Math.abs((await mediaMarker.boundingBox())!.x-(await marker.boundingBox())!.x)).toBeLessThan(1);
+  await shell.evaluate(node=>(node as HTMLElement).style.removeProperty('width'));
   await marker.click();
   await expect(editor.getByLabel('Comment',{exact:true})).toHaveValue(body+' updated');
   await editor.getByLabel('Comment',{exact:true}).fill(body+' final');
@@ -461,4 +466,60 @@ test('legacy v1 inline report output remains readable', async ({page,request}) =
   const image=page.getByRole('button',{name:'Enlarge Python cell image output',exact:true}).locator('img');
   await image.scrollIntoViewIfNeeded();
   await expect.poll(()=>image.evaluate((img:HTMLImageElement)=>img.naturalWidth)).toBe(1);
+});
+
+test('full paragraph selection keeps actions beside selected text in the comment column',async({page,request})=>{
+  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
+  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
+  await page.goto(`/p/neural-rendering/a/${report.id}`);
+  const paragraph=page.locator('.native-document p').filter({hasText:'This is a working tour'}).first();
+  await paragraph.scrollIntoViewIfNeeded();
+  // Include the next block boundary, as a browser's full-line selection can do.
+  await paragraph.evaluate(node=>{const range=document.createRange();range.selectNodeContents(node);if(node.nextSibling)range.setEnd(node.nextSibling,0);const selection=window.getSelection()!;selection.removeAllRanges();selection.addRange(range);});
+  const actions=page.locator('.selection-actions');
+  await expect(actions).toBeVisible();
+  const p=(await paragraph.boundingBox())!,a=(await actions.boundingBox())!;
+  expect(a.y).toBeGreaterThanOrEqual(p.y-2);expect(a.y).toBeLessThanOrEqual(p.y+p.height+2);
+  const x=await page.locator('article.native-document').evaluate(node=>Math.min(innerWidth-52,node.getBoundingClientRect().right+8));
+  expect(Math.abs((await actions.getByRole('button',{name:'Comment on selected text'}).boundingBox())!.x-x)).toBeLessThan(1);
+});
+
+test('Plotly comments do not highlight chart text',async({page,request})=>{
+  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
+  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
+  let comments:any[]=[];
+  await page.route(new RegExp(`/ui-api/reports/${report.id}/comments(?:/[^/]+)?$`),async route=>{
+    const method=route.request().method();
+    if(method==='POST') {const comment={...route.request().postDataJSON(),id:'plotly-highlight-test',artifact_id:report.id};comments=[comment];return route.fulfill({json:comment});}
+    if(method==='DELETE'){comments=[];return route.fulfill({json:{}});}
+    return route.fulfill({json:comments});
+  });
+  await page.goto(`/p/neural-rendering/a/${report.id}`);
+  const shell=page.locator('.native-output-shell').filter({has:page.locator('.native-plotly-card')}).first();
+  await shell.scrollIntoViewIfNeeded();
+  await shell.getByRole('button',{name:'Comment on Plotly figure',exact:true}).click();
+  const editor=page.getByRole('group',{name:'Add report comment'});
+  await editor.getByLabel('Comment',{exact:true}).fill('Chart annotation only');
+  await expect(editor.getByLabel('Saved',{exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>CSS.highlights.get('cairn-comments')?.size||0)).toBe(0);
+  await editor.getByRole('button',{name:'Delete comment'}).click();
+  await expect(editor).toHaveCount(0);
+});
+
+test('code annotations preserve syntax foreground colors and a dark background',async({page,request})=>{
+  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
+  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
+  await page.goto(`/p/neural-rendering/a/${report.id}`);
+  const code=page.getByLabel('python code',{exact:true}).filter({hasText:'def summarize'}).locator('code');
+  await code.scrollIntoViewIfNeeded();
+  await code.evaluate(node=>{const range=document.createRange();range.selectNodeContents(node);const selection=window.getSelection()!;selection.removeAllRanges();selection.addRange(range);});
+  await page.getByRole('button',{name:'Comment on selected text',exact:true}).click();
+  const editor=page.getByRole('group',{name:'Add report comment'});
+  await editor.getByLabel('Comment',{exact:true}).fill('Code palette check');
+  await expect(editor.getByLabel('Saved',{exact:true})).toBeVisible();
+  const colors=await code.locator('.hljs-keyword').first().evaluate(node=>({normal:getComputedStyle(node).color,highlight:getComputedStyle(node,'::highlight(cairn-comments)').color,background:getComputedStyle(node,'::highlight(cairn-comments)').backgroundColor}));
+  expect(colors.highlight).toBe(colors.normal);
+  expect(colors.background).toBe('rgb(41, 71, 57)');
+  await editor.getByRole('button',{name:'Delete comment'}).click();
+  await expect(editor).toHaveCount(0);
 });

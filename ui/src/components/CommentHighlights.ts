@@ -5,7 +5,7 @@ type Position={node:Text;offset:number};
 
 /** Match saved quotations without changing React's DOM or moving report layout. */
 function findQuote(container:HTMLElement,anchor:CommentAnchor):Range|undefined {
-  if(anchor.media_key){const media=Array.from(container.querySelectorAll<HTMLElement>('[data-comment-media]')).find(node=>node.dataset.commentMedia===anchor.media_key);if(media){const range=document.createRange();range.selectNode(media);return range;}return;}
+  if(anchor.media_key)return; // Figure annotations must not highlight chart titles or labels.
   if(!anchor.quote)return;
   const walker=document.createTreeWalker(container,NodeFilter.SHOW_TEXT);
   let text='',previousBlock:Element|null=null;

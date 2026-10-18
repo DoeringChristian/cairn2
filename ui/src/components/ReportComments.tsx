@@ -1,3 +1,4 @@
+import { commentColumnX } from './commentLayout';
 import { CommentButton } from './CommentButton';
 import { useCommentHighlights } from './CommentHighlights';
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
@@ -70,17 +71,31 @@ export function ReportComments({artifact,container}: {artifact:string;project:st
   useEffect(()=>{
     const article=container.current;if(!article)return;
     let frame=0;
-    const place=()=>{frame=0;const box=article.getBoundingClientRect(),next:Marker[]=[];
-      for(const comment of items){if(comment.anchor.media_key)continue;const rect=ranges.get(comment.id)?.getBoundingClientRect();const top=rect?.top??box.top;
-        if(top < -24 || top > innerHeight-24)continue;
-        let y=Math.max(8,top);while(next.some(m=>Math.abs(m.y-y)<48))y+=48;
-        next.push({comment,x:Math.min(innerWidth-52,box.right+8),y});
-      }setMarkers(next);
+    // One column and spacing pass for both text markers and media controls.
+    const place=()=>{frame=0;const box=article.getBoundingClientRect(),next:Marker[]=[],x=commentColumnX(article);
+      const candidates:{top:number;comment?:Comment;button?:HTMLButtonElement;shellTop?:number}[]=[];
+      for(const button of article.querySelectorAll<HTMLButtonElement>('.output-comment-button')) {
+        const shell=button.closest<HTMLElement>('.native-output-shell');if(!shell)continue;
+        observer.observe(shell);const rect=shell.getBoundingClientRect(),top=rect.top+8;
+        button.style.left=`${x-rect.left}px`;button.style.top='8px';
+        if(top>=-24&&top<=innerHeight-24)candidates.push({top,button,shellTop:rect.top});
+      }
+      for(const comment of items){if(comment.anchor.media_key)continue;
+        const top=ranges.get(comment.id)?.getBoundingClientRect().top??box.top;
+        if(top>=-24&&top<=innerHeight-24)candidates.push({top,comment});
+      }
+      candidates.sort((a,b)=>a.top-b.top);
+      let previous=-40;
+      for(const candidate of candidates){const y=Math.max(8,candidate.top,previous+48);previous=y;
+        if(candidate.button)candidate.button.style.top=`${y-candidate.shellTop!}px`;
+        if(candidate.comment)next.push({comment:candidate.comment,x,y});
+      }
+      setMarkers(next);
     };
     const schedule=()=>{if(!frame)frame=requestAnimationFrame(place);};
-    const reveal=(event:Event)=>{const id=(event as CustomEvent<string>).detail,comment=items.find(c=>c.id===id);if(comment){const box=article.getBoundingClientRect(),rect=ranges.get(id)?.getBoundingClientRect();setEditing({comment,x:Math.min(innerWidth-52,box.right+8),y:Math.max(8,rect?.top||box.top)});}};
-    place();const observer=new ResizeObserver(schedule);observer.observe(article);window.addEventListener('scroll',schedule,{passive:true});window.addEventListener('resize',schedule);window.addEventListener('cairn:show-comment',reveal);
-    return()=>{cancelAnimationFrame(frame);observer.disconnect();window.removeEventListener('scroll',schedule);window.removeEventListener('resize',schedule);window.removeEventListener('cairn:show-comment',reveal);};
+    const reveal=(event:Event)=>{const id=(event as CustomEvent<string>).detail,comment=items.find(c=>c.id===id);if(comment){const box=article.getBoundingClientRect(),rect=ranges.get(id)?.getBoundingClientRect();setEditing({comment,x:commentColumnX(article),y:Math.max(8,rect?.top||box.top)});}};
+    const observer=new ResizeObserver(schedule);observer.observe(article);place();const mutations=new MutationObserver(schedule);mutations.observe(article,{childList:true,subtree:true});window.addEventListener('scroll',schedule,{passive:true});window.addEventListener('resize',schedule);window.addEventListener('cairn:show-comment',reveal);
+    return()=>{cancelAnimationFrame(frame);observer.disconnect();mutations.disconnect();window.removeEventListener('scroll',schedule);window.removeEventListener('resize',schedule);window.removeEventListener('cairn:show-comment',reveal);};
   },[container,items,ranges]);
   return <>{error&&<ErrorNote error={error}/>} {createPortal(<>{markers.map(marker=><CommentButton key={marker.comment.id} existing saved={saved===marker.comment.id} className="report-comment-marker" aria-label="Open comment" title={marker.comment.body} style={{left:marker.x,top:marker.y}} onClick={()=>setEditing(marker)}/>)}{editing&&<CommentComposer key={editing.comment.id} artifact={artifact} anchor={editing.comment.anchor} initial={editing.comment} position={editing} onClose={()=>setEditing(current=>current?.comment.id===editing.comment.id?undefined:current)}/>}</>,document.body)}</>;
 }
