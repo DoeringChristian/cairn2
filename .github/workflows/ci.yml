@@ -12,14 +12,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.11", "3.12"]
+        python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python }}
           enable-cache: true
-      - run: uv sync --locked --all-extras
+      - run: uv sync --locked --extra all
       - run: uv run pytest -q
       - run: uv build
       - name: Check wheel contains bundled UI
@@ -45,7 +45,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --locked --all-extras
+      - run: uv sync --locked --extra all
       - run: npm ci --prefix ui
       - run: npm run build --prefix ui
       - run: npx --prefix ui playwright install --with-deps chromium

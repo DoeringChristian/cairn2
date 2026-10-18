@@ -281,12 +281,18 @@ def _server_socket(host, port):
 
 def _serve(args):
     from .config import ensure_token, startup_urls
-    from .server import create_app
 
     try:
         import uvicorn
-    except ImportError as exc:
-        raise ValidationError("The server requires pip install 'cairn2[server]'") from exc
+
+        from .server import create_app
+    except ModuleNotFoundError as exc:
+        if exc.name not in {"uvicorn", "fastapi"}:
+            raise
+        raise ValidationError(
+            "Server dependencies are missing. Run 'uv run --extra all cairn server' "
+            "(or --extra ui), or install 'cairn2[all]' with pip."
+        ) from exc
     repository = _repository(args)
     listener = None
     try:

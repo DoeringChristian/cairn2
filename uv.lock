@@ -125,7 +125,7 @@ wheels = [
 
 [[package]]
 name = "cairn2"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -133,6 +133,26 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+all = [
+    { name = "boto3" },
+    { name = "fastapi" },
+    { name = "ipykernel" },
+    { name = "itsdangerous" },
+    { name = "latex2mathml" },
+    { name = "markdown-it-py" },
+    { name = "matplotlib" },
+    { name = "mdit-py-plugins" },
+    { name = "nbclient" },
+    { name = "nbformat" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "pillow" },
+    { name = "plotly" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "pyarrow" },
+    { name = "pyyaml" },
+    { name = "uvicorn" },
+]
 media = [
     { name = "matplotlib" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -176,29 +196,46 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "boto3", marker = "extra == 'all'", specifier = ">=1.35,<2" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.35,<2" },
+    { name = "fastapi", marker = "extra == 'all'", specifier = ">=0.115,<1" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115,<1" },
     { name = "fastapi", marker = "extra == 'ui'", specifier = ">=0.115,<1" },
     { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "ipykernel", marker = "extra == 'all'", specifier = ">=6,<8" },
     { name = "ipykernel", marker = "extra == 'reports'", specifier = ">=6,<8" },
+    { name = "itsdangerous", marker = "extra == 'all'", specifier = ">=2.2,<3" },
     { name = "itsdangerous", marker = "extra == 'ui'", specifier = ">=2.2,<3" },
+    { name = "latex2mathml", marker = "extra == 'all'", specifier = ">=3.77,<4" },
     { name = "latex2mathml", marker = "extra == 'reports'", specifier = ">=3.77,<4" },
+    { name = "markdown-it-py", marker = "extra == 'all'", specifier = ">=3,<5" },
     { name = "markdown-it-py", marker = "extra == 'reports'", specifier = ">=3,<5" },
+    { name = "matplotlib", marker = "extra == 'all'", specifier = ">=3.8" },
     { name = "matplotlib", marker = "extra == 'media'", specifier = ">=3.8" },
+    { name = "mdit-py-plugins", marker = "extra == 'all'", specifier = ">=0.4,<1" },
     { name = "mdit-py-plugins", marker = "extra == 'reports'", specifier = ">=0.4,<1" },
+    { name = "nbclient", marker = "extra == 'all'", specifier = ">=0.10,<1" },
     { name = "nbclient", marker = "extra == 'reports'", specifier = ">=0.10,<1" },
+    { name = "nbformat", marker = "extra == 'all'", specifier = ">=5,<6" },
     { name = "nbformat", marker = "extra == 'reports'", specifier = ">=5,<6" },
+    { name = "numpy", marker = "extra == 'all'", specifier = ">=1.26" },
     { name = "numpy", marker = "extra == 'media'", specifier = ">=1.26" },
+    { name = "pillow", marker = "extra == 'all'", specifier = ">=10" },
     { name = "pillow", marker = "extra == 'media'", specifier = ">=10" },
+    { name = "plotly", marker = "extra == 'all'", specifier = ">=5" },
     { name = "plotly", marker = "extra == 'media'", specifier = ">=5" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'all'", specifier = ">=3.2,<4" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2,<4" },
+    { name = "pyarrow", marker = "extra == 'all'", specifier = ">=16" },
     { name = "pyarrow", marker = "extra == 'media'", specifier = ">=16" },
+    { name = "pyyaml", marker = "extra == 'all'", specifier = ">=6,<7" },
     { name = "pyyaml", marker = "extra == 'reports'", specifier = ">=6,<7" },
     { name = "sqlalchemy", specifier = ">=2.0,<3" },
+    { name = "uvicorn", marker = "extra == 'all'", specifier = ">=0.30,<1" },
     { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.30,<1" },
     { name = "uvicorn", marker = "extra == 'ui'", specifier = ">=0.30,<1" },
 ]
-provides-extras = ["ui", "server", "postgres", "s3", "reports", "media"]
+provides-extras = ["all", "ui", "server", "postgres", "s3", "reports", "media"]
 
 [package.metadata.requires-dev]
 dev = [

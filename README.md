@@ -20,10 +20,16 @@ HTTP API, CLI, and a client-side executable report builder. Report execution hap
 Python 3.11 or newer is required. From this checkout:
 
 ```sh
-python -m pip install -e '.[server,reports,media,postgres,s3]'
+python -m pip install -e '.[all]'
 ```
 
-Install only the extras you need. The base package requires SQLAlchemy and
+`all` installs every optional feature, including the browser UI. With uv:
+
+```sh
+uv run --extra all cairn server --host 0.0.0.0
+```
+
+Or install only the extras you need. The base package requires SQLAlchemy and
 HTTPX. `server` adds FastAPI/Uvicorn; `reports` adds the Markdown and Jupyter
 execution stack; `media` adds NumPy, Pillow, Arrow, Plotly, and Matplotlib;
 `postgres` adds Psycopg; `s3` adds Boto3. The command is `cairn`, and the Python

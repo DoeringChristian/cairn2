@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from cairn.cli import main
 
 
@@ -178,3 +180,21 @@ def test_cli_annotations_and_metadata_discovery(tmp_path, capsys):
         )["items"]
         == []
     )
+
+
+@pytest.mark.parametrize("missing", ["uvicorn", "fastapi"])
+def test_missing_server_dependencies_explain_installation(tmp_path, monkeypatch, capsys, missing):
+    import builtins
+
+    original = builtins.__import__
+
+    def without_server(name, *args, **kwargs):
+        if name == ("uvicorn" if missing == "uvicorn" else "server"):
+            raise ModuleNotFoundError(f"No module named {missing!r}", name=missing)
+        return original(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_server)
+    assert main(["--repo", str(tmp_path / "repo"), "server"]) != 0
+    error = json.loads(capsys.readouterr().err)
+    assert "uv run --extra all cairn server" in error["message"]
+    assert not (tmp_path / "repo").exists()
