@@ -108,6 +108,8 @@ video.preview-media { background: #111; }
 .form-actions .primary:disabled { opacity: .6; }
 /* The phone rail: brand and a Browse button in one bar; the lists open below it. */
 .graph-card { position: relative; }
+.graph-card > .card-bar { flex-direction: column; align-items: stretch; }
+.graph-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 @media (max-width: 760px) {
   .app-metrics, .run-charts { grid-template-columns: 1fr; }
   .section-head { flex-wrap: wrap; }

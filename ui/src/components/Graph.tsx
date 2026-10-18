@@ -157,9 +157,7 @@ export function Graph({ root, project }: { root: string; project: string }) {
 
   return (
     <Card className="graph-card" bar={<>
-      <span className="muted">{alone
-        ? (dataOnly ? "No data inputs or consumers (only runs, hidden here)." : "This artifact has no inputs and no consumers yet.")
-        : "Inputs on the left, consumers on the right. Click a node to open it, + to expand one more level."}</span>
+      <div className="graph-controls">
       {hasRuns && (
         <ToggleGroup label="Runs in the graph" value={dataOnly ? "data" : "runs"} onChange={v => setDataOnly(v === "data")}
           options={[{ value: "runs", label: "Show runs" }, { value: "data", label: "Data only" }]} />
@@ -169,6 +167,10 @@ export function Graph({ root, project }: { root: string; project: string }) {
         try { merge(await api<Lineage>(paths.lineage(project, root, 3))); } catch (e) { setError((e as Error).message); }
         setBusy(false);
       }}>Expand all (3 levels)</Button>
+      </div>
+      <span className="muted">{alone
+        ? (dataOnly ? "No data inputs or consumers (only runs, hidden here)." : "This artifact has no inputs and no consumers yet.")
+        : "Inputs on the left, consumers on the right. Click a node to open it, + to expand one more level."}</span>
     </>}>
       <div className="graph-scroll">
         <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Lineage graph">
