@@ -85,4 +85,4 @@ Artifact and run pages include editable tag chips stored as `annotations.tags`.
 Project lists offer matching-all tag filters, kept in the URL, and tag chips in
 artifact/run rows. Annotation ETags protect against overwriting concurrent edits.
 Displayed IDs copy their full value; code blocks copy the original code with a
-brief tick confirmation. Media comment buttons appear at the left of each output.
+brief tick confirmation. Text, media, selection, and lightbox comment controls share `CommentButton`. Media controls appear on the right and reopen an existing comment when present.

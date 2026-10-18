@@ -22,7 +22,7 @@
   .tag-row form button, .tag-chip button { min-width: 44px; justify-content: center; }
   .tag-chip { max-width: 100%; }
   .rail-links { flex-wrap: wrap; }
-  .image-copy, .prism-media-open, .report-comment-marker,
+  .image-copy, .prism-media-open,
   .comment-popover .media-icon-button, .prism-lightbox .media-icon-button,
   .prism-zoom-toolbar button { width: 44px; height: 44px; min-height: 44px; flex-shrink: 0; }
   .native-output-shell { margin-left: 0; margin-right: 52px; }

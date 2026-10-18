@@ -127,8 +127,11 @@ test('comments autosave, highlight, reopen beside text, and delete across versio
   await expect(editor).toHaveCount(0);
   await expect.poll(()=>page.evaluate(()=>CSS.highlights.get('cairn-comments')?.size||0)).toBeGreaterThan(0);
   await expect(page.locator('.report-comments')).toHaveCount(0);
-  const marker=page.getByRole('button',{name:'Open comment',exact:true}).filter({has:page.locator('svg')}).last();
-  await expect(marker).toBeVisible();await marker.click();
+  const marker=page.getByTitle(body+' updated',{exact:true});
+  await expect(marker).toBeVisible();
+  const appearance=(node:Element)=>{const css=getComputedStyle(node);return [css.width,css.height,css.color,css.backgroundColor,css.border,css.borderRadius,css.boxShadow];};
+  expect(await page.locator('.output-comment-button').first().evaluate(appearance)).toEqual(await marker.evaluate(appearance));
+  await marker.click();
   await expect(editor.getByLabel('Comment',{exact:true})).toHaveValue(body+' updated');
   await editor.getByLabel('Comment',{exact:true}).fill(body+' final');
   await page.getByRole('heading',{name:'Published report',exact:true}).click();
@@ -137,7 +140,7 @@ test('comments autosave, highlight, reopen beside text, and delete across versio
   await page.goto(`/p/neural-rendering/a/${reports[1].id}`);
   await page.locator('.native-document p').filter({hasText:'This is a working tour'}).first().scrollIntoViewIfNeeded();
   await expect.poll(()=>page.evaluate(()=>CSS.highlights.get('cairn-comments')?.size||0)).toBeGreaterThan(0);
-  await page.getByRole('button',{name:'Open comment',exact:true}).last().click();
+  await page.getByTitle(body+' final',{exact:true}).click();
   await expect(editor.getByLabel('Comment',{exact:true})).toHaveValue(body+' final');
   await editor.getByRole('button',{name:'Delete comment'}).click();await expect(editor).toHaveCount(0);
   await expect.poll(async()=>{const rows=await (await request.get(`/ui-api/reports/${reports[0].id}/comments`)).json();return rows.some((c:any)=>c.body===body+' final');}).toBe(false);
@@ -182,7 +185,7 @@ test('media comments keep region and time and empty edits delete',async({page,re
     await expect(shell.locator(':scope > .output-comment-button')).toHaveCount(1);
     await shell.getByRole('button',{name:'Open comment',exact:true}).click();
     await expect(editor.getByLabel('Comment',{exact:true})).toHaveValue(body+' edited');
-    await expect(page.locator('.report-comment-marker')).toHaveCount(0);
+    await expect(page.locator('.report-comment-marker').and(page.getByTitle(body+' edited',{exact:true}))).toHaveCount(0);
     await editor.getByLabel('Comment',{exact:true}).fill('');
     await page.getByRole('button',{name:'Refresh',exact:true}).click();
     await expect(editor).toHaveCount(0);

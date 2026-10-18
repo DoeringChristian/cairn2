@@ -1,5 +1,6 @@
+import { CommentButton } from './CommentButton';
 import { createPortal } from "react-dom";
-import { Check, Copy, MessageSquarePlus } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 import { CommentComposer, type CommentAnchor } from "./ReportComments";
 import { useEffect, useRef, useState, type RefObject } from 'react';
 /** Cairn Report's selection marker, extended with the pinned version identity. */
@@ -29,7 +30,7 @@ export function SelectionCopy({container,version}: {container:RefObject<HTMLElem
   }}
   return selection?createPortal(<><div className="selection-actions" style={{left:selection.x,top:selection.y}}>
     <button className="image-copy" type="button" aria-label="Copy selected text and source" onMouseDown={e=>e.preventDefault()} onClick={copy}>{copied?<Check aria-hidden="true"/>:<Copy aria-hidden="true"/>}</button>
-    <button className="image-copy" type="button" aria-label="Comment on selected text" onMouseDown={e=>e.preventDefault()} onClick={()=>{editing.current=true;setComposer(true);}}>{commented?<Check aria-hidden="true"/>:<MessageSquarePlus aria-hidden="true"/>}</button>
+    <CommentButton saved={commented} aria-label="Comment on selected text" onMouseDown={e=>e.preventDefault()} onClick={()=>{editing.current=true;setComposer(true);}}/>
     <span className="sr-only" role="status">{copied?'Copied':commented?'Comment saved':''}</span>
   </div>{composer&&<CommentComposer artifact={version} anchor={selection.anchor} position={selection} onClose={saved=>{setComposer(false);if(saved)setCommented(true);requestAnimationFrame(()=>{if(savedRange.current){const native=window.getSelection();native?.removeAllRanges();native?.addRange(savedRange.current);}editing.current=false;});}}/>}</>,document.body):null;
 }

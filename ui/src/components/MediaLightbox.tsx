@@ -1,7 +1,8 @@
+import { CommentButton } from './CommentButton';
 import { ReportArtifactContext, mediaCommentKey } from "./ReportContext";
 import { CommentComposer, useReportComments, type Comment, type CommentAnchor } from "./ReportComments";
 import { VideoTimeline } from "./media/VideoTimeline";
-import { MessageSquare, MessageSquarePlus, Scissors, SquareDashed, RotateCcw, Repeat, Copy, Check, CircleAlert, Play, Pause, StepBack, StepForward, Volume2, VolumeX, ZoomIn, ZoomOut, Maximize2, Minimize2, Shrink, X, Download, ChevronLeft, ChevronRight } from "lucide-react";
+import { Scissors, SquareDashed, RotateCcw, Repeat, Copy, Check, CircleAlert, Play, Pause, StepBack, StepForward, Volume2, VolumeX, ZoomIn, ZoomOut, Maximize2, Minimize2, Shrink, X, Download, ChevronLeft, ChevronRight } from "lucide-react";
 import { MediaIconButton } from "./media/MediaIconButton";
 import { createPortal } from "react-dom";
 import { Button, LinkButton } from "./Button";
@@ -345,7 +346,7 @@ export function MediaLightbox({
               label={copied || (selection.clip ? "Copy clip reference" : selection.region ? "Copy region reference" : isVideo ? "Copy time reference" : "Copy source reference")}
               icon={copied === "Copied" ? Check : copied ? CircleAlert : Copy}/>
             <span className="sr-only" role="status">{copied}</span>
-            {artifact&&<MediaIconButton label={existingComment?"Open comment":"Comment on media"} icon={existingComment?(saved===existingComment.id?Check:MessageSquare):MessageSquarePlus} onClick={event=>{video.current?.pause();const box=event.currentTarget.getBoundingClientRect();const {item:media,...position}=currentSelection();setComment({x:box.left,y:box.top,initial:existingComment,anchor:existingComment?.anchor||{path:media.source?.file||media.source?.path,line_start:media.source?.line,media_key:mediaCommentKey(media.source,media.name),media:position}});}}/>}
+            {artifact&&<CommentButton aria-label={existingComment?"Open comment":"Comment on media"} existing={!!existingComment} saved={!!existingComment&&saved===existingComment.id} onClick={event=>{video.current?.pause();const box=event.currentTarget.getBoundingClientRect();const {item:media,...position}=currentSelection();setComment({x:box.left,y:box.top,initial:existingComment,anchor:existingComment?.anchor||{path:media.source?.file||media.source?.path,line_start:media.source?.line,media_key:mediaCommentKey(media.source,media.name),media:position}});}}/>}
             {onSelection && (
               <Button small onClick={() => onSelection(currentSelection())}>
                 Use selection

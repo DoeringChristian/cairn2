@@ -182,8 +182,7 @@ button, input { font-family: inherit; }
 .comment-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
 .report-comment small { color: var(--muted); }
 /* Saved annotations stay next to their text; no discussion panel or footer. */
-.report-comment-marker { position: fixed; z-index: 35; width: 28px; height: 28px; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--line); box-shadow: none; }
-.report-comment-marker:hover { border-color: var(--accent); }
+.report-comment-marker { position: fixed; z-index: 35; }
 .comment-popover .media-icon-button { width: 26px; height: 26px; min-height: 26px; padding: 4px; border: 0; box-shadow: none; background: transparent; }
 .comment-popover .media-icon-button svg { width: 14px; height: 14px; }
 .comment-popover header { display: flex; justify-content: flex-end; align-items: center; gap: 3px; }

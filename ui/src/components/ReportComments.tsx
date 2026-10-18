@@ -1,7 +1,8 @@
+import { CommentButton } from './CommentButton';
 import { useCommentHighlights } from './CommentHighlights';
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, MessageSquare, Trash2 } from 'lucide-react';
+import { Check, Trash2 } from 'lucide-react';
 import { api, post } from '../api';
 import { useRefresh } from '../refresh';
 import { ErrorNote } from './States';
@@ -81,5 +82,5 @@ export function ReportComments({artifact,container}: {artifact:string;project:st
     place();const observer=new ResizeObserver(schedule);observer.observe(article);window.addEventListener('scroll',schedule,{passive:true});window.addEventListener('resize',schedule);window.addEventListener('cairn:show-comment',reveal);
     return()=>{cancelAnimationFrame(frame);observer.disconnect();window.removeEventListener('scroll',schedule);window.removeEventListener('resize',schedule);window.removeEventListener('cairn:show-comment',reveal);};
   },[container,items,ranges]);
-  return <>{error&&<ErrorNote error={error}/>} {createPortal(<>{markers.map(marker=><button key={marker.comment.id} type="button" className="image-copy report-comment-marker" aria-label="Open comment" title={marker.comment.body} style={{left:marker.x,top:marker.y}} onClick={()=>setEditing(marker)}>{saved===marker.comment.id?<Check aria-hidden="true"/>:<MessageSquare aria-hidden="true"/>}</button>)}{editing&&<CommentComposer key={editing.comment.id} artifact={artifact} anchor={editing.comment.anchor} initial={editing.comment} position={editing} onClose={()=>setEditing(current=>current?.comment.id===editing.comment.id?undefined:current)}/>}</>,document.body)}</>;
+  return <>{error&&<ErrorNote error={error}/>} {createPortal(<>{markers.map(marker=><CommentButton key={marker.comment.id} existing saved={saved===marker.comment.id} className="report-comment-marker" aria-label="Open comment" title={marker.comment.body} style={{left:marker.x,top:marker.y}} onClick={()=>setEditing(marker)}/>)}{editing&&<CommentComposer key={editing.comment.id} artifact={artifact} anchor={editing.comment.anchor} initial={editing.comment} position={editing} onClose={()=>setEditing(current=>current?.comment.id===editing.comment.id?undefined:current)}/>}</>,document.body)}</>;
 }
