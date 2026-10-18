@@ -292,3 +292,66 @@ def test_lightweight_report_preview_preserves_bundle_and_media(tmp_path):
                 ).status_code
                 == 401
             )
+
+
+def test_v2_reports_serve_assets_without_legacy_preview_cache(tmp_path, monkeypatch):
+    import base64
+    import json
+
+    from cairn.reports import _native_output
+    from cairn.ui_preview import ReportPreviews
+
+    def no_legacy_preview(*args):
+        raise AssertionError("v2 must not use the legacy preview cache")
+
+    monkeypatch.setattr(ReportPreviews, "get", no_legacy_preview)
+    binary = b"video bytes" * 1000
+    output = _native_output(
+        {
+            "output_type": "display_data",
+            "data": {
+                "video/mp4": base64.b64encode(binary).decode(),
+                "text/html": "<script>document.body.dataset.ready='yes'</script><p>Interactive</p>",
+            },
+        },
+        tmp_path / "build",
+    )
+    document = json.dumps(
+        {"format": "cairn/document", "version": 2, "blocks": [{"outputs": [output]}]}
+    ).encode()
+    with closing(Repository(tmp_path / "repo")) as repo:
+        blobs = [{**repo.put_blob(document), "name": "document.json"}]
+        for path in (tmp_path / "build/assets").iterdir():
+            blobs.append({**repo.put_blob(path), "name": "assets/" + path.name})
+        started = repo.start("demo", "reports", "v2")
+        identity = started["artifact"]["id"]
+        repo.close_writer(identity, started["writer"]["id"], 0)
+        repo.finish(
+            identity,
+            value={
+                "$cairn": 1,
+                "format": "report/bundle",
+                "version": 1,
+                "data": {"document_version": 2},
+                "blobs": blobs,
+                "refs": [],
+            },
+        )
+        with TestClient(create_app(repo, ui=True, no_auth=True)) as browser:
+            base = f"/ui-api/reports/{identity}/"
+            response = browser.get(base + "document.json")
+            assert response.content == document
+            assert (
+                browser.get(
+                    base + "document.json", headers={"If-None-Match": response.headers["etag"]}
+                ).status_code
+                == 304
+            )
+            media = base + output["data"]["video/mp4"]["asset"]
+            assert browser.get(media).content == binary
+            response = browser.get(media, headers={"Range": "bytes=5-14"})
+            assert response.status_code == 206 and response.content == binary[5:15]
+            assert browser.get(media, headers={"Range": "bytes=-5"}).content == binary[-5:]
+            response = browser.get(base + "html/0/0")
+            assert response.status_code == 200 and "Interactive" in response.text
+            assert "sandbox allow-scripts" in response.headers["content-security-policy"]

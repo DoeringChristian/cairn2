@@ -63,6 +63,7 @@ export function ArtifactPage() {
   const { selected, history } = current;
   const manifest = selected.manifest, metadata = {...(manifest?.metadata || selected.metadata),...selected.annotations};
   const value = manifest?.value, typed = envelope(value);
+  const documentVersion = typed?.data && typeof typed.data==='object' && !Array.isArray(typed.data) ? Number(typed.data.document_version || 1) : 1;
   const report = typed?.format === 'report/bundle', run = selected.namespace === 'runs';
   const live = selected.state !== 'finished';
   const ref = `${selected.namespace}/${selected.name}${selected.number ? `@v${selected.number}` : ''}`;
@@ -89,7 +90,7 @@ export function ArtifactPage() {
     {live && <Hint>This artifact is {selected.state}. Its ID stays the same when it finishes.</Hint>}
     <Tabs label="Artifact detail" tabs={tabs} value={tab} onChange={tab => { const next = new URLSearchParams(params); next.set('tab', tab); setParams(next); }}/>
     {tab === 'overview' && <>
-      {report ? <Section title="Published report" actions={<LinkButton href={`/ui-api/reports/${selected.id}/index.html`}>HTML export</LinkButton>}><DocumentReader key={selected.id} project={selected.project} version={selected.id} blobs={typed?.blobs || []}/></Section> : <>
+      {report ? <Section title="Published report" actions={<LinkButton href={`/ui-api/reports/${selected.id}/index.html`}>HTML export</LinkButton>}><DocumentReader documentVersion={documentVersion} key={selected.id} project={selected.project} version={selected.id} blobs={typed?.blobs || []}/></Section> : <>
         {run && <RecordsPanel key={`records:${selected.id}`} reference={selected.id} project={selected.project} run overview live={live} refresh={refresh}/>}
         <Section title={run ? 'Final result' : 'Value'}><ValueView value={value}/></Section>
       </>}

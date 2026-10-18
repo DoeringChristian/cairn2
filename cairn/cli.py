@@ -310,7 +310,11 @@ def _serve(args):
         elif ui:
             for url in startup_urls(args.host, port, token=token):
                 print(f"Cairn login: {url}", file=sys.stderr)
-        uvicorn.Server(uvicorn.Config(app, host=args.host, port=port)).run(sockets=[listener])
+        try:
+            uvicorn.Server(uvicorn.Config(app, host=args.host, port=port)).run(sockets=[listener])
+        except KeyboardInterrupt:
+            # Uvicorn has already unwound lifespan shutdown before re-raising SIGINT.
+            pass
     finally:
         if listener is not None:
             listener.close()

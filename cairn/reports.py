@@ -498,6 +498,41 @@ def _asset(directory: Path, data: bytes, suffix: str) -> str:
     return path
 
 
+def _native_output(output: dict, directory: Path) -> dict:
+    """cairn/document v2 stores payload bytes once, outside the document tree."""
+    result = dict(output)
+
+    def reference(value, mime):
+        binary = mime.startswith(("image/", "video/", "audio/")) and mime != "image/svg+xml"
+        if binary:
+            value = "".join(value) if isinstance(value, list) else value
+            payload, encoding = base64.b64decode(value), "binary"
+        elif mime.startswith("text/") or mime == "image/svg+xml":
+            value = "".join(value) if isinstance(value, list) else str(value)
+            payload, encoding = value.encode("utf-8"), "utf-8"
+        else:
+            payload, encoding = canonical(value), "json"
+        suffix = {
+            "image/svg+xml": ".svg",
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "video/mp4": ".mp4",
+            "video/webm": ".webm",
+            "audio/wav": ".wav",
+            "audio/mpeg": ".mp3",
+            "audio/ogg": ".ogg",
+            "text/html": ".html",
+            "text/markdown": ".md",
+        }.get(mime, ".json" if encoding == "json" else ".txt")
+        return {"asset": _asset(directory, payload, suffix), "mime": mime, "encoding": encoding}
+
+    if "data" in output:
+        result["data"] = {mime: reference(value, mime) for mime, value in output["data"].items()}
+    if output.get("output_type") == "stream":
+        result["text"] = reference(output.get("text", ""), "text/plain")
+    return result
+
+
 def _prepare_markdown(text, segments, md, sources, mapping, directory):
     from markdown_it.token import Token
 
@@ -726,7 +761,7 @@ def _render(segments, notebook, labels, mapping, md, directory, title, env):
                     "line_map": segment["line_map"],
                     "options": options,
                     "execution_count": cell.execution_count,
-                    "outputs": list(cell.outputs),
+                    "outputs": [_native_output(output, directory) for output in cell.outputs],
                 }
             )
             content = ""
@@ -755,7 +790,7 @@ def _render(segments, notebook, labels, mapping, md, directory, title, env):
         blocks.append(block)
     document = {
         "format": "cairn/document",
-        "version": 1,
+        "version": 2,
         "title": title,
         "blocks": blocks,
         "labels": labels,
@@ -815,6 +850,7 @@ def build(source, output=None, *, client=None, timeout=120, kernel_name="python3
         "source": "sources/" + source.name,
         "html": "index.html",
         "document": "document.json",
+        "document_version": 2,
         "notebook": "executed.ipynb",
         "input_policy": "declared-pinned-only",
     }
@@ -1030,6 +1066,25 @@ def _validated_bundle(directory: Path) -> tuple[dict, list]:
     }
     if not required.issubset(paths):
         raise ValidationError("Report bundle is missing required source or output files")
+    if manifest.get("document_version", 1) == 2:
+        document = json.loads((directory / "document.json").read_text("utf-8"))
+        if document.get("format") != "cairn/document" or document.get("version") != 2:
+            raise ValidationError("Report document version does not match its manifest")
+        for block in document.get("blocks", []):
+            for output in block.get("outputs", []):
+                references = list(output.get("data", {}).items())
+                if output.get("output_type") == "stream":
+                    references.append(("text/plain", output.get("text")))
+                for mime, reference in references:
+                    if (
+                        not isinstance(reference, dict)
+                        or reference.get("mime") != mime
+                        or reference.get("encoding") not in {"binary", "utf-8", "json"}
+                    ):
+                        raise ValidationError("Invalid report output asset reference")
+                    asset = safe_path(reference.get("asset", ""))
+                    if not asset.startswith("assets/") or asset not in paths:
+                        raise ValidationError("Report output asset is absent from the bundle")
     return manifest, [*files, _file_info(directory / "manifest.json", "manifest.json")]
 
 
@@ -1048,7 +1103,11 @@ def publish(build_directory, *, client, name=None) -> dict:
         "$cairn": 1,
         "format": "report/bundle",
         "version": 1,
-        "data": {"manifest": manifest, "files": files},
+        "data": {
+            "manifest": manifest,
+            "files": files,
+            "document_version": manifest.get("document_version", 1),
+        },
         "blobs": blobs,
         "refs": manifest.get("dependencies", []),
     }

@@ -170,3 +170,29 @@ mutation/filter API has been removed. There is no UI implementation in this chan
 Export/import preserves annotations and validates their ETags and membership
 index against stored JSON. Purge removes the derived index. Annotation writes are
 synchronous and do not enter a writer's record-upload journal.
+
+### Native report document versions
+
+New builds write `cairn/document` version **2** in `document.json`. Markdown,
+source locations, code, labels, and output metadata remain in the document.
+Each code-cell MIME value in `outputs[].data` is an asset reference:
+
+```json
+{"image/png": {"asset": "assets/<sha256>.png", "mime": "image/png", "encoding": "binary"}}
+```
+
+`encoding` is `binary` for decoded images/audio/video, `utf-8` for textual MIME
+values (including SVG, HTML and Markdown), and `json` for structured values such
+as Plotly. Stream output `text` is likewise a `text/plain`, `utf-8` reference.
+All MIME alternatives are retained. Asset paths are relative to the report bundle,
+content-addressed, and included in its file inventory and published blobs. Identical
+payloads with the same extension reuse one file. Report bundle data advertises
+`document_version`; absent means version 1.
+
+Readers support both versions: version 1 retains inline notebook MIME payloads;
+version 2 loads referenced assets as needed. Existing reports are not migrated.
+Older readers that only understand version 1 cannot read new native documents.
+The `report/bundle` envelope remains version 1; exports remain complete bundles,
+and `document.json` is served byte-for-byte. The archived `executed.ipynb` remains
+standard nbformat with its original outputs, including Jupyter's base64 encoding;
+it is not part of the native UI's report-loading path.

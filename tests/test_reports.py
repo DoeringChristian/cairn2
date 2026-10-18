@@ -180,6 +180,8 @@ Sources and local resources are captured.
     assert (result.path / "sources/data.txt").read_text() == "captured data"
     assert len(list((result.path / "assets").glob("*.svg"))) == 2
     document = json.loads((result.path / "document.json").read_text())
+    assert document["version"] == 2
+    assert result.manifest["document_version"] == 2
     code = next(block for block in document["blocks"] if block["kind"] == "code")
     assert code["source"] == {"path": "parts/results.qmd", "line_start": 5, "line_end": 12}
     assert len(code["outputs"]) == 3
@@ -275,3 +277,44 @@ def test_pinned_reader_scope_and_read_operations(client, tmp_path):
         reports.PinnedInputs(
             client, [*pins, {"requested": "old-name", "artifact_id": latest["id"]}]
         )
+
+
+def test_native_v2_externalizes_all_mime_payloads_without_mutating_notebook(tmp_path):
+    import base64
+    import copy
+
+    from cairn.reports import _native_output
+
+    original = {
+        "output_type": "display_data",
+        "metadata": {},
+        "data": {
+            "image/png": base64.b64encode(b"png bytes").decode(),
+            "image/svg+xml": "<svg/>",
+            "video/mp4": base64.b64encode(b"video bytes").decode(),
+            "audio/wav": base64.b64encode(b"audio bytes").decode(),
+            "application/vnd.plotly.v1+json": {"data": [{"x": [1, 2]}]},
+            "application/json": {"asset": "literal user data, not a reference"},
+            "text/html": "<table><tr><td>value</td></tr></table>",
+            "text/plain": "plain text",
+            "text/markdown": "**markdown**",
+        },
+    }
+    before = copy.deepcopy(original)
+    projected = _native_output(original, tmp_path)
+    assert original == before
+    for mime, ref in projected["data"].items():
+        assert ref["mime"] == mime
+        payload = (tmp_path / ref["asset"]).read_bytes()
+        if ref["encoding"] == "json":
+            assert json.loads(payload) == original["data"][mime]
+        elif ref["encoding"] == "binary":
+            assert payload == base64.b64decode(original["data"][mime])
+        else:
+            assert payload.decode() == original["data"][mime]
+    assert _native_output(original, tmp_path) == projected
+    assert len(list((tmp_path / "assets").iterdir())) == len(original["data"])
+    stream = _native_output(
+        {"output_type": "stream", "name": "stdout", "text": "printed\n"}, tmp_path
+    )
+    assert (tmp_path / stream["text"]["asset"]).read_text() == "printed\n"

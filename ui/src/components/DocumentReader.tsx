@@ -7,7 +7,7 @@ import { PlotlyFigure } from "./PlotlyFigure";
 import { ReportToc } from "./ReportToc";
 import { ZoomImage } from './ZoomImage';
 import { MediaPlayback } from './MediaPlayback';
-import { createElement, Fragment, memo, useMemo, useRef, type ReactNode } from 'react';
+import { createElement, Fragment, memo, useEffect, useState, useMemo, useRef, type ReactNode } from 'react';
 import MarkdownIt from 'markdown-it';
 import footnote from 'markdown-it-footnote';
 import DOMPurify from 'dompurify';
@@ -18,7 +18,8 @@ import { SelectionCopy } from './SelectionCopy';
 import { ErrorNote, Hint, Loading } from './States';
 type Source={path:string;line_start:number;line_end:number};
 type Node={source?:Source;type:string;tag:string;nesting:number;content:string;attributes?:Record<string,string>;attrs?:Record<string,string>|[string,string][]|null;children?:Node[];info?:string;meta?:Record<string,number>;hidden?:boolean};
-type Output={ui_payload?:{path:string;mime:string};output_type:string;name?:string;text?:string|string[];ename?:string;evalue?:string;data?:Record<string,unknown>};
+type Asset={asset:string;mime:string;encoding:"binary"|"utf-8"|"json"};
+type Output={ui_payload?:{path:string;mime:string};output_type:string;name?:string;text?:string|string[]|Asset;ename?:string;evalue?:string;data?:Record<string,unknown>};
 type Block={id:string;kind:string;source:Source;text?:string;nodes?:Node[];code?:string;label?:string;options?:{echo?:boolean;output?:boolean;'fig-cap'?:string;'tbl-cap'?:string};outputs?:Output[]};
 type Document={format:string;version:number;title:string;blocks:Block[];labels:Record<string,{text:string}>};
 const md=new MarkdownIt({html:false,linkify:false}).use(footnote);
@@ -74,7 +75,33 @@ function nodesToReact(nodes:Node[],base:string,source:Source,blobs:BlobRef[],lab
     }return out;
   }return children();
 }
-function OutputView({output,base,source,blobs,labels,htmlUrl}: {output:Output;base:string;source:Source;blobs:BlobRef[];labels:Document['labels'];htmlUrl:string}) {
+function AssetOutput({asset,output,mime,...props}: {asset:Asset;output:Output;mime?:string;base:string;source:Source;blobs:BlobRef[];labels:Document['labels'];htmlUrl:string}) {
+  const host=useRef<HTMLDivElement>(null),[payload,setPayload]=useState<unknown>(),[error,setError]=useState<Error>();
+  const src=resource(props.base,asset.asset,props.source,props.blobs);
+  useEffect(()=>{
+    const controller=new AbortController();
+    if(!src){setError(new Error('Report output asset is missing'));return;}
+    const observer=new IntersectionObserver(entries=>{if(!entries.some(entry=>entry.isIntersecting))return;observer.disconnect();
+      fetch(src,{signal:controller.signal,credentials:'same-origin'}).then(async response=>{if(!response.ok)throw new Error(`Unable to load report output (${response.status})`);return asset.encoding==='json'?response.json():response.text();}).then(data=>{if(!controller.signal.aborted)setPayload(data);}).catch(e=>{if(!controller.signal.aborted)setError(e);});
+    },{rootMargin:'300px'});observer.observe(host.current!);
+    return()=>{controller.abort();observer.disconnect();};
+  },[src,asset.encoding]);
+  return <div ref={host} className="native-asset-output" data-output-mime={mime||"text/plain"}>{error?<ErrorNote error={error}/>:payload===undefined?<Loading what="Loading output"/>:<OutputView {...props} output={mime?{...output,data:{[mime]:payload}}:{...output,text:String(payload)}}/>}</div>;
+}
+function OutputView({output,base,source,blobs,labels,htmlUrl,formatVersion=1}: {formatVersion?:number;output:Output;base:string;source:Source;blobs:BlobRef[];labels:Document['labels'];htmlUrl:string}) {
+  if(formatVersion===2) {
+    const data=output.data||{};
+    const mime=['application/vnd.plotly.v1+json','video/mp4','video/webm','audio/wav','audio/mpeg','audio/ogg','image/svg+xml','image/png','image/jpeg','text/html','text/markdown','application/json','text/plain'].find(mime=>data[mime]);
+    const asset=(output.output_type==='stream'?output.text:mime?data[mime]:undefined) as Asset|undefined;
+    if(asset&&typeof asset==='object'&&typeof asset.asset==='string') {
+      const src=resource(base,asset.asset,source,blobs);
+      if(!src)return <Hint>Report output asset is missing.</Hint>;
+      if(mime==='application/vnd.plotly.v1+json')return <OutputComment source={{file:source.path,line:source.line_start}} label="Plotly figure"><PlotlyFigure src={src}/></OutputComment>;
+      if(mime?.startsWith('image/'))return <ZoomImage className="native-output-image" src={src} alt="Python cell image output" source={{file:source.path,line:source.line_start}}/>;
+      if(mime?.startsWith('video/')||mime?.startsWith('audio/'))return <MediaPlayback src={src} mime={mime} label={mime.startsWith('audio/')?'Report audio':'Report video'} source={{file:source.path,line:source.line_start}}/>;
+      return <AssetOutput asset={asset} output={output} mime={mime} base={base} source={source} blobs={blobs} labels={labels} htmlUrl={htmlUrl}/>;
+    }
+  }
   if(output.output_type==='stream')return <pre className={`native-output ${output.name||''}`}>{join(output.text)}</pre>;
   if(output.output_type==='error')return <pre className="native-output error">{output.ename}: {output.evalue}</pre>;
   if (output.ui_payload) {
@@ -97,22 +124,22 @@ function OutputView({output,base,source,blobs,labels,htmlUrl}: {output:Output;ba
   if(data['text/markdown'])return <>{nodesToReact(md.parse(join(data['text/markdown']),{}) as unknown as Node[],base,source,blobs,labels)}</>;
   return <pre className="native-output">{data['application/json']?JSON.stringify(data['application/json'],null,2):join(data['text/plain'])}</pre>;
 }
-export const DocumentReader = memo(function DocumentReader({version,blobs,project}: {version:string;blobs:BlobRef[];project:string}) {
+export const DocumentReader = memo(function DocumentReader({version,blobs,project,documentVersion=1}: {version:string;blobs:BlobRef[];project:string;documentVersion?:number}) {
   const container=useRef<HTMLElement>(null);
   const base=`/ui-api/reports/${encodeURIComponent(version)}/`;
-  const {data,error,loading}=useResource<Document>(base+'preview.json',0,true);
-  const renderedBlocks=useMemo(()=>data?.format==='cairn/document'&&data.version===1?data.blocks.map((block,blockIndex)=>{
+  const {data,error,loading}=useResource<Document>(base+(documentVersion===2?'document.json':'preview.json'),0,true);
+  const renderedBlocks=useMemo(()=>data?.format==='cairn/document'&&[1,2].includes(data.version)?data.blocks.map((block,blockIndex)=>{
     const caption=block.options?.['fig-cap']||block.options?.['tbl-cap'];
     return <div className="native-block" key={block.id} id={block.label||block.id} data-source-path={block.source.path} data-line-start={block.source.line_start} data-line-end={block.source.line_end}>
       {block.kind==='markdown'?nodesToReact(block.nodes||[],base,block.source,blobs,data.labels):<>
         {block.options?.echo!==false&&<details className="native-code"><summary>Code · {block.source.path}:{block.source.line_start}</summary><SyntaxCode code={block.code||''} language="python"/></details>}
-        {block.options?.output!==false&&block.outputs?.map((output,i)=><OutputView key={i} htmlUrl={`${base}html/${blockIndex}/${i}`} output={output} base={base} source={block.source} blobs={blobs} labels={data.labels}/>)}
+        {block.options?.output!==false&&block.outputs?.map((output,i)=><OutputView key={i} formatVersion={data.version} htmlUrl={`${base}html/${blockIndex}/${i}`} output={output} base={base} source={block.source} blobs={blobs} labels={data.labels}/>)}
         {caption&&<p className="native-caption">{block.label&&data.labels[block.label]?`${data.labels[block.label].text}: `:''}{inlineText(caption,data.labels)}</p>}
       </>}
     </div>;
   }):null,[data,base,blobs]);
   if(loading&&!data)return <Loading what="Loading report"/>;if(error&&!data)return <ErrorNote error={error}/>;
-  if(!data||data.format!=='cairn/document'||data.version!==1)return <Hint>This document format is not supported by this reader.</Hint>;
+  if(!data||data.format!=='cairn/document'||![1,2].includes(data.version))return <Hint>This document format is not supported by this reader.</Hint>;
   return <ReportArtifactContext.Provider value={version}><div className="report-reader-layout"><ReportToc container={container} documentKey={data}/><article ref={container} className="native-document report-prose" aria-label={data.title}>{renderedBlocks}<SelectionCopy container={container} version={version}/></article><ReportComments container={container} artifact={version} project={project}/></div></ReportArtifactContext.Provider>;
-}, (previous,next)=>previous.version===next.version&&previous.project===next.project&&
+}, (previous,next)=>previous.version===next.version&&previous.documentVersion===next.documentVersion&&previous.project===next.project&&
   (previous.blobs===next.blobs||JSON.stringify(previous.blobs)===JSON.stringify(next.blobs)));

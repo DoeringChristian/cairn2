@@ -7,7 +7,7 @@ async function fits(page: Page, width: number) {
       test(`mobile navigation, lists, reports and lightbox ${viewport.width}`, async ({page, request}) => {
         await page.setViewportSize(viewport);
         const {items} = await (await request.get('/v1/artifacts?project=neural-rendering')).json();
-        const report = items.find((item:any) => item.namespace === 'reports' && item.name === 'report-field-guide');
+        const report = items.filter((item:any) => item.namespace === 'reports' && item.name === 'report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
         const run = items.find((item:any) => item.namespace === 'runs');
         await page.goto('/');
         await expect(page.getByRole('heading', {name:'Projects',exact:true})).toBeVisible();

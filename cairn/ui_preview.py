@@ -32,6 +32,8 @@ class ReportPreviews:
                 return self.cache[digest][0]
             with self.repository.open_blob(digest) as stream:
                 document = json.load(stream)
+            if document.get("version") == 2:
+                return json.dumps(document, separators=(",", ":")).encode(), {}
             outputs = {}
             for block_index, block in enumerate(document.get("blocks", [])):
                 for output_index, output in enumerate(block.get("outputs", [])):

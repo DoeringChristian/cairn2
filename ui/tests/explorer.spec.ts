@@ -5,7 +5,7 @@ test('plain artifact identities, native reports, media zoom and lineage',async({
   page.on('pageerror',e=>errors.push(e.message));
   const response=await request.get('/v1/artifacts?project=neural-rendering&namespace=reports');
   const {items}=await response.json();
-  const report=items.find((a:any)=>a.name==='report-field-guide');
+  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
   expect(report.id).toMatch(/^[0-9a-f]{32}$/);
   await page.goto(`/p/neural-rendering/a/${report.id}`);
   await expect(page.locator('article.native-document')).toBeVisible();
@@ -43,7 +43,7 @@ test('plain artifact identities, native reports, media zoom and lineage',async({
 test('media gestures change actual geometry and copy feedback resets',async({page,context,request})=>{
   await context.grantPermissions(['clipboard-read','clipboard-write']);
   const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.find((a:any)=>a.name==='report-field-guide');
+  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
   await page.goto(`/p/neural-rendering/a/${report.id}`);
   for(const video of [false,true]){
     await page.getByRole('button',{name:video?'Enlarge video':'Enlarge Python cell image output',exact:true}).first().click();
@@ -181,6 +181,9 @@ test('custom HTML executes in isolation, resizes and offers WebGPU',async({page,
   const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
   const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
   await page.goto(`/p/neural-rendering/a/${report.id}`);
+  const htmlOutput=page.locator('[data-output-mime="text/html"]');
+  await expect(page.locator('article.native-document')).toBeVisible();
+  if(await htmlOutput.count())await htmlOutput.last().scrollIntoViewIfNeeded();
   const frame=page.frameLocator('iframe.native-html-viewer');
   await expect(frame.locator('#renderer')).toHaveText(/WebGPU renderer active|Canvas fallback/,{timeout:20000});
   await expect(page.locator('iframe.native-html-viewer')).toHaveAttribute('sandbox','allow-scripts');
@@ -354,7 +357,7 @@ test('list cache survives category navigation and reload, refresh bypasses it', 
 
 test('report text does not wait for history or media and survives a slow reload', async ({page,request}) => {
   const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.find((a:any)=>a.name==='report-field-guide');
+  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
   let release!:()=>void;
   const pending = new Promise<void>(resolve=>{release=resolve;});
   await page.route('**/ui-api/artifacts/*/history', async route=>{await pending;await route.continue().catch(()=>{});});
@@ -365,7 +368,7 @@ test('report text does not wait for history or media and survives a slow reload'
     await expect(page.locator('article.native-document')).toContainText('report');
     // The saved preview/descriptor render even when their revalidation cannot complete.
     await page.route('**/v1/resolutions', route=>route.abort());
-    await page.route('**/ui-api/reports/*/preview.json', route=>route.abort());
+    await page.route(/\/ui-api\/reports\/[^/]+\/(preview|document)\.json$/, route=>route.abort());
     await page.reload();
     await expect(page.locator('article.native-document')).toBeVisible({timeout:2000});
   } finally {release();}
@@ -373,7 +376,7 @@ test('report text does not wait for history or media and survives a slow reload'
 
 test('finished report polling stops and metadata refresh does not re-render prose', async ({page,request}) => {
   const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.find((a:any)=>a.name==='report-field-guide');
+  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
   let checks=0, description='Original description';
   await page.clock.install();
   await page.addInitScript(() => {
@@ -398,7 +401,7 @@ test('finished report polling stops and metadata refresh does not re-render pros
 
 test('live artifact keeps polling until it finishes', async ({page,request}) => {
   const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.find((a:any)=>a.name==='report-field-guide');
+  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
   let checks=0;
   await page.clock.install();
   await page.route('**/v1/resolutions', route => {checks++;return route.fulfill({json:[{...report,state:checks<3?'live':'finished'}]});});
@@ -412,4 +415,33 @@ test('live artifact keeps polling until it finishes', async ({page,request}) => 
   await expect(page.getByText('This artifact is live. Its ID stays the same when it finishes.',{exact:true})).toHaveCount(0);
   await page.clock.fastForward(16000);
   expect(checks).toBe(3);
+});
+
+test('v2 reports load document and output assets directly without a preview conversion', async ({page,request}) => {
+  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
+  const report=items.find((a:any)=>a.manifest?.value?.data?.document_version===2);
+  expect(report).toBeTruthy();
+  const paths:string[]=[];
+  page.on('request',r=>{paths.push(new URL(r.url()).pathname);});
+  await page.goto(`/p/neural-rendering/a/${report.id}`);
+  await expect(page.locator('article.native-document')).toBeVisible();
+  const image=page.getByRole('button',{name:'Enlarge Python cell image output',exact:true}).first().locator('img');
+  await image.scrollIntoViewIfNeeded();
+  await expect.poll(()=>image.evaluate((img:HTMLImageElement)=>img.naturalWidth)).toBeGreaterThan(0);
+  await expect(image).toHaveAttribute('src',new RegExp(`/ui-api/reports/${report.id}/assets/`));
+  expect(paths).toContain(`/ui-api/reports/${report.id}/document.json`);
+  expect(paths.some(p=>p.endsWith('/preview.json')||p.endsWith('/executed.ipynb'))).toBe(false);
+});
+
+test('legacy v1 inline report output remains readable', async ({page,request}) => {
+  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
+  const report=items[0],value=report.manifest.value;
+  const source={path:'legacy.qmd',line_start:1,line_end:1};
+  await page.route('**/v1/resolutions',route=>route.fulfill({json:[{...report,manifest:{...report.manifest,value:{...value,data:{...value.data,document_version:1}}}}]}));
+  await page.route('**/preview.json',route=>route.fulfill({json:{format:'cairn/document',version:1,title:'Legacy report',labels:{},blocks:[{id:'legacy',kind:'code',source,options:{echo:false},outputs:[{output_type:'stream',text:'Legacy printed output'},{output_type:'display_data',data:{'image/png':'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='}}]}]}}));
+  await page.goto(`/p/neural-rendering/a/${report.id}`);
+  await expect(page.locator('article.native-document')).toContainText('Legacy printed output');
+  const image=page.getByRole('button',{name:'Enlarge Python cell image output',exact:true}).locator('img');
+  await image.scrollIntoViewIfNeeded();
+  await expect.poll(()=>image.evaluate((img:HTMLImageElement)=>img.naturalWidth)).toBe(1);
 });

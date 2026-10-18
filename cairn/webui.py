@@ -612,11 +612,28 @@ def install(app, repository, token, *, no_auth=False):
         )
         if not document or block_index < 0 or output_index < 0:
             raise NotFound("HTML output not found")
-        data = json.loads(previews.get(document["digest"])[0])
+        if value.get("data", {}).get("document_version") == 2:
+            with repository.open_blob(document["digest"]) as stream:
+                data = json.load(stream)
+        else:
+            data = json.loads(previews.get(document["digest"])[0])
         try:
             content = data["blocks"][block_index]["outputs"][output_index]["data"]["text/html"]
         except (KeyError, IndexError, TypeError):
             raise NotFound("HTML output not found") from None
+        if data.get("version") == 2:
+            if (
+                not isinstance(content, dict)
+                or content.get("mime") != "text/html"
+                or content.get("encoding") != "utf-8"
+            ):
+                raise ValidationError("Invalid HTML asset reference")
+            name = safe_path(content.get("asset", ""))
+            matches = [blob for blob in value.get("blobs", []) if blob.get("name") == name]
+            if len(matches) != 1:
+                raise NotFound("HTML asset not found in report")
+            with repository.open_blob(matches[0]["digest"]) as stream:
+                content = stream.read().decode("utf-8")
         if isinstance(content, list):
             content = "".join(content)
         if not isinstance(content, str):
@@ -658,12 +675,50 @@ def install(app, repository, token, *, no_auth=False):
         }
         if request.headers.get("if-none-match") == cache_headers["ETag"]:
             return Response(status_code=304, headers=cache_headers)
+        cache_headers["Accept-Ranges"] = "bytes"
+        start, end, status = 0, blob["size"] - 1, 200
+        span = request.headers.get("range")
+        if span and request.headers.get("if-range", cache_headers["ETag"]) == cache_headers["ETag"]:
+            import re
+
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", span)
+            if not match or not any(match.groups()):
+                return Response(
+                    status_code=416,
+                    headers={**cache_headers, "Content-Range": f"bytes */{blob['size']}"},
+                )
+            first, last = match.groups()
+            start = int(first) if first else max(0, blob["size"] - int(last))
+            end = min(int(last), end) if first and last else end
+            if start > end or start >= blob["size"]:
+                return Response(
+                    status_code=416,
+                    headers={**cache_headers, "Content-Range": f"bytes */{blob['size']}"},
+                )
+            status = 206
+            cache_headers["Content-Range"] = f"bytes {start}-{end}/{blob['size']}"
+        cache_headers["Content-Length"] = str(max(0, end - start + 1))
         manager = repository.open_blob(blob["digest"])
         stream = manager.__enter__()
 
         def content():
             try:
-                while chunk := stream.read(1024 * 1024):
+                if start:
+                    if hasattr(stream, "seekable") and stream.seekable():
+                        stream.seek(start)
+                    else:
+                        remaining = start
+                        while remaining:
+                            chunk = stream.read(min(remaining, 1024 * 1024))
+                            if not chunk:
+                                return
+                            remaining -= len(chunk)
+                remaining = end - start + 1
+                while remaining > 0:
+                    chunk = stream.read(min(remaining, 1024 * 1024))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
                     yield chunk
             finally:
                 manager.__exit__(None, None, None)
@@ -671,6 +726,7 @@ def install(app, repository, token, *, no_auth=False):
         media = mimetypes.guess_type(name)[0] or "application/octet-stream"
         return StreamingResponse(
             content(),
+            status_code=status,
             media_type=media,
             headers={
                 **cache_headers,

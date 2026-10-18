@@ -50,3 +50,62 @@ def test_login_link_survives_restart_and_rejects_changed_token(tmp_path):
                 client.post("/ui-api/login", json={"link_token": "persistent-token"}).status_code
                 == 401
             )
+
+
+def test_server_ctrl_c_runs_cleanup_without_traceback(tmp_path):
+    import os
+    import signal
+    import subprocess
+    import sys
+
+    with closing(socket.socket()) as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        port = reservation.getsockname()[1]
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "cairn",
+            "--repo",
+            str(tmp_path / "repo"),
+            "server",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--no-auth",
+            "--no-ui",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        import time
+
+        import httpx
+
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                pytest.fail(process.communicate()[0])
+            try:
+                if httpx.get(f"http://127.0.0.1:{port}/v1/info", timeout=0.2).status_code == 200:
+                    break
+            except httpx.HTTPError:
+                pass
+            time.sleep(0.05)
+        else:
+            pytest.fail("Server did not start")
+        os.kill(process.pid, signal.SIGINT)
+        output = process.communicate(timeout=10)[0]
+        assert process.returncode == 0, output
+        assert "Application shutdown complete" in output
+        assert "Traceback" not in output and "KeyboardInterrupt" not in output
+        with closing(socket.socket()) as available:
+            available.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            available.bind(("127.0.0.1", port))
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate()
