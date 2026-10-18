@@ -169,11 +169,25 @@ test('media comments keep region and time and empty edits delete',async({page,re
     await expect(editor.getByLabel('Saved',{exact:true})).toBeVisible();
     const rows=await (await request.get(`/ui-api/reports/${report.id}/comments`)).json(),comment=rows.find((c:any)=>c.body===body);
     expect(comment.anchor.media_key).toBeTruthy();if(video)expect(comment.anchor.media.time).toBeGreaterThanOrEqual(0);
-    await editor.getByLabel('Comment',{exact:true}).fill('');
     await dialog.getByRole('button',{name:'Zoom in',exact:true}).click();
     await expect(editor).toHaveCount(0);
-    await expect.poll(async()=>{const rows=await (await request.get(`/ui-api/reports/${report.id}/comments`)).json();return rows.some((c:any)=>c.id===comment.id);}).toBe(false);
+    await expect(dialog.getByRole('button',{name:'Comment on media',exact:true})).toHaveCount(0);
+    await dialog.getByRole('button',{name:'Open comment',exact:true}).click();
+    await expect(editor.getByLabel('Comment',{exact:true})).toHaveValue(body);
+    await editor.getByLabel('Comment',{exact:true}).fill(body+' edited');
+    await expect.poll(async()=>{const rows=await (await request.get(`/ui-api/reports/${report.id}/comments`)).json();return rows.filter((c:any)=>c.anchor.media_key===comment.anchor.media_key).map((c:any)=>({id:c.id,body:c.body}));}).toEqual([{id:comment.id,body:body+' edited'}]);
+    await dialog.getByRole('button',{name:'Zoom in',exact:true}).click();
     await dialog.getByRole('button',{name:'Close media viewer'}).click();
+    const shell=page.locator('[data-comment-media]').filter({has:page.getByRole('button',{name:video?'Enlarge video':'Enlarge Python cell image output',exact:true})}).first();
+    await expect(shell.locator(':scope > .output-comment-button')).toHaveCount(1);
+    await shell.getByRole('button',{name:'Open comment',exact:true}).click();
+    await expect(editor.getByLabel('Comment',{exact:true})).toHaveValue(body+' edited');
+    await expect(page.locator('.report-comment-marker')).toHaveCount(0);
+    await editor.getByLabel('Comment',{exact:true}).fill('');
+    await page.getByRole('button',{name:'Refresh',exact:true}).click();
+    await expect(editor).toHaveCount(0);
+    await expect.poll(async()=>{const rows=await (await request.get(`/ui-api/reports/${report.id}/comments`)).json();return rows.some((c:any)=>c.id===comment.id);}).toBe(false);
+    await expect(shell.locator(':scope > .output-comment-button')).toHaveAttribute('aria-label',/^Comment on /);
   }
 });
 
@@ -211,7 +225,7 @@ test('ordinary code fences are highlighted and remain display-only',async({page,
   await expect(page.getByRole('button',{name:'Enlarge video',exact:true})).toHaveText('');
 });
 
-test('copy controls preserve full code and IDs, media comment bugs sit left, tags filter runs',async({page,request,context})=>{
+test('copy controls preserve full code and IDs, media comment controls sit right, tags filter runs',async({page,request,context})=>{
   await context.grantPermissions(['clipboard-read','clipboard-write']);
   const {items}=await (await request.get('/v1/artifacts?project=neural-rendering')).json();
   const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
@@ -231,7 +245,7 @@ test('copy controls preserve full code and IDs, media comment bugs sit left, tag
     const bug=shell.locator(':scope > .output-comment-button');
     await expect(bug).toHaveCount(1);
     const boxes=await Promise.all([bug.boundingBox(),media.boundingBox()]);
-    expect(boxes[0]!.x+boxes[0]!.width).toBeLessThanOrEqual(boxes[1]!.x);
+    expect(boxes[0]!.x).toBeGreaterThanOrEqual(boxes[1]!.x+boxes[1]!.width);
     await bug.click();
     await expect(page.getByRole('group',{name:'Add report comment'})).toBeVisible();
     await page.getByLabel('New tag').click();

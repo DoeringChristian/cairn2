@@ -2,7 +2,7 @@ import { OutputComment } from "./OutputComment";
 import { SyntaxCode } from "./SyntaxCode";
 import { HtmlOutput } from "./HtmlOutput";
 import { ReportArtifactContext } from "./ReportContext";
-import { ReportComments } from "./ReportComments";
+import { ReportComments, ReportCommentsProvider } from "./ReportComments";
 import { PlotlyFigure } from "./PlotlyFigure";
 import { ReportToc } from "./ReportToc";
 import { ZoomImage } from './ZoomImage';
@@ -140,6 +140,6 @@ export const DocumentReader = memo(function DocumentReader({version,blobs,projec
   }):null,[data,base,blobs]);
   if(loading&&!data)return <Loading what="Loading report"/>;if(error&&!data)return <ErrorNote error={error}/>;
   if(!data||data.format!=='cairn/document'||![1,2].includes(data.version))return <Hint>This document format is not supported by this reader.</Hint>;
-  return <ReportArtifactContext.Provider value={version}><div className="report-reader-layout"><ReportToc container={container} documentKey={data}/><article ref={container} className="native-document report-prose" aria-label={data.title}>{renderedBlocks}<SelectionCopy container={container} version={version}/></article><ReportComments container={container} artifact={version} project={project}/></div></ReportArtifactContext.Provider>;
+  return <ReportArtifactContext.Provider value={version}><ReportCommentsProvider key={version} artifact={version}><div className="report-reader-layout"><ReportToc container={container} documentKey={data}/><article ref={container} className="native-document report-prose" aria-label={data.title}>{renderedBlocks}<SelectionCopy container={container} version={version}/></article><ReportComments container={container} artifact={version} project={project}/></div></ReportCommentsProvider></ReportArtifactContext.Provider>;
 }, (previous,next)=>previous.version===next.version&&previous.documentVersion===next.documentVersion&&previous.project===next.project&&
   (previous.blobs===next.blobs||JSON.stringify(previous.blobs)===JSON.stringify(next.blobs)));

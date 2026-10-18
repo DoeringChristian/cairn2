@@ -210,8 +210,8 @@ button, input { font-family: inherit; }
 .syntax-code pre:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .prism-media-open { width: 30px; height: 30px; padding: 6px; }
 .native-output-shell { position: relative; }
-.native-output-shell > .output-comment-button { position: absolute; left: -38px; right: auto; top: 8px; z-index: 2; }
-@media(max-width:760px) { .native-output-shell { margin-left: 44px; } .native-output-shell > .output-comment-button { left: -44px; right: auto; } }
+.native-output-shell > .output-comment-button { position: absolute; left: auto; right: -38px; top: 8px; z-index: 2; }
+@media(max-width:760px) { .native-output-shell { margin-right: 44px; } .native-output-shell > .output-comment-button { left: auto; right: -44px; } }
 
 .copy-id { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 0; border: 0; background: transparent; color: inherit; cursor: pointer; vertical-align: middle; text-align: left; }
 .copy-id code { overflow-wrap: anywhere; }

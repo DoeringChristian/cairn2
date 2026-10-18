@@ -45,7 +45,7 @@ export function useCommentHighlights(container:RefObject<HTMLElement>,comments:A
     CSS.highlights.set('cairn-comments',new Highlight(...matches.values()));
     const showComment=(event:MouseEvent)=>{
       if(window.getSelection()?.toString().trim())return;
-      for(const [id,range] of matches){if(Array.from(range.getClientRects()).some(r=>event.clientX>=r.left&&event.clientX<=r.right&&event.clientY>=r.top&&event.clientY<=r.bottom)){
+      for(const [id,range] of matches){if(comments.find(c=>c.id===id)?.anchor.media_key)continue;if(Array.from(range.getClientRects()).some(r=>event.clientX>=r.left&&event.clientX<=r.right&&event.clientY>=r.top&&event.clientY<=r.bottom)){
         window.dispatchEvent(new CustomEvent('cairn:show-comment',{detail:id}));break;
       }}
     };

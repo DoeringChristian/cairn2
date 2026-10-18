@@ -1,5 +1,5 @@
 import { useCommentHighlights } from './CommentHighlights';
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, MessageSquare, Trash2 } from 'lucide-react';
 import { api, post } from '../api';
@@ -7,7 +7,7 @@ import { useRefresh } from '../refresh';
 import { ErrorNote } from './States';
 import { MediaIconButton } from './media/MediaIconButton';
 export type CommentAnchor={quote?:string;path?:string;line_start?:number;line_end?:number;media_key?:string;media?:{time?:number;clip?:{start:number;end:number};region?:{x:number;y:number;width:number;height:number;imageWidth:number;imageHeight:number}}};
-type Comment={id:string;artifact_id:string;anchor:CommentAnchor;body:string;created_at:string;number:number};
+export type Comment={id:string;artifact_id:string;anchor:CommentAnchor;body:string;created_at:string;number:number};
 const changed=(id?:string)=>window.dispatchEvent(new CustomEvent('cairn:comments',{detail:id}));
 
 /** Serialize autosaves so slow creates/updates cannot overwrite newer typing. */
@@ -51,19 +51,26 @@ export function CommentComposer({artifact,anchor,position,onClose,initial,portal
   useEffect(()=>{const outside=(event:PointerEvent)=>{if(!popover.current?.contains(event.target as Node))void closeCurrent.current();};document.addEventListener('pointerdown',outside,true);return()=>document.removeEventListener('pointerdown',outside,true);},[]);
   return createPortal(<div ref={popover} className="comment-popover" role="group" aria-label="Add report comment" style={{left:Math.max(viewport.x+8,Math.min(viewport.x+viewport.width-328,position.x)),top:Math.max(viewport.y+8,Math.min(viewport.y+viewport.height-230,position.y+40)),maxWidth:viewport.width-16,maxHeight:viewport.height-16}}><header><span className="comment-save-status" role="status">{draft.status==='Saved'?<Check size={14} aria-label="Saved"/>:draft.status}</span><MediaIconButton label="Delete comment" icon={Trash2} onMouseDown={e=>e.preventDefault()} onClick={async()=>{if(await draft.remove())onClose(false);}}/></header><textarea ref={field} aria-label="Comment" placeholder="Write a comment…" maxLength={65536} rows={3} value={draft.body} onChange={e=>draft.setBody(e.target.value)} onBlur={()=>void draft.flush()} onKeyDown={e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();void close();}}}/>{draft.error&&<ErrorNote error={draft.error}/>}</div>,portalTarget||document.body);
 }
-type Marker={comment:Comment;x:number;y:number};
-export function ReportComments({artifact,container}: {artifact:string;project:string;container:RefObject<HTMLElement>}) {
+const CommentsContext=createContext<{items:Comment[];saved:string;error?:Error}>({items:[],saved:''});
+export const useReportComments=()=>useContext(CommentsContext);
+export function ReportCommentsProvider({artifact,children}:{artifact:string;children:ReactNode}) {
   const [items,setItems]=useState<Comment[]>([]),[error,setError]=useState<Error>(),[revision,setRevision]=useState(0);
-  const [editing,setEditing]=useState<{comment:Comment;x:number;y:number}>(),[markers,setMarkers]=useState<Marker[]>([]),[saved,setSaved]=useState('');
-  const ranges=useCommentHighlights(container,items),pulse=useRefresh();
+  const [saved,setSaved]=useState(''),pulse=useRefresh();
   useEffect(()=>{if(!saved)return;const timer=setTimeout(()=>setSaved(''),1400);return()=>clearTimeout(timer);},[saved]);
   useEffect(()=>{const update=(event:Event)=>{setRevision(n=>n+1);const id=(event as CustomEvent<string>).detail;if(id)setSaved(id);};window.addEventListener('cairn:comments',update);return()=>window.removeEventListener('cairn:comments',update);},[]);
   useEffect(()=>{const c=new AbortController();api<Comment[]>(`/ui-api/reports/${artifact}/comments`,{signal:c.signal}).then(data=>{setItems(data);setError(undefined);}).catch(e=>{if(!c.signal.aborted)setError(e);});return()=>c.abort();},[artifact,pulse,revision]);
+  return <CommentsContext.Provider value={{items,saved,error}}>{children}</CommentsContext.Provider>;
+}
+type Marker={comment:Comment;x:number;y:number};
+export function ReportComments({artifact,container}: {artifact:string;project:string;container:RefObject<HTMLElement>}) {
+  const {items,saved,error}=useReportComments();
+  const [editing,setEditing]=useState<{comment:Comment;x:number;y:number}>(),[markers,setMarkers]=useState<Marker[]>([]);
+  const ranges=useCommentHighlights(container,items);
   useEffect(()=>{
     const article=container.current;if(!article)return;
     let frame=0;
     const place=()=>{frame=0;const box=article.getBoundingClientRect(),next:Marker[]=[];
-      for(const comment of items){const rect=ranges.get(comment.id)?.getBoundingClientRect();const top=rect?.top??box.top;
+      for(const comment of items){if(comment.anchor.media_key)continue;const rect=ranges.get(comment.id)?.getBoundingClientRect();const top=rect?.top??box.top;
         if(top < -24 || top > innerHeight-24)continue;
         let y=Math.max(8,top);while(next.some(m=>Math.abs(m.y-y)<48))y+=48;
         next.push({comment,x:Math.min(innerWidth-52,box.right+8),y});
