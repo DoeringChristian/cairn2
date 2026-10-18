@@ -1,0 +1,31 @@
+---
+title: A local Cairn report
+cairn:
+  inputs: {}
+---
+
+## A reproducible calculation {#sec-calculation}
+
+This source executes in a fresh Python kernel. Input artifacts can be declared
+in `cairn.inputs` and read through `inputs["name"].read()` or `.records()`.
+A reference such as `runs/training@latest` names the `training` artifact in the
+`runs` namespace; every declared input is pinned before execution.
+
+```{python}
+#| label: tbl-squares
+#| tbl-cap: Squares of the first four integers
+from IPython.display import Markdown, display
+rows = "\n".join(f"| {n} | {n * n} |" for n in range(1, 5))
+display(Markdown("| n | n² |\n| - | - |\n" + rows))
+```
+
+@tbl-squares follows the relationship $y = x^2$.[^execution]
+
+$$y = x^2$$ {#eq-square}
+
+::: {.callout-note title="Portable output"}
+The bundle includes HTML, a native document, source mappings, captured sources,
+the executed notebook, and a manifest containing exact input version IDs.
+:::
+
+[^execution]: Only explicitly marked `{python}` fences execute.

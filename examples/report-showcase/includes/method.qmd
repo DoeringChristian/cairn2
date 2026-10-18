@@ -1,0 +1,18 @@
+## Captured methodology {#sec-method}
+
+This section comes from `includes/method.qmd`. Its source marker should name that
+file when you select and copy a sentence. The data and media are declared local
+resources, captured with the source before Python executes.
+
+::: {.callout-note title="Reproducible by construction"}
+The experiment input is resolved once, before the first cell runs. A later run
+cannot silently change the evidence behind this published report.
+:::
+
+We estimate an expectation with $N$ independent samples:
+
+$$
+\widehat{I}_N = \frac{1}{N}\sum_{i=1}^{N} f(X_i)
+$$ {#eq-estimator}
+
+The estimator in @eq-estimator connects the experiment to the convergence plot.

@@ -1,0 +1,400 @@
+.prism-lightbox {
+  position: fixed;
+  inset: 0;
+  width: min(1500px, 96vw);
+  height: 94dvh;
+  max-width: 96vw;
+  max-height: 94dvh;
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 20px 100px #0007;
+  overflow: hidden;
+}
+.prism-lightbox[open] {
+  display: flex;
+  flex-direction: column;
+}
+.prism-lightbox::backdrop {
+  background: #10251bcf;
+  backdrop-filter: blur(4px);
+}
+.prism-lightbox-header,
+.prism-lightbox-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.prism-lightbox-header {
+  border-bottom: 1px solid var(--line);
+}
+.prism-lightbox-header > div,
+.prism-lightbox-footer > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.prism-lightbox-header span,
+.prism-lightbox-footer small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.prism-lightbox-stage {
+  position: relative;
+  flex: 1;
+  min-height: 120px;
+  overflow: hidden;
+  touch-action: none;
+  background-color: #e8ece8;
+  background-image:
+    linear-gradient(45deg, #dce2dc 25%, transparent 25%),
+    linear-gradient(-45deg, #dce2dc 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #dce2dc 75%),
+    linear-gradient(-45deg, transparent 75%, #dce2dc 75%);
+  background-size: 24px 24px;
+  background-position:
+    0 0,
+    0 12px,
+    12px -12px,
+    -12px 0;
+  cursor: grab;
+}
+.prism-lightbox-stage:active {
+  cursor: grabbing;
+}
+.prism-lightbox-stage.select-region {
+  cursor: crosshair;
+}
+.prism-lightbox-transform {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+.prism-lightbox-transform img {
+  max-width: none;
+  max-height: none;
+  object-fit: fill;
+  user-select: none;
+}
+.prism-lightbox-transform video {
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+  background: #111;
+  cursor: auto;
+}
+.prism-video-pan-layer {
+  position: absolute;
+  cursor: grab;
+  touch-action: none;
+}
+.prism-region-layer {
+  position: absolute;
+  touch-action: none;
+  cursor: crosshair;
+}
+.prism-region-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--accent);
+  background: #43a38233;
+  pointer-events: none;
+}
+.prism-lightbox-footer {
+  border-top: 1px solid var(--line);
+}
+.prism-lightbox-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: var(--paper);
+}
+.prism-video-transport {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  flex-wrap: wrap;
+  background: var(--card);
+}
+.prism-video-transport > input[type="range"] {
+  flex: 1;
+  min-width: 160px;
+  accent-color: var(--accent);
+}
+.prism-video-transport label {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  font-size: 12px;
+}
+.prism-video-transport input[type="number"] {
+  width: 60px;
+}
+.prism-video-transport span {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.prism-lightbox button,
+.prism-lightbox a {
+  font-size: 13px;
+}
+.prism-lightbox button:focus-visible,
+.prism-lightbox a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.prism-lightbox-surface {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: var(--paper);
+  color: var(--ink);
+}
+.prism-lightbox-surface:fullscreen {
+  width: 100vw;
+  height: 100dvh;
+}
+.prism-lightbox-transform video {
+  pointer-events: none;
+  user-select: none;
+}
+.prism-lightbox-stage:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+.prism-zoom-toolbar {
+  position: absolute;
+  z-index: 3;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 2px 12px #173b241a;
+  cursor: auto;
+}
+.prism-zoom-toolbar output {
+  min-width: 46px;
+  text-align: center;
+  font:
+    12px ui-monospace,
+    monospace;
+}
+.prism-zoom-toolbar button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  border-radius: 4px;
+  padding: 6px 9px;
+  cursor: pointer;
+}
+.prism-zoom-toolbar button:hover {
+  background: var(--accent-soft);
+}
+.prism-gesture-hint {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  background: #172d23c9;
+  color: #fff;
+  padding: 5px 9px;
+  border-radius: 5px;
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.prism-video-transport {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  flex-shrink: 0;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+}
+.prism-video-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.prism-video-main > input[type="range"] {
+  min-width: 80px;
+  flex: 1;
+  accent-color: var(--accent);
+}
+.prism-video-main > span {
+  min-width: 138px;
+  text-align: right;
+}
+.prism-video-options {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.prism-video-options > input[aria-label="Video volume"] {
+  width: 80px;
+  accent-color: var(--accent);
+}
+.prism-video-options select {
+  font: inherit;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--card);
+}
+.prism-media-notice {
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--warn);
+}
+.prism-media-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 6px 0;
+  padding: 6px 10px;
+  border: 1px solid #c8d6cc;
+  border-radius: 6px;
+  background: #f4f8f3;
+  color: #254d36;
+  font: 500 12px system-ui;
+  cursor: pointer;
+}
+.prism-media-open:hover {
+  background: #e7f0e7;
+  border-color: #7b9f86;
+}
+.prism-media-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.prism-media-open svg {
+  width: 15px;
+  height: 15px;
+}
+@media (max-width: 640px) {
+  .prism-lightbox {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+  .prism-lightbox-header,
+  .prism-lightbox-footer {
+    padding: 8px;
+    gap: 6px;
+  }
+  .prism-lightbox-header strong {
+    max-width: 45vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .prism-lightbox-header > div,
+  .prism-lightbox-footer > div {
+    gap: 6px;
+  }
+  .prism-video-transport {
+    padding: 8px;
+    gap: 6px;
+  }
+  .prism-video-main {
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .prism-video-main > span {
+    min-width: 110px;
+    font-size: 11px;
+  }
+  .prism-video-options {
+    gap: 5px;
+  }
+  .prism-video-options button {
+    font-size: 11px;
+    padding: 4px;
+  }
+  .prism-video-options input[type="number"] {
+    width: 48px;
+  }
+  .prism-video-options > input[aria-label="Video volume"] {
+    width: 60px;
+  }
+  .prism-zoom-toolbar {
+    top: 8px;
+    right: 8px;
+    gap: 2px;
+  }
+  .prism-zoom-toolbar button {
+    padding: 5px 7px;
+    font-size: 11px;
+  }
+  .prism-gesture-hint {
+    font-size: 10px;
+    bottom: 8px;
+    padding: 4px 6px;
+  }
+  .prism-lightbox-stage {
+    min-height: 100px;
+  }
+}
+
+/* Keep media inspection on the same component palette as the explorer. */
+.prism-lightbox { font: 14px/1.5 Inter, ui-sans-serif, system-ui, sans-serif; border-radius: var(--radius); }
+.prism-lightbox-header { background: var(--card); padding: 14px 20px; }
+.prism-lightbox-header > div { min-width: 0; }
+.prism-lightbox-header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prism-lightbox-header > div:first-child { flex: 1; }
+.prism-lightbox-header > div:last-child { flex-shrink: 0; }
+.prism-lightbox-footer { margin: 0; padding: 12px 20px; color: var(--muted); background: var(--card); }
+.prism-lightbox-footer > div { flex-wrap: wrap; }
+.prism-lightbox .action-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 6px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; font-size: 12px; text-decoration: none; cursor: pointer; white-space: nowrap; }
+.prism-lightbox .action-button:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.prism-lightbox .action-button:disabled { opacity: .45; cursor: default; }
+.prism-lightbox input[type="number"] { border: 1px solid var(--line); border-radius: 6px; padding: 6px; background: var(--card); color: var(--ink); font: inherit; }
+.prism-lightbox input { accent-color: var(--accent); }
+.prism-lightbox-transform img, .prism-lightbox-transform video { display: block; margin: 0; padding: 0; border: 0; border-radius: 0; box-shadow: none; }
+.prism-lightbox-stage { background-color: #e8e6de; background-image: none; }
+.prism-video-transport { padding: 12px 20px; }
+.prism-video-options .select-list { top: auto; bottom: calc(100% + 6px); }
+.prism-gesture-hint { max-width: calc(100% - 16px); white-space: normal; text-align: center; }
+@media(max-width:640px) {
+  .prism-lightbox { border-radius: 0; }
+  .prism-lightbox-header, .prism-lightbox-footer, .prism-video-transport { padding: 10px; }
+  .prism-lightbox-header { align-items: flex-start; }
+  .prism-lightbox-header > div { gap: 6px; }
+  .prism-lightbox-header > div:first-child { flex-direction: column; align-items: flex-start; }
+  .prism-lightbox-header strong { max-width: 35vw; }
+  .prism-zoom-toolbar { max-width: calc(100% - 16px); flex-wrap: wrap; justify-content: center; }
+}
+.media-timeline { position: relative; flex: 1; min-width: 100px; height: 36px; touch-action: none; }
+.media-timeline-track { position: absolute; top: 15px; left: 0; right: 0; height: 6px; background: var(--line); border-radius: 4px; }
+.media-timeline input { position: absolute; inset: 0; width: 100%; margin: 0; accent-color: var(--accent); background: transparent; }
+.media-timeline.selecting { cursor: crosshair; }
+.media-timeline.selecting input { opacity: .35; }
+.media-timeline-selection { position: absolute; top: 7px; height: 22px; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 3px; pointer-events: none; }
+.prism-lightbox .media-timeline-handle { position: absolute; top: 5px; width: 10px; height: 26px; padding: 0; transform: translateX(-50%); border: 1px solid var(--card); border-radius: 3px; background: var(--accent); cursor: ew-resize; touch-action: none; }
+.media-selection-summary { font-size: 11px; color: var(--muted); }
+.prism-lightbox .media-icon-button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }

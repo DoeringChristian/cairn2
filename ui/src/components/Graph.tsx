@@ -1,0 +1,212 @@
+import { copyText } from './useCopyText';
+import { useEffect, useMemo, useState, useId } from "react";
+import { useNavigate } from "react-router-dom";
+import { api, artifactPath } from "../api";
+import { Button, Card, Hint, Loading, ToggleGroup } from "../components";
+type LineageNode = {inputs:string[]|null;consumers:string[]|null;name:string|null;version:number|null;short_id?:string;deleted?:boolean;kind?:string;status?:string;project?:string};
+type Lineage = {nodes:Record<string,LineageNode>;truncated:boolean};
+const paths={lineage:(_project:string,id:string,depth:number)=>`/ui-api/lineage/${encodeURIComponent(id)}/${depth}`};
+const shortName=({version}:{version:number;id:string;short_id:string})=>`v${version}`;
+const shownRef=(node:LineageNode&{id:string})=>`${node.name}${node.version == null ? "" : `@v${node.version}`}`;
+
+const W = 210, H = 46, GAP_X = 84, GAP_Y = 14, PAD = 16, PAD_X = 26;
+type Info = Record<string, LineageNode>;
+
+interface Placed { ref: string; col: number; row: number; x: number; y: number }
+
+/** Inputs to the left, the artifact in the middle, consumers to the right; column = longest distance from the center. */
+function layout(root: string, info: Info) {
+  const depth: Record<string, number> = { [root]: 0 };
+  const relax = (side: "inputs" | "consumers", sign: number) => {
+    for (let pass = 0; pass < 12; pass++) {
+      let changed = false;
+      for (const ref of Object.keys(depth)) {
+        if (ref !== root && Math.sign(depth[ref]) !== sign) continue;
+        for (const next of info[ref]?.[side] ?? []) {
+          const want = depth[ref] + sign, current = depth[next];
+          if (next === root || Math.abs(want) > 12) continue;
+          if (current === undefined || (Math.sign(current) === sign && Math.abs(want) > Math.abs(current))) { depth[next] = want; changed = true; }
+        }
+      }
+      if (!changed) break;
+    }
+  };
+  relax("inputs", -1); relax("consumers", 1);
+  const edges: [string, string][] = [];
+  Object.entries(info).forEach(([ref, node]) => {
+    node.inputs?.forEach(i => edges.push([i, ref]));
+    node.consumers?.forEach(c => edges.push([ref, c]));
+  });
+  for (let pass = 0; pass < 12; pass++) {  // an edge always points one column to the right, also among the nodes of one side
+    let changed = false;
+    for (const [a, b] of edges) {
+      const da = depth[a], db = depth[b];
+      if (da === undefined || db === undefined) continue;
+      if (da >= 0 && db > 0 && db <= da) { depth[b] = da + 1; changed = true; }
+      else if (db <= 0 && da < 0 && da >= db) { depth[a] = db - 1; changed = true; }
+    }
+    if (!changed) break;
+  }
+  const columns = new Map<number, string[]>();
+  Object.entries(depth).forEach(([ref, col]) => columns.set(col, [...(columns.get(col) ?? []), ref]));
+  const keys = [...columns.keys()].sort((a, b) => a - b);
+  // order rows by the mean row of already placed neighbours, walking outward from the center
+  const rowOf: Record<string, number> = {};
+  const order = [...keys.filter(k => k >= 0), ...keys.filter(k => k < 0).reverse()];
+  for (const col of order) {
+    const refs = columns.get(col)!;
+    const score = (ref: string) => {
+      const near = edges.filter(([a, b]) => (a === ref && rowOf[b] !== undefined) || (b === ref && rowOf[a] !== undefined)).map(([a, b]) => rowOf[a === ref ? b : a]);
+      return near.length ? near.reduce((x, y) => x + y, 0) / near.length : 0;
+    };
+    const name = (id: string) => info[id]?.name ?? "\uffff";  // known names first, alphabetically, then by number and id
+    refs.sort((a, b) => score(a) - score(b) || name(a).localeCompare(name(b)) || (info[a]?.version ?? 0) - (info[b]?.version ?? 0) || a.localeCompare(b));
+    refs.forEach((ref, index) => (rowOf[ref] = index));
+  }
+  const tallest = Math.max(...keys.map(k => columns.get(k)!.length));
+  const height = tallest * (H + GAP_Y) - GAP_Y;
+  const placed: Record<string, Placed> = {};
+  for (const col of keys) {
+    const refs = columns.get(col)!;
+    const offset = (height - (refs.length * (H + GAP_Y) - GAP_Y)) / 2;
+    refs.forEach((ref, row) => (placed[ref] = { ref, col, row, x: PAD_X + (col - keys[0]) * (W + GAP_X), y: PAD + offset + row * (H + GAP_Y) }));
+  }
+  const unique = new Set(edges.filter(([a, b]) => placed[a] && placed[b]).map(([a, b]) => `${a}\n${b}`));
+  return { placed, edges: [...unique].map(key => key.split("\n") as [string, string]), width: PAD_X * 2 + keys.length * W + (keys.length - 1) * GAP_X, height: height + PAD * 2 };
+}
+
+/** The "data only" view: run nodes left out, their inputs joined straight to their outputs (the root always stays). */
+function collapse(info: Info, root: string): Info {
+  const isRun = (ref: string) => ref !== root && info[ref]?.kind === "run";
+  const through = (ref: string, side: "inputs" | "consumers", seen: Set<string>): string[] =>
+    (info[ref]?.[side] ?? []).flatMap(next => {
+      if (!isRun(next)) return [next];
+      if (seen.has(next)) return [];
+      seen.add(next);
+      return through(next, side, seen);
+    });
+  const out: Info = {};
+  for (const [ref, node] of Object.entries(info)) {
+    if (isRun(ref)) continue;
+    out[ref] = {
+      ...node,
+      inputs: node.inputs === null ? null : [...new Set(through(ref, "inputs", new Set()))],
+      consumers: node.consumers === null ? null : [...new Set(through(ref, "consumers", new Set()))],
+    };
+  }
+  return out;
+}
+
+/** A node's two lines: its name (its short id when the name is unknown), then `v<n> · <short id>` (or the short id). */
+function label(id: string, node: LineageNode | undefined) {
+  const short = node?.short_id ?? id.slice(0, 7);
+  if (!node || node.name == null) return { top: short, bottom: "" };
+  return { top: node.name, bottom: node.version != null ? `${shortName({ version: node.version, id, short_id: short })} · ${short}` : short };
+}
+
+/** Artifact lineage, keyed by permanent artifact IDs. */
+export function Graph({ root, project }: { root: string; project: string }) {
+  const navigate = useNavigate();
+  const [copiedId,setCopiedId]=useState<string>();
+  useEffect(()=>{if(!copiedId)return;const timer=setTimeout(()=>setCopiedId(undefined),1400);return()=>clearTimeout(timer);},[copiedId]);
+  async function copyId(id:string){try{await copyText(id);setCopiedId(id);}catch{/* Keep the ID selectable if clipboard access fails. */}}
+
+  const graphId = useId().replace(/:/g, "");
+  const [info, setInfo] = useState<Info>({});
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [truncated, setTruncated] = useState(false);
+  const [dataOnly, setDataOnly] = useState(false);
+
+  const merge = (data: Lineage) => {
+    setTruncated(t => t || data.truncated);
+    setInfo(prev => {
+      const next: Info = { ...prev };
+      for (const [id, node] of Object.entries(data.nodes)) {
+        const prior = next[id];
+        next[id] = {
+          inputs: node.inputs ?? prior?.inputs ?? null, consumers: node.consumers ?? prior?.consumers ?? null,
+          project: node.project ?? prior?.project, deleted: node.deleted || prior?.deleted, kind: node.kind ?? prior?.kind, status: node.status ?? prior?.status,
+          name: node.name ?? prior?.name ?? null, version: node.version ?? prior?.version ?? null, short_id: node.short_id ?? prior?.short_id,
+        };
+      }
+      return next;
+    });
+  };
+  const load = async (id: string, depth = 1) => {
+    setBusy(true); setError("");
+    try { merge(await api<Lineage>(paths.lineage(project, id, depth))); } catch (e) { setError((e as Error).message); }
+    setBusy(false);
+  };
+  useEffect(() => { setInfo({}); setTruncated(false); load(root, 1); /* eslint-disable-next-line */ }, [root, project]);
+
+  const hasRuns = useMemo(() => Object.entries(info).some(([ref, node]) => ref !== root && node.kind === "run"), [info, root]);
+  const view = useMemo(() => (dataOnly ? collapse(info, root) : info), [info, root, dataOnly]);
+  const model = useMemo(() => (view[root] ? layout(root, view) : null), [view, root]);
+  if (error) return <Hint>Lineage unavailable: {error}</Hint>;
+  if (!model) return <Loading what="Loading lineage" />;
+  const { placed, edges, width, height } = model;
+  const alone = edges.length === 0;  // still drawn: one node, and the toggle stays reachable
+
+  const expandable = (p: Placed) => {
+    if (p.col === 0) return false;
+    const side = p.col < 0 ? "inputs" : "consumers";
+    return view[p.ref]?.[side] == null;
+  };
+  const anyExpandable = Object.values(placed).some(expandable);
+
+  return (
+    <Card className="graph-card" bar={<>
+      <span className="muted">{alone
+        ? (dataOnly ? "No data inputs or consumers (only runs, hidden here)." : "This artifact has no inputs and no consumers yet.")
+        : "Inputs on the left, consumers on the right. Click a node to open it, + to expand one more level."}</span>
+      {hasRuns && (
+        <ToggleGroup label="Runs in the graph" value={dataOnly ? "data" : "runs"} onChange={v => setDataOnly(v === "data")}
+          options={[{ value: "runs", label: "Show runs" }, { value: "data", label: "Data only" }]} />
+      )}
+      <Button disabled={busy || !anyExpandable} onClick={async () => {
+        setBusy(true);
+        try { merge(await api<Lineage>(paths.lineage(project, root, 3))); } catch (e) { setError((e as Error).message); }
+        setBusy(false);
+      }}>Expand all (3 levels)</Button>
+    </>}>
+      <div className="graph-scroll">
+        <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Lineage graph">
+          {edges.map(([a, b]) => {
+            const from = placed[a], to = placed[b];
+            const x1 = from.x + W, y1 = from.y + H / 2, x2 = to.x, y2 = to.y + H / 2, mid = (x1 + x2) / 2;
+            return <path key={a + b} className="graph-edge" d={`M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2},${y2}`} />;
+          })}
+          {Object.values(placed).map(p => {
+            const node = info[p.ref], text = label(p.ref, node);
+            const go = () => navigate(artifactPath(node?.project || project, p.ref));
+            const run = node?.kind === "run", status = node?.status;
+            const top = run ? text.top.replace(/^runs\//, "") : text.top, room = run ? 19 : 26;
+            const bottom = `${text.bottom}${node?.deleted ? " · deleted" : status ? ` · ${status}` : ""}`;
+            const clip = `${graphId}-${p.ref}`;
+            const classes = ["graph-node", p.col === 0 ? "is-root" : "", node?.deleted ? "is-deleted" : "", run ? "is-run" : "", status === "failed" ? "is-failed" : "", status === "running" ? "is-running" : ""];
+            return (
+              <g key={p.ref} className={classes.filter(Boolean).join(" ")} transform={`translate(${p.x},${p.y})`}>
+                <g role="link" tabIndex={0} onClick={go} onKeyDown={e => { if (e.key === "Enter") go(); }}>
+                  <title>{node ? `${shownRef({ ...node, id: p.ref })} ` : ""}{p.ref}{node?.deleted ? " (deleted)" : status ? ` (${status})` : ""}</title>
+                  <rect width={W} height={H} rx={run ? H / 2 : 10} />
+                  <defs><clipPath id={`${clip}-top`}><rect x={run ? 18 : 12} y={3} width={run ? W-68 : W-24} height={20}/></clipPath><clipPath id={`${clip}-bottom`}><rect x={run ? 18 : 12} y={23} width={W-36} height={19}/></clipPath></defs>
+                  {run && <g className="graph-pill" transform={`translate(${W - 44},9)`}><rect width={34} height={16} rx={8} /><text x={17} y={12} textAnchor="middle">run</text></g>}
+                  <text x={run ? 18 : 12} y={19} clipPath={`url(#${clip}-top)`} className="graph-name">{top.length > room ? "…" + top.slice(-(room - 1)) : top}</text>
+                  <text role="button" tabIndex={0} aria-label={`Copy ID ${p.ref}`} onClick={e=>{e.stopPropagation();void copyId(p.ref);}} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();e.stopPropagation();void copyId(p.ref);}}} x={run ? 18 : 12} y={35} clipPath={`url(#${clip}-bottom)`} className="graph-sub">{copiedId===p.ref?"✓":bottom.length > 27 ? bottom.slice(0,26)+"…" : bottom}</text>
+                </g>
+                {expandable(p) && (
+                  <g role="button" tabIndex={0} aria-label={`Expand ${text.top} ${text.bottom}`.trim()} className="graph-expand" transform={`translate(${p.col < 0 ? -10 : W + 10},${H / 2})`}
+                    onClick={() => load(p.ref)} onKeyDown={e => { if (e.key === "Enter") load(p.ref); }}>
+                    <circle r={10} /><text textAnchor="middle" y={4}>+</text>
+                  </g>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      {truncated && <Hint>The graph was capped; open a node to continue from there.</Hint>}
+    </Card>
+  );
+}

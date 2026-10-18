@@ -1,0 +1,4 @@
+method,loss,psnr
+Baseline,0.042,29.8
+Importance sampling,0.025,32.1
+Adaptive sampling,0.018,34.2

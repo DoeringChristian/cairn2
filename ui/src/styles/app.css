@@ -1,0 +1,224 @@
+/* Only what report.css and report-extra.css have no class for, built from their variables alone:
+   no tokens, no dark mode, no sizes of their own for chrome, headings, cards, tables or pills. */
+#root { display: contents; }
+.eyebrow a { color: inherit; text-decoration: none; }
+.eyebrow a:hover { text-decoration: underline; }
+.alias-line { margin: 8px 0 0; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.open-report { margin-top: 8px; }
+.action-button.primary { color: white; background: var(--accent); border-color: var(--accent); text-decoration: none; }
+.action-button.primary:hover { color: white; background: var(--accent); filter: brightness(.9); }
+main a, .rail-note a { color: var(--accent); }
+.rail-links { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.code-chips code { margin-right: 8px; }
+.muted { color: var(--muted); }
+.mono { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.nowrap { white-space: nowrap; }
+.wrap-any { overflow-wrap: anywhere; }
+.hint { margin-top: 12px; }
+.state-note { padding: 24px 0; }
+.app-section { margin: 40px 0 0; }
+.section-head { margin-bottom: 8px; align-items: center; gap: 12px; }
+.table-card { margin-top: 0; }
+.table-card table { margin: 8px 0; }
+.table-wrap { overflow-x: auto; }
+.table-card tr.selected td { background: color-mix(in srgb, var(--accent-soft) 45%, transparent); }
+.table-card tbody tr:hover td { background: color-mix(in srgb, var(--accent-soft) 25%, transparent); }
+.table-card tbody tr.selected:hover td { background: color-mix(in srgb, var(--accent-soft) 45%, transparent); }
+.table-card td a { text-decoration: none; }
+.table-card td a:hover { text-decoration: underline; }
+.table-card pre { margin: 0; max-height: 28rem; }
+/* Pills look the same outside a table (a run's status in its section head) as inside one (report-extra.css). */
+.pill { display: inline-block; padding: 2px 9px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 700; }
+.pill.tentative { background: #f5e6dc; color: var(--warn); }
+.pill.long { border-radius: 8px; white-space: normal; line-height: 1.45; padding: 3px 9px; max-width: 28em; }
+.report-prose .pill.alias { background: transparent; border: 1px solid var(--line); color: var(--muted); margin-right: 4px; }
+.pill.alias { display: inline-block; padding: 1px 8px; border-radius: 99px; background: transparent; border: 1px solid var(--line); color: var(--muted); font-size: 12px; font-weight: 700; }
+.app-metrics { margin: 24px 0 0; }
+.toolbar { display: flex; gap: 10px; margin: 24px 0 0; flex-wrap: wrap; }
+input[type="search"], .login-form input { box-sizing: border-box; height: 42px; font: inherit; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background-color: var(--card); color: var(--ink); }
+input[type="search"] { flex: 1; min-width: 14rem; -webkit-appearance: none; appearance: none; }
+input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
+input[type="search"]:hover, .login-form input:hover { border-color: var(--accent); }
+input[type="search"]:focus, .login-form input:focus { border-color: var(--accent); }
+/* Selects in the report theme: a button and a list of our own (components.tsx Select), not the system menu. */
+.select { position: relative; display: inline-block; min-width: 0; }
+.select-button { box-sizing: border-box; display: flex; align-items: center; width: 100%; height: 42px; padding: 0 36px 0 12px; font: inherit; color: var(--ink); text-align: left; border: 1px solid var(--line); border-radius: 8px; cursor: pointer;
+  background: var(--card) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%237a8580' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.5 1.75 6 6.25l4.5-4.5'/%3E%3C/svg%3E") no-repeat right 13px center / 12px 8px; }
+.select-button:hover, .select-button[aria-expanded="true"] { border-color: var(--accent); background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%23176b5b' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.5 1.75 6 6.25l4.5-4.5'/%3E%3C/svg%3E"); }
+.select-value { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.select-list { position: absolute; z-index: 30; top: calc(100% + 6px); right: 0; min-width: 100%; max-height: min(20rem, 60vh); overflow-y: auto; margin: 0; padding: 6px; list-style: none;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+.select-list li { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; padding: 8px 10px; border-radius: 6px; white-space: nowrap; cursor: pointer; font-size: 14px; }
+.select-list li.active { background: var(--paper); }
+.select-list li[aria-selected="true"] { color: var(--accent); font-weight: 700; }
+.select-list li small { color: var(--muted); font-size: 12px; font-weight: 400; }
+input:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tabs { display: flex; gap: 4px; margin: 20px 0 6px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs button { flex: none; white-space: nowrap; font: inherit; font-weight: 700; padding: 10px 14px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; color: var(--muted); cursor: pointer; }
+.tabs button:hover { color: var(--ink); }
+.tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.tabs button span { margin-left: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.action-button { font: inherit; font-size: 14px; color: var(--ink); text-decoration: none; display: inline-block; }
+.action-button:disabled { opacity: .5; cursor: default; }
+.action-button.small { padding: 4px 10px; font-size: 13px; }
+.row-actions { display: flex; gap: 6px; align-items: center; justify-content: flex-end; white-space: nowrap; }
+.row-actions .image-copy, .app-panel .image-copy { position: static; width: 28px; height: 28px; border-color: transparent; box-shadow: none; background: transparent; }
+.row-actions .image-copy:hover { background: var(--accent-soft); }
+.row-actions .image-copy[data-tooltip].show-tip::after { right: 0; z-index: 10; }
+.app-panel { margin-top: 40px; }
+.app-panel h2 { font-size: 11px; }
+.app-panel .hint { margin: 0; }
+.app-panel .data-version { text-decoration: none; }
+.app-panel a.data-version:hover { text-decoration: underline; }
+.app-panel .data-row .image-copy[data-tooltip].show-tip::after { z-index: 10; }
+.preview-row td { background: color-mix(in srgb, var(--card) 70%, transparent); }
+.preview-row td { padding: 8px 0 14px; max-width: 0; } /* a wide line in a text preview must scroll inside the preview, not widen the table */
+.preview-media { display: block; width: auto; height: auto; max-width: 100%; max-height: 28rem; margin: 0; object-fit: contain; border: 1px solid var(--line); border-radius: 10px; background: white; }
+video.preview-media { background: #111; }
+.preview-row .preview-text, .preview-row pre { max-width: 100%; max-height: 24rem; margin: 0; font-size: 13px; overflow: auto; }
+.app-figures { margin: 14px 0; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.app-figures .figure-card { text-decoration: none; color: inherit; cursor: pointer; }
+.app-figures .figure-card img { aspect-ratio: 16/10; object-fit: contain; background: white; }
+.app-figures .figure-card:last-child:nth-child(odd) { grid-column: auto; }
+.app-figures .figure-card:last-child:nth-child(odd) img { aspect-ratio: 16/10; object-fit: contain; }
+.app-figures .figure-copy { padding: 10px 14px; }
+.app-figures .figure-copy p { overflow-wrap: anywhere; font-size: 12px; }
+.card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); padding: 12px 14px; }
+.card-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 13px; margin-bottom: 8px; }
+.graph-scroll { overflow: auto; max-height: 34rem; }
+.graph-scroll svg { display: block; margin: 0 auto; }
+.graph-edge { fill: none; stroke: var(--line); stroke-width: 1.6; }
+.graph-node rect { fill: var(--paper); stroke: var(--line); stroke-width: 1.2; }
+.graph-node [role="link"] { cursor: pointer; }
+.graph-node [role="link"]:hover rect, .graph-node [role="link"]:focus-visible rect { stroke: var(--accent); }
+.graph-node.is-root rect { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.8; }
+.graph-name { fill: var(--ink); font: 600 13px Inter, ui-sans-serif, system-ui, sans-serif; }
+.graph-sub { fill: var(--muted); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.graph-node [role="link"]:focus-visible { outline: none; }
+.graph-expand { cursor: pointer; }
+.graph-expand circle { fill: var(--card); stroke: var(--accent); stroke-width: 1.4; }
+.graph-expand text { fill: var(--accent); font: 700 14px system-ui; }
+.graph-expand:hover circle { fill: var(--accent-soft); }
+.login-form { display: grid; gap: 14px; max-width: 26rem; margin-top: 28px; }
+.login-form label { display: grid; gap: 7px; font-size: 13px; font-weight: 700; }
+.login-error { color: var(--warn); margin: 0; }
+.form-actions { justify-content: flex-start; }
+.form-actions button { font: inherit; }
+.form-actions .primary:disabled { opacity: .6; }
+/* The phone rail: brand and a Browse button in one bar; the lists open below it. */
+.graph-card { position: relative; }
+@media (max-width: 760px) {
+  .app-metrics, .run-charts { grid-template-columns: 1fr; }
+  .section-head { flex-wrap: wrap; }
+  .row-actions { flex-wrap: nowrap; }
+  .toolbar { gap: 8px; }
+  .toolbar input[type="search"] { flex: 1 1 100%; min-width: 0; }
+  .toolbar .select { flex: 1 1 100%; }
+  .tabs button { min-height: 44px; padding: 10px 16px; }
+  .action-button, .graph-toggle button, .form-actions button { min-height: 40px; }
+  .action-button.small { padding: 8px 12px; }
+  .row-actions .image-copy, .app-panel .image-copy { width: 40px; height: 40px; }
+  .graph-scroll { max-height: 26rem; -webkit-overflow-scrolling: touch; }
+  .graph-scroll svg { margin: 0; max-width: none; }
+  .graph-card::after { content: ""; position: absolute; top: 44px; right: 0; bottom: 0; width: 28px; border-radius: 0 var(--radius) var(--radius) 0; pointer-events: none; background: linear-gradient(to right, transparent, color-mix(in srgb, var(--ink) 14%, transparent)); }
+  .table-wrap { -webkit-overflow-scrolling: touch; background: linear-gradient(to right, var(--card) 30%, transparent) left center / 32px 100% no-repeat local, linear-gradient(to left, var(--card) 30%, transparent) right center / 32px 100% no-repeat local, linear-gradient(to right, color-mix(in srgb, var(--ink) 16%, transparent), transparent) left center / 12px 100% no-repeat scroll, linear-gradient(to left, color-mix(in srgb, var(--ink) 16%, transparent), transparent) right center / 12px 100% no-repeat scroll; }
+  .table-card table { min-width: 34rem; }
+  .table-card pre, .app-panel pre, .run-log pre { max-width: 100%; overflow: auto; }
+  .login-form { max-width: none; }
+  .login-form input, input[type="search"] { font-size: 16px; } /* no iOS zoom on focus */
+  .app-figures { grid-template-columns: 1fr; }
+}
+.hero h1 { overflow-wrap: anywhere; }
+/* deleted versions: tombstones stay in the tables and the graph, greyed */
+.pill.deleted, .report-prose .pill.deleted { display: inline-block; padding: 1px 8px; border-radius: 99px; background: transparent; border: 1px dashed var(--muted); color: var(--muted); font-size: 12px; font-weight: 700; }
+.table-card tr.tombstone td { color: var(--muted); }
+.table-card tr.tombstone td a, .table-card tr.tombstone td strong { color: var(--muted); }
+.tombstone-reason { font-size: 13px; }
+.tombstone-note { border-left-color: var(--muted); }
+.graph-node.is-deleted rect { fill: transparent; stroke: var(--muted); stroke-dasharray: 5 4; }
+.graph-node.is-deleted .graph-name { fill: var(--muted); }
+
+/* pending versions: in this repo, not on its remote yet (no number: an id names them) */
+.pill.pending, .report-prose .pill.pending { display: inline-block; padding: 1px 8px; border-radius: 99px; background: transparent; border: 1px solid var(--warn); color: var(--warn); font-size: 12px; font-weight: 700; }
+.table-card tr.pending td strong { font-style: italic; }
+.pending-note { border-left-color: var(--warn); }
+
+/* runs: their lineage nodes, and the Run panel of a version of kind "run" */
+.graph-toggle { display: inline-flex; gap: 4px; }
+.graph-toggle button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.graph-node.is-run > [role="link"] > rect { fill: var(--card); stroke-dasharray: 2 0; }
+.graph-pill rect { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1; }
+.graph-pill text { fill: var(--accent); font: 700 10px Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: .04em; }
+.graph-node.is-failed > [role="link"] > rect { stroke: var(--warn); stroke-dasharray: 5 3; }
+.graph-node.is-failed .graph-sub { fill: var(--warn); }
+.graph-node.is-running .graph-sub { fill: var(--accent); }
+.sub-heading { margin: 18px 0 8px; font-size: 15px; }
+.run-charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 10px; }
+.run-chart { margin: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--card); padding: 8px 10px 4px; }
+.run-chart figcaption { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; margin-bottom: 2px; }
+.run-chart svg { display: block; width: 100%; height: auto; }
+.run-axis { stroke: var(--line); stroke-width: 1; }
+.run-tick { fill: var(--muted); font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.run-line { fill: none; stroke: var(--accent); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.run-dot { fill: var(--accent); }
+.run-log { margin: 0 0 12px; }
+.run-log-title { margin: 0 0 4px; font-size: 13px; }
+.run-log pre { max-height: 22rem; overflow: auto; }
+
+/* App pages start at the top: the report layout centres <main> in the grid row, which only suits pages taller than the window. */
+body > #root main, #root main { margin: 0 auto; align-self: start; }
+.metric .small-value { font-size: 22px; line-height: 1.25; }
+
+/* Thumbnails of image files in a file list: a small square that opens the lightbox; the file's own bytes, lazy, sized here. */
+.file-name { display: flex; align-items: center; gap: 10px; }
+.file-name > a, .file-name > span:last-child { min-width: 0; }
+.thumb { flex: none; display: grid; place-items: center; width: 28px; height: 28px; margin: -4px 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: white; color: var(--muted); cursor: zoom-in; }
+.table-card td a.thumb { text-decoration: none; }
+.thumb:hover { border-color: var(--accent); color: var(--accent); }
+.thumb img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.thumb svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
+.thumb-spacer { visibility: hidden; }
+.table-card tr:has(.file-name) td { vertical-align: middle; }  /* the name, its size and its buttons on one line beside the thumbnail */
+.preview-open { display: block; max-width: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; }
+.app-figures .figure-card { cursor: zoom-in; }
+
+/* The lightbox (components/Lightbox.tsx): the reports' .lightbox, .stage, .zoom and icon buttons; these are only its extras. */
+.app-lightbox { height: 100dvh; overscroll-behavior: contain; }
+.app-lightbox .stage img { user-select: none; -webkit-user-select: none; }
+.app-lightbox .stage img.is-loading { opacity: 0; }
+.lightbox-status { position: absolute; top: 45%; left: 0; right: 0; text-align: center; pointer-events: none; }
+.stage .lightbox-path { font: 600 15px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.lightbox-meta { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px 14px; font-size: 13px; }
+.lightbox-download { color: inherit; font-weight: 700; text-underline-offset: 3px; }
+.lightbox-download:hover { color: white; }
+.app-lightbox .lightbox-ref { position: relative; width: 28px; height: 28px; border-color: #ffffff55; background: #ffffff20; color: white; box-shadow: none; }
+.app-lightbox .lightbox-ref:hover { background: #ffffff33; color: white; }
+.app-lightbox .lightbox-ref[data-tooltip].show-tip::after { top: auto; bottom: calc(100% + 6px); right: 50%; transform: translateX(50%); }
+.app-lightbox .zoom button:disabled { opacity: .45; cursor: default; }
+.app-lightbox .zoom button:disabled:hover { border-color: #ffffff33; color: white; }
+.app-lightbox :focus-visible { outline-color: white; }
+@media (max-width: 760px) {
+  .thumb { width: 40px; height: 40px; margin: -6px 0; }
+  .app-lightbox .stage { padding: 64px 12px 76px; }
+  .app-lightbox .stage .lightbox-copy { padding-bottom: 0; }
+  .app-lightbox .zoom { gap: 5px; }
+  .app-lightbox .zoom span { min-width: 42px; }
+  .app-lightbox .previous { left: 10px; }
+  .app-lightbox .next { right: 10px; }
+  .lightbox-download { display: inline-flex; align-items: center; min-height: 40px; }
+  .app-lightbox .lightbox-ref { width: 40px; height: 40px; }
+}
+
+/* The palette page (/palette, pages/Palette.tsx): only the frame around each specimen. */
+.palette-specimen { margin: 22px 0 0; }
+.palette-name { margin: 0 0 10px; font-size: 13px; overflow-wrap: anywhere; }
+.palette-name code { color: var(--accent); font-weight: 700; }
+.palette-demo > .app-panel:first-child, .palette-demo > .app-metrics, .palette-demo > .table-card:first-child { margin-top: 0; }
+.palette-demo > .metric-grid { margin-bottom: 0; }
+.palette-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.palette-pills .pill { margin: 0; }
+.palette-row { display: inline-flex; align-items: center; gap: 8px; }
+.palette-dark { display: flex; gap: 10px; padding: 16px; border-radius: 10px; background: #0c110ff2; color: white; }
+.palette-dark button.icon { position: static; }
+.palette-form { margin-top: 0; }

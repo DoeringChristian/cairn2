@@ -1,0 +1,248 @@
+---
+title: The report field guide
+execute:
+  echo: true
+cairn:
+  inputs:
+    baseline: runs/showcase-baseline@latest
+    samples: datasets/showcase-samples@latest
+  resources:
+    - assets
+    - data.csv
+---
+
+## A report is more than a result {#sec-intro}
+
+This is a working tour of Cairn reports: **pinned evidence**, *executable analysis*,
+structured tables, figures, mathematics, and playable media. Select this paragraph
+and use the copy button to copy its text together with its source marker.
+
+The report is rendered from its intermediate document, with one page scrollbar.
+Every output below belongs to this published version.[^evidence]
+
+> Good reports let a reader move from a claim to the evidence that supports it.
+
+{{< include includes/method.qmd >}}
+
+## Standard code blocks {#sec-standard-code}
+
+Ordinary fenced code is shown with syntax highlighting and is **never executed**.
+These examples describe a workflow; only the report's `{python}` cells execute.
+
+```python
+from cairn import Client
+
+# A display-only example, not an executed report cell.
+def summarize(values: list[float]) -> float:
+    return sum(values) / len(values)
+
+print("This code fence is not executed")
+```
+
+```javascript
+const state = { selected: true, threshold: 0.05 };
+const visible = samples.filter(sample => sample.loss < state.threshold);
+console.log(`Showing ${visible.length} samples`);
+```
+
+```yaml
+experiment:
+  name: adaptive-wave
+  seed: 42
+  features:
+    - pinned-inputs
+    - interactive-plots
+```
+
+```text
+Plain text remains plain: <script>this is displayed, not executed</script>
+```
+
+## Pinned experiment inputs {#sec-inputs}
+
+```{python}
+#| label: tbl-result
+#| tbl-cap: Final values from the pinned baseline.
+import base64
+import csv
+import json
+from pathlib import Path
+from IPython.display import display, HTML, Markdown
+result = inputs["baseline"].read()
+display({"application/json": result}, raw=True)
+```
+
+The exact input versions are available in the **Lineage** tab. The configuration,
+environment, and report sources remain inspectable in the metadata and files views.
+
+## Tables and structured output {#sec-tables}
+
+| Feature | Source | Behavior |
+| --- | --- | --- |
+| Static table | Markdown | Native table layout |
+| Rich table | Python HTML | Sanitized, in the document flow |
+| JSON | Python MIME output | Inspectable structured result |
+
+```{python}
+#| label: tbl-comparison
+#| tbl-cap: A table generated from the captured CSV resource.
+rows = list(csv.DictReader(Path("data.csv").open()))
+headers = list(rows[0])
+body = "<table><thead><tr>" + "".join(f"<th>{key}</th>" for key in headers) + "</tr></thead><tbody>"
+for row in rows:
+    body += "<tr>" + "".join(f"<td>{row[key]}</td>" for key in headers) + "</tr>"
+display(HTML(body + "</tbody></table>"))
+```
+
+As @tbl-comparison shows, the adaptive method has the lowest illustrative loss.
+These values are synthetic demonstration data, not experimental findings.
+
+## Images and convergence {#sec-figures}
+
+![The wave field at the beginning of the sequence.](assets/field-start.png){#fig-start}
+
+```{python}
+#| label: fig-convergence
+#| fig-cap: Scalar loss from the pinned experiment.
+#| echo: false
+import matplotlib.pyplot as plt
+records = inputs["baseline"].records()
+figure, axis = plt.subplots(figsize=(7, 3.3))
+figure.patch.set_facecolor("#fffef9")
+axis.set_facecolor("#fffef9")
+axis.plot([row["data"]["step"] for row in records], [row["data"]["loss"] for row in records], color="#176b5b", linewidth=2)
+axis.set(xlabel="Step", ylabel="Loss", title="A steady convergence")
+axis.spines[["top", "right"]].set_visible(False)
+figure.tight_layout()
+display(figure)
+plt.close(figure)
+```
+
+Compare @fig-start with the animation below. @fig-convergence demonstrates an
+executed figure output, while the first image is a captured source resource.
+
+## Interactive exploration {#sec-plotly}
+
+Hover over a point for exact values, drag to zoom, and double-click to reset.
+Click legend entries to compare methods, or export the figure as SVG using the toolbar.
+The reader applies Cairn colors, typography, and grid styling by default.
+
+```{python}
+#| label: fig-interactive
+#| fig-cap: Interactive convergence comparison with synthetic baseline and adaptive traces.
+#| echo: false
+import plotly.graph_objects as go
+import math
+steps = list(range(60))
+interactive = go.Figure([
+    go.Scatter(x=steps, y=[math.exp(-s / 18) + .02 for s in steps], name="Baseline", mode="lines"),
+    go.Scatter(x=steps, y=[math.exp(-s / 12) + .015 for s in steps], name="Adaptive", mode="lines"),
+])
+interactive.update_layout(title="Convergence comparison", xaxis_title="Training step", yaxis_title="Loss", legend={"orientation": "h", "y": -.25})
+display({"application/vnd.plotly.v1+json": json.loads(interactive.to_json())}, raw=True)
+```
+
+## A small 3D surface {#sec-plotly-3d}
+
+Drag to orbit, scroll to zoom, and hover to inspect the height of this synthetic field.
+
+```{python}
+#| label: fig-surface
+#| fig-cap: A small interactive Plotly 3D wave surface.
+#| echo: false
+coords = [i / 10 - 2 for i in range(41)]
+surface = go.Figure(go.Surface(
+    x=coords, y=coords,
+    z=[[math.sin(x * 2) * math.cos(y * 2) * math.exp(-(x*x+y*y)/5) for x in coords] for y in coords],
+    colorscale=[[0, "#176b5b"], [.5, "#dcebe5"], [1, "#b56231"]],
+    showscale=False,
+))
+surface.update_layout(title="A wave field in three dimensions", height=380,
+    scene={"xaxis_title": "x", "yaxis_title": "y", "zaxis_title": "Amplitude",
+           "camera": {"eye": {"x": 1.5, "y": 1.5, "z": 1}}})
+display({"application/vnd.plotly.v1+json": json.loads(surface.to_json())}, raw=True)
+```
+
+## Custom HTML and WebGPU {#sec-custom-html}
+
+Custom HTML can implement an entirely different viewer. This example runs its own
+JavaScript and WebGPU shader in an isolated frame, and automatically fits into the
+report. Change the phase slider, then expand the details. If WebGPU is unavailable,
+the same field renders through Canvas instead.
+
+```{python}
+#| label: fig-custom-html
+#| fig-cap: A custom HTML viewer with optional WebGPU rendering.
+#| echo: false
+display(HTML(Path("assets/custom-viewer.html").read_text()))
+```
+
+## Video playback {#sec-video}
+
+The synthetic wave field evolves over four seconds. Use the Prism2 playback
+controls to play, pause, seek, mute, adjust volume, or enlarge and inspect frames.
+In the lightbox, use the scissors tool to drag a time range on the timeline;
+optionally use the region tool to draw a rectangle on the video. The copy icon
+copies both selections in one source reference.
+
+```{python}
+#| label: fig-video
+#| fig-cap: A synthetic wave field, 60 frames at 15 frames per second.
+#| echo: false
+display({"video/mp4": base64.b64encode(Path("assets/wave-evolution.mp4").read_bytes()).decode()}, raw=True)
+```
+
+## Audio playback {#sec-audio}
+
+This two-second chirp illustrates native audio playback. It starts only when you
+press play; adjust the volume using the player.
+
+```{python}
+#| echo: false
+display({"audio/wav": base64.b64encode(Path("assets/signal.wav").read_bytes()).decode()}, raw=True)
+```
+
+## Rich output and code controls {#sec-code}
+
+```{python}
+#| echo: true
+display(Markdown("**Generated Markdown** can contain lists:\n\n- Pinned input readers\n- Captured local resources\n- Immutable publication"))
+print("Standard output stays selectable, with its code-cell source marker.")
+```
+
+This next cell is visible but deliberately not executed:
+
+```{python}
+#| eval: false
+raise RuntimeError("This cell is an eval:false example and never runs")
+```
+
+The following cell runs with hidden output:
+
+```{python}
+#| output: false
+internal_check = len(rows) == 3
+print("This output must not appear in the report")
+```
+
+::: {.callout-tip title="Copy evidence with context"}
+Select a sentence, table value, or formula. The copy control includes the selected
+text, source path, line, and exact published version. Formula selections retain
+LaTeX rather than copying presentation-only glyphs.
+:::
+
+::: {.callout-warning title="A deliberate scope"}
+This example demonstrates Cairn's supported QMD subset. It does not claim full
+Quarto support, interactive JavaScript widgets, or bibliography processing.
+:::
+
+## Reading checklist {#sec-checklist}
+
+1. Inspect the pinned values in @tbl-result.
+2. Compare the image and chart in @sec-figures.
+3. Play the video and audio without leaving the report.
+4. Copy text from @sec-method and confirm its included-file source marker.
+5. Open **Lineage** to inspect input versions and downstream consumers.
+6. Use **Files** to download the captured source, notebook, and media.
+
+[^evidence]: Reports pin inputs before execution and publish their captured files as immutable evidence.
