@@ -14,6 +14,7 @@ def test_browser_sessions_and_plain_artifact_identity(tmp_path):
         app = create_app(repo, token="test-token", ui=True)
         with TestClient(app) as browser:
             assert browser.get("/ui-api/projects").status_code == 401
+            assert browser.get("/ui-api/artifacts?project=demo").status_code == 401
             for path in ("/favicon.svg", "/favicon.ico"):
                 icon = browser.get(path)
                 assert icon.status_code == 200
@@ -142,4 +143,66 @@ def test_browser_tags_use_annotations_and_reject_conflicts_and_foreign_origins(t
                     route, json={"tags": [], "expected_etag": current["annotations_etag"]}
                 ).status_code
                 == 200
+            )
+
+
+def test_artifact_summaries_are_bounded_filtered_and_exclude_payloads(tmp_path):
+    import sqlalchemy as sa
+
+    from cairn.storage import artifacts
+
+    with closing(Repository(tmp_path)) as repo:
+        original = repo.start("large", "runs", "seed")["artifact"]
+        with repo._transaction(write=True) as connection:
+            template = dict(
+                connection.execute(sa.select(artifacts).where(artifacts.c.id == original["id"]))
+                .mappings()
+                .one()
+            )
+            connection.execute(
+                artifacts.insert(),
+                [
+                    {
+                        **template,
+                        "id": f"{index:032x}",
+                        "name": f"run-{index:04}",
+                        "metadata": {"config": "PRIVATE_LARGE_CONFIG" * 1000},
+                        "manifest": {"outcome": "succeeded", "value": "LARGE_INLINE_VALUE" * 1000},
+                    }
+                    for index in range(2000)
+                ],
+            )
+        tagged = f"{1777:032x}"
+        repo.annotate(tagged, {"tags": ["chosen"]})
+        repo.start("large", "datasets", "excluded-dataset")
+        repo.start("other", "runs", "excluded-project")
+        report_ids = []
+        for _ in range(2):
+            started = repo.start("large", "reports", "findings")
+            identity = started["artifact"]["id"]
+            repo.close_writer(identity, started["writer"]["id"], 0)
+            repo.finish(identity)
+            report_ids.append(identity)
+        with TestClient(create_app(repo, ui=True, no_auth=True)) as browser:
+            params = {"project": "large", "category": "runs"}
+            response = browser.get("/ui-api/artifacts", params=params)
+            assert response.status_code == 200
+            data = response.json()
+            assert data["total"] == 2001 and len(data["items"]) == 50
+            assert len(response.content) < 40000
+            assert "PRIVATE_LARGE_CONFIG" not in response.text
+            assert "LARGE_INLINE_VALUE" not in response.text
+            assert all("manifest" not in item and "metadata" not in item for item in data["items"])
+            second = browser.get("/ui-api/artifacts", params={**params, "offset": 50}).json()
+            assert not {a["id"] for a in data["items"]} & {a["id"] for a in second["items"]}
+            for extra in ({"search": "run-1777"}, {"tag": "chosen"}):
+                filtered = browser.get("/ui-api/artifacts", params={**params, **extra}).json()
+                assert filtered["total"] == 1 and filtered["items"][0]["id"] == tagged
+            reports = browser.get(
+                "/ui-api/artifacts", params={"project": "large", "category": "reports"}
+            ).json()
+            assert [a["id"] for a in reports["items"]] == [report_ids[-1]]
+            assert (
+                browser.get("/ui-api/artifacts", params={**params, "limit": 1000}).status_code
+                == 400
             )

@@ -3,8 +3,8 @@ import { Plus, X } from 'lucide-react';
 import { api, type Artifact } from '../api';
 import { ErrorNote } from '../components';
 
-export const artifactTags=(artifact:Artifact):string[]=>Array.isArray(artifact.annotations?.tags)?artifact.annotations.tags.filter((tag):tag is string=>typeof tag==='string'):[];
-export function ArtifactTags({artifact,onChange,compact=false,onTagClick}: {artifact:Artifact;onChange:()=>void;compact?:boolean;onTagClick?:(tag:string)=>void}) {
+export const artifactTags=(artifact:Pick<Artifact, "id" | "annotations" | "annotations_etag">):string[]=>Array.isArray(artifact.annotations?.tags)?artifact.annotations.tags.filter((tag):tag is string=>typeof tag==='string'):[];
+export function ArtifactTags({artifact,onChange,compact=false,onTagClick}: {artifact:Pick<Artifact, "id" | "annotations" | "annotations_etag">;onChange:()=>void;compact?:boolean;onTagClick?:(tag:string)=>void}) {
   const [draft,setDraft]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState<Error>();
   const tags=artifactTags(artifact);
   async function save(next:string[]){

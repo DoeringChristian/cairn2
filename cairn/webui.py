@@ -10,9 +10,10 @@ import json
 import mimetypes
 import secrets
 from pathlib import Path
+from typing import Annotated
 
 import sqlalchemy as sa
-from fastapi import Request
+from fastapi import Query, Request
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -221,6 +222,127 @@ def install(app, repository, token, *, no_auth=False):
         )
         with repository._transaction() as connection:
             return [dict(row) for row in connection.execute(statement).mappings()]
+
+    @app.get("/ui-api/artifacts")
+    def artifact_summaries(
+        project: str,
+        category: str = "reports",
+        search: str = "",
+        tag: Annotated[list[str] | None, Query()] = None,
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=50, ge=1, le=100),
+    ):
+        from .query import discovery_predicate
+        from .storage import annotation_members, names
+
+        if category not in {"reports", "runs", "artifacts", "all"}:
+            raise ValidationError("Unknown artifact category")
+        conditions = [artifacts.c.project == project, artifacts.c.deleted_at.is_(None)]
+        if category in {"reports", "runs"}:
+            conditions.append(artifacts.c.namespace == category)
+        elif category == "artifacts":
+            conditions.append(artifacts.c.namespace.not_in(["reports", "runs"]))
+        if category == "reports":
+            # Use the same head as @latest. Before first publication, show one live draft.
+            head = (
+                sa.select(names.c.head)
+                .where(
+                    names.c.project == artifacts.c.project,
+                    names.c.namespace == artifacts.c.namespace,
+                    names.c.name == artifacts.c.name,
+                )
+                .correlate(artifacts)
+                .scalar_subquery()
+            )
+            sibling = artifacts.alias("sibling")
+            draft = (
+                sa.select(sibling.c.id)
+                .where(
+                    sibling.c.project == artifacts.c.project,
+                    sibling.c.namespace == artifacts.c.namespace,
+                    sibling.c.name == artifacts.c.name,
+                    sibling.c.deleted_at.is_(None),
+                )
+                .order_by(sibling.c.created_at.desc(), sibling.c.id.desc())
+                .limit(1)
+                .correlate(artifacts)
+                .scalar_subquery()
+            )
+            conditions.append(artifacts.c.id == sa.func.coalesce(head, draft))
+        if search:
+            conditions.append(
+                (artifacts.c.namespace + "/" + artifacts.c.name).icontains(search, autoescape=True)
+            )
+        if tag:
+            conditions.append(
+                discovery_predicate(
+                    {
+                        "and": [
+                            {"path": "/annotations/tags", "op": "contains", "value": value}
+                            for value in tag
+                        ]
+                    },
+                    artifacts.c.metadata,
+                    artifacts.c.annotations,
+                    artifacts.c.id,
+                    repository.engine.dialect.name,
+                    annotation_members,
+                )
+            )
+        # Project scalar display fields in SQL: never load full manifests/configs into Python.
+        columns = [
+            artifacts.c[key]
+            for key in (
+                "id",
+                "project",
+                "namespace",
+                "name",
+                "state",
+                "number",
+                "created_at",
+                "finished_at",
+                "annotations_etag",
+            )
+        ]
+        columns += [
+            artifacts.c.annotations["tags"].label("tags"),
+            artifacts.c.manifest["outcome"].as_string().label("outcome"),
+        ]
+        for key in ("title", "description"):
+            columns.append(
+                sa.func.coalesce(
+                    artifacts.c.annotations[key].as_string(),
+                    artifacts.c.manifest["metadata"][key].as_string(),
+                    artifacts.c.metadata[key].as_string(),
+                ).label(key)
+            )
+        sort_time = (
+            sa.func.coalesce(artifacts.c.finished_at, artifacts.c.created_at)
+            if category == "reports"
+            else artifacts.c.created_at
+        )
+        with repository._transaction() as connection:
+            total = connection.execute(
+                sa.select(sa.func.count()).select_from(artifacts).where(*conditions)
+            ).scalar_one()
+            page_ids = (
+                sa.select(artifacts.c.id)
+                .where(*conditions)
+                .order_by(sort_time.desc(), artifacts.c.id.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+            rows = connection.execute(
+                sa.select(*columns)
+                .where(artifacts.c.id.in_(page_ids))
+                .order_by(sort_time.desc(), artifacts.c.id.desc())
+            ).mappings()
+            items = []
+            for row in rows:
+                item = dict(row)
+                item["annotations"] = {"tags": item.pop("tags") or []}
+                items.append(item)
+        return {"items": items, "total": total}
 
     @app.get("/ui-api/lineage/{artifact_id}/{depth}")
     def lineage(artifact_id: str, depth: int):

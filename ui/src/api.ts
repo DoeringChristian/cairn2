@@ -9,6 +9,7 @@ export type Artifact = {
   metadata: Record<string, Json>; annotations: Record<string, Json>; annotations_etag: string; manifest: Manifest | null;
   created_at: string; finished_at: string | null; deleted_at: string | null;
 };
+export type ArtifactSummary = Pick<Artifact, 'id' | 'project' | 'namespace' | 'name' | 'state' | 'number' | 'created_at' | 'finished_at' | 'annotations' | 'annotations_etag'> & {title?: string; description?: string; outcome?: string};
 export type Descriptor = Artifact;
 export type RecordEntry = { artifact_id: string; ordinal: number; sequence: number; writer_id: string; kind: string; data: Record<string, Json>; created_at: string };
 export type RecordPage = { items: RecordEntry[]; next_cursor: string | null; cutoff: number; artifact_id: string };

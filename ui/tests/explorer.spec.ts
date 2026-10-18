@@ -285,3 +285,36 @@ test('lineage controls stay put when explanation changes',async({page,request})=
   expect(after!.x).toBe(before!.x);
   expect(after!.y).toBe(before!.y);
 });
+
+test('run list is bounded and slow loads survive auto refresh', async ({page}) => {
+  let requests = 0;
+  const forbidden: string[] = [];
+  page.on('request', request => {
+    if (/\/v1\/(artifacts|resolutions)/.test(request.url())) forbidden.push(request.url());
+  });
+  await page.route('**/ui-api/artifacts?*', async route => {
+    requests++;
+    const query = new URL(route.request().url()).searchParams;
+    expect(query.get('category')).toBe('runs');
+    expect(query.get('limit')).toBe('50');
+    if (requests === 1) await new Promise(resolve => setTimeout(resolve, 6000));
+    const offset = Number(query.get('offset'));
+    const search = query.get('search');
+    const items = Array.from({length: search ? 1 : 50}, (_, index) => ({
+      id: String(offset+index), project: 'large', namespace: 'runs', name: search || `run-${offset+index}`,
+      state: 'live', number: null, created_at: '2026-10-18T12:00:00Z', finished_at: null,
+      annotations: {tags: []}, annotations_etag: 'test',
+    }));
+    await route.fulfill({json: {items, total: search ? 1 : 5000}});
+  });
+  await page.goto('/p/large?view=runs');
+  await expect(page.getByRole('link', {name:'run-0', exact:true})).toBeVisible({timeout:10000});
+  expect(requests).toBe(1);
+  await expect(page.getByRole('textbox', {name:'New tag', exact:true})).toHaveCount(50);
+  await page.getByRole('button', {name:'Next', exact:true}).click();
+  await expect(page.getByRole('link', {name:'run-50', exact:true})).toBeVisible();
+  await expect(page.getByRole('link', {name:'run-0', exact:true})).toHaveCount(0);
+  await page.getByRole('searchbox', {name:'Search artifacts'}).fill('specific-run');
+  await expect(page.getByRole('link', {name:'specific-run', exact:true})).toBeVisible();
+  expect(forbidden).toEqual([]);
+});
