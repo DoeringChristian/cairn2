@@ -22,8 +22,13 @@ and writes the packaged assets into `cairn/ui_static`.
 Build the media/report demo with:
 
 ```sh
-python examples/build_report_showcase.py --repo PATH --project neural-rendering --publish
+uv run --extra all python examples/build_report_showcase.py
+uv run --extra all cairn server --no-auth
 ```
+
+The script uses normal repository discovery, records a run, and always publishes
+the report in the `neural-rendering` project. Build files stay in
+`build/report-showcase/<run-id>/`.
 
 Against that running server, `npm test --prefix ui` checks native reports, plain IDs,
 image zoom, real video playback, the TOC, and lineage. `CAIRN_UI_URL` overrides the
