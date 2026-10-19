@@ -280,7 +280,7 @@ def _server_socket(host, port):
 
 
 def _serve(args):
-    from .config import ensure_token, startup_urls
+    from .config import ensure_token, resolve_destination, startup_urls
 
     try:
         import uvicorn
@@ -293,12 +293,29 @@ def _serve(args):
             "Server dependencies are missing. Run 'uv run --extra all cairn server' "
             "(or --extra ui), or install 'cairn2[all]' with pip."
         ) from exc
+    if not args.database_url and not args.url:
+        destination = resolve_destination(args.repo)
+        if destination.startswith(("http://", "https://")):
+            raise ValidationError(
+                "The discovered destination is a remote server. "
+                "Use --repo PATH to select the local repository to serve."
+            )
+        args.repo = destination
     repository = _repository(args)
     listener = None
     try:
         listener = _server_socket(args.host, args.port)
         port = listener.getsockname()[1]
-        token = ensure_token(args.token) if not args.no_auth else None
+        # Creating a nested .cairn/token would shadow the parent repository on
+        # the next SDK discovery. Keep the token in the existing project.
+        cwd = Path.cwd()
+        token_root = next(
+            (parent for parent in (cwd, *cwd.parents) if (parent / ".cairn").exists()),
+            cwd,
+        )
+        token = ensure_token(args.token, cwd=token_root) if not args.no_auth else None
+        if repository.path is not None:
+            print(f"Cairn repository: {repository.path}", file=sys.stderr)
         from .webui import available
 
         ui = not args.no_ui and available()

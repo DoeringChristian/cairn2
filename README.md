@@ -201,8 +201,10 @@ Python clients and ordinary CLI commands use the following destination order:
 
 A path selects direct local storage. An HTTP(S) URL selects that server alone.
 Remote reads query the server; they do not combine server results with pending
-local writes. Administrative `server` and `repo` commands use direct storage
-configuration, with `./.cairn/repo` as their local default.
+local writes. `server` uses the same destination discovery for local repositories;
+if discovery selects a remote URL, it asks for an explicit `--repo` instead.
+Administrative `repo` commands use direct storage configuration, with
+`./.cairn/repo` as their local default.
 
 Bearer tokens are discovered in this order: explicit `token=`/`--token`,
 `CAIRN_TOKEN`, `CAIRN_TOKEN_FILE`, project `.cairn/token` or a `.cairn` JSON
@@ -232,7 +234,12 @@ synchronous backend requests rather than providing offline queuing.
 
 ## Run a server
 
-With no arguments, `cairn server` serves `.cairn/repo` on localhost port 8765.
+With no arguments, `cairn server` discovers the same local repository as the
+Python client (default `.cairn/repo`) and serves it on localhost port 8765.
+You can log locally first, then start the server to expose the existing data to
+remote clients. Local logging can continue against that same repository.
+Startup prints the absolute repository path. Explicit `--repo` or
+`--database-url` settings take precedence over discovery.
 If that default port is occupied, it warns and selects a free port. An explicit
 `--port` is fixed and fails if occupied. Use `--host 0.0.0.0` to listen on all
 interfaces. Startup prints URLs using the actual bound port.
@@ -248,7 +255,8 @@ cairn --repo /srv/cairn/repository server --host 127.0.0.1 --port 8765
 ```
 
 The repository contains `metadata.sqlite3` and an `objects/` directory. The token
-file belongs to the server's working project directory unless supplied through
+file belongs to the nearest existing project `.cairn` directory (otherwise the
+working directory's `.cairn`) unless supplied through
 token discovery.
 
 For PostgreSQL and S3, provision the database and bucket first. Boto3 uses its

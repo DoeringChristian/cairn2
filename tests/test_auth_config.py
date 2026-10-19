@@ -203,3 +203,72 @@ def test_nonfinite_json_and_unknown_queries_are_rejected():
     assert response.status_code == 400
     assert client.get("/v1/artifacts?limit=1&limit=2").status_code == 400
     assert client.get("/v1/artifacts?type=run").status_code == 400
+
+
+@pytest.mark.parametrize("mode", ["default", "parent", "environment", "config"])
+def test_server_discovers_local_sdk_repository(mode, tmp_path, monkeypatch):
+    from cairn import Client
+    from cairn.cli import main
+
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)
+    if mode == "environment":
+        monkeypatch.setenv("CAIRN_REPO", str(project / "data"))
+    elif mode == "config":
+        (project / ".cairn").write_text('{"repo":"data","token":"test-token"}')
+    with Client(project="test") as local:
+        artifact = local.start("datasets", "local")
+        artifact.finish(value={"value": 1})
+        identity = local.backend.info()["repository_id"]
+        if mode == "parent":
+            child = project / "scripts"
+            child.mkdir()
+            monkeypatch.chdir(child)
+
+        def run(server, **kwargs):
+            with TestClient(server.config.app) as http:
+                headers = {"Authorization": f"Bearer {resolve_token()}"}
+                assert http.get("/v1/info", headers=headers).json()["repository_id"] == identity
+                response = http.post(
+                    "/v1/resolutions",
+                    json={"refs": [artifact.id], "project": "test"},
+                    headers=headers,
+                )
+                assert response.status_code == 200
+                assert response.json()[0]["id"] == artifact.id
+                response = http.post(
+                    "/v1/artifacts",
+                    json={"project": "test", "namespace": "datasets", "name": "remote"},
+                    headers=headers,
+                )
+                assert response.status_code == 200
+                remote_id = response.json()["artifact"]["id"]
+                assert local.backend.resolve(remote_id)["name"] == "remote"
+                continued = local.start("datasets", "continued")
+                continued.finish(value=2)
+                assert (
+                    http.post(
+                        "/v1/resolutions", json={"refs": [continued.id]}, headers=headers
+                    ).json()[0]["id"]
+                    == continued.id
+                )
+
+        monkeypatch.setattr("uvicorn.Server.run", run)
+        assert main(["server", "--port", "0", "--no-ui"]) == 0
+        with Client(project="test") as reopened:
+            assert reopened.backend.info()["repository_id"] == identity
+        if mode == "parent":
+            assert not (project / "scripts/.cairn").exists()
+
+
+def test_server_rejects_remote_discovery_but_explicit_repo_overrides(tmp_path, monkeypatch, capsys):
+    from cairn.cli import main
+
+    monkeypatch.setenv("CAIRN_URL", "http://example.test")
+    assert main(["server", "--no-auth"]) == 1
+    assert "remote server" in capsys.readouterr().err
+    assert not (tmp_path / ".cairn").exists()
+    monkeypatch.setattr("uvicorn.Server.run", lambda *args, **kwargs: None)
+    assert main(["--repo", str(tmp_path / "explicit"), "server", "--no-auth", "--port", "0"]) == 0
+    assert (tmp_path / "explicit/metadata.sqlite3").exists()
