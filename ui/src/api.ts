@@ -26,16 +26,18 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   return response.json();
 }
 export const post = <T,>(path: string, body: unknown, signal?: AbortSignal) => api<T>(path, {method: 'POST', body: JSON.stringify(body), signal});
-export function useResource<T>(path: string | null, revision = 0, cache = false) {
+export function useResource<T>(path: string | null, revision = 0, cache = false, immutable = false) {
   const [state, setState] = useState<{data?: T; error?: Error; loading: boolean}>(() => ({data:cache && path ? readView<T>(path) : undefined, loading:!(cache && path && readView<T>(path))}));
   useEffect(() => {
     const controller = new AbortController();
+    const cached = cache && path ? readView<T>(path) : undefined;
+    if (immutable && cached !== undefined) {setState({data:cached,loading:false});return;}
     setState(previous => ({...previous, loading: !!path && !previous.data}));
     if (path) api<T>(path, {signal: controller.signal}).then(data => {if(controller.signal.aborted)return;if(cache){const previous=readView<T>(path);if(previous!==undefined&&JSON.stringify(previous)===JSON.stringify(data))data=previous;else writeView(path,data);}setState(previous=>{const stable=previous.data===data||(cache&&previous.data!==undefined&&JSON.stringify(previous.data)===JSON.stringify(data))?previous.data:data;return previous.data===stable&&!previous.loading&&!previous.error?previous:{data:stable, loading:false};});}).catch(error => {
       if (!controller.signal.aborted) setState(previous=>({...previous,error, loading: false}));
     });
     return () => controller.abort();
-  }, [path, revision, cache]);
+  }, [path, revision, cache, immutable]);
   return state;
 }
 export const projectPath = (project: string) => `/p/${encodeURIComponent(project)}`;

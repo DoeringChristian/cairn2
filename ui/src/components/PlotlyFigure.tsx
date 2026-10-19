@@ -10,8 +10,8 @@ export function PlotlyFigure({spec,src}: {spec?:unknown;src?:string}) {
     const node=host.current!;let closed=false,resize:ResizeObserver|undefined,purge:(()=>void)|undefined;
     const controller = new AbortController();
     const render = async()=>{
-      const Plotly=await import('plotly.js-dist-min');if(closed)return;
-      const figure=(src?await api(src,{signal:controller.signal}):spec) as {data:Data[];layout?:Partial<Layout>};if(closed)return;
+      const [Plotly,payload]=await Promise.all([import('plotly.js-dist-min'),src?api(src,{signal:controller.signal}):Promise.resolve(spec)]);if(closed)return;
+      const figure=payload as {data:Data[];layout?:Partial<Layout>};if(closed)return;
       if(!figure||!Array.isArray(figure.data))throw new Error('Invalid Plotly figure');
       const css=getComputedStyle(node),color=(name:string)=>css.getPropertyValue(name).trim();
       const axis={gridcolor:color('--line'),zerolinecolor:color('--line'),linecolor:color('--line'),automargin:true};

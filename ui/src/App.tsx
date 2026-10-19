@@ -1,10 +1,11 @@
+import { FileText, FlaskConical, Boxes } from 'lucide-react';
 import { clearViews, scopeViews } from './viewCache';
 import { invalidateLists, scopeListCache } from './listCache';
 import { setRefreshPaused, useRefresh, useRefreshMode } from './refresh';
 import { useEffect, useState, type FormEvent } from 'react';
-import { Link, NavLink, Route, Routes, useLocation } from 'react-router-dom';
+import { Link, Route, Routes, useLocation, useNavigate, matchPath } from 'react-router-dom';
 import { api, post, useResource, projectPath, type Project } from './api';
-import { Button, ErrorNote, Field, Hero, Loading } from './components';
+import { Button, ErrorNote, Field, Hero, Loading, Select } from './components';
 import { ProjectsPage, ProjectPage } from './pages/Projects';
 import { ArtifactPage } from './pages/Artifact';
 import { PalettePage } from './pages/Palette';
@@ -35,14 +36,25 @@ function Login({ onLogin }: {onLogin: () => void}) {
 }
 function Rail({ authenticated, noAuth, logout }: {authenticated: boolean; noAuth: boolean; logout: () => void}) {
   const [open, setOpen] = useState(false);
-  const location = useLocation();
+  const location = useLocation(), navigate = useNavigate();
+  const project = matchPath('/p/:project/*', location.pathname)?.params.project || '';
+  const view = new URLSearchParams(location.search).get('view') || 'reports';
+  const inList = location.pathname === projectPath(project);
   const pulse = useRefresh(authenticated), paused = useRefreshMode();
   const projects = useResource<Project[]>(authenticated ? '/ui-api/projects' : null, pulse);
-  useEffect(() => setOpen(false), [location.pathname]);
+  useEffect(() => setOpen(false), [location.pathname, location.search]);
   return <aside className={`rail ${open ? 'open' : ''}`}><Link className="brand" to="/"><span>C</span><span className="site-title">Cairn</span></Link>
     <button className="rail-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>Browse</button>
-    <section className="report-list"><p className="rail-label">Repository</p><nav><NavLink to="/" end>All projects</NavLink></nav></section>
-    {authenticated && <section className="report-list"><p className="rail-label">Projects</p><nav>{projects.data?.map(p => <NavLink key={p.name} to={projectPath(p.name)}>{p.name}</NavLink>)}</nav></section>}
+    {authenticated && <section className="report-list workspace-navigation">
+      <Select label="Project" value={project} choices={[{value:'',label:'All projects'},...(projects.data||[]).map(p=>({value:p.name,label:p.name,note:`${p.runs} runs · ${p.reports} reports`}))]}
+        onChange={value=>navigate(value ? `${projectPath(value)}?view=${view}` : '/')}/>
+      <nav aria-label="Project navigation">{[
+        {value:'reports',label:'Reports',Icon:FileText},
+        {value:'runs',label:'Runs',Icon:FlaskConical},
+        {value:'artifacts',label:'Artifacts',Icon:Boxes},
+      ].map(({value,label,Icon})=><Link key={value} to={project ? `${projectPath(project)}?view=${value}` : '/'}
+        aria-current={project && inList && view===value ? 'page' : undefined}><Icon size={18} aria-hidden="true"/>{label}</Link>)}</nav>
+    </section>}
     <div id="report-toc-slot"/>
     <div className="rail-note"><p>{noAuth ? "Development · authentication off" : "Evidence worth keeping."}</p><div className="rail-links"><button className="text-button" onClick={()=>setRefreshPaused(!paused)}>{paused?'Resume auto-refresh':'Auto-refresh · 5s'}</button><Link to="/palette">Components</Link>{authenticated && !noAuth && <button className="text-button" onClick={logout}>Log out</button>}</div></div>
   </aside>;

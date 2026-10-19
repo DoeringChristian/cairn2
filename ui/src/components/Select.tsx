@@ -43,7 +43,7 @@ export function Select({ label, value, choices, onChange }: { label: string; val
         <ul className="select-list" role="listbox" id={id} aria-label={label} ref={list}>
           {choices.map((c, i) => (
             <li key={c.value} id={`${id}-${i}`} role="option" aria-selected={c.value === value} className={i === active ? "active" : undefined}
-              onPointerEnter={() => setActive(i)} onPointerDown={e => e.preventDefault()} onClick={() => choose(i)}>
+              onPointerEnter={() => setActive(i)} onPointerDown={e => { if (e.pointerType === 'mouse') e.preventDefault(); }} onClick={() => choose(i)}>
               <span>{c.label}</span>{c.note && <small>{c.note}</small>}
             </li>
           ))}

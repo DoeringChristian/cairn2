@@ -14,8 +14,8 @@ async function fits(page: Page, width: number) {
         await fits(page,viewport.width);
         if (viewport.width <= 760) {
           await page.getByRole('button',{name:'Browse',exact:true}).tap();
-          await expect(page.getByRole('link',{name:'All projects',exact:true})).toBeVisible();
-          await page.locator('.rail').getByRole('link',{name:'neural-rendering',exact:true}).tap();
+          await page.locator('.rail').getByRole('button',{name:'Project',exact:true}).tap();
+          await page.getByRole('option',{name:/neural-rendering/}).tap();
           await expect(page.getByRole('button',{name:'Browse',exact:true})).toHaveAttribute('aria-expanded','false');
         }
         await page.goto('/p/neural-rendering?view=runs');

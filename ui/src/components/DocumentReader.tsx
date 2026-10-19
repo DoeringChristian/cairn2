@@ -127,7 +127,7 @@ function OutputView({output,base,source,blobs,labels,htmlUrl,formatVersion=1}: {
 export const DocumentReader = memo(function DocumentReader({version,blobs,project,documentVersion=1}: {version:string;blobs:BlobRef[];project:string;documentVersion?:number}) {
   const container=useRef<HTMLElement>(null);
   const base=`/ui-api/reports/${encodeURIComponent(version)}/`;
-  const {data,error,loading}=useResource<Document>(base+(documentVersion===2?'document.json':'preview.json'),0,true);
+  const {data,error,loading}=useResource<Document>(base+(documentVersion===2?'document.json':'preview.json'),0,true,true);
   const renderedBlocks=useMemo(()=>data?.format==='cairn/document'&&[1,2].includes(data.version)?data.blocks.map((block,blockIndex)=>{
     const caption=block.options?.['fig-cap']||block.options?.['tbl-cap'];
     return <div className="native-block" key={block.id} id={block.label||block.id} data-source-path={block.source.path} data-line-start={block.source.line_start} data-line-end={block.source.line_end}>
