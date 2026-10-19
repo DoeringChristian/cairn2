@@ -17,9 +17,12 @@ def main():
     destination = run.client.destination
     print(f"Repository: {destination}")
 
-    dataset = run.client.start("datasets", "showcase-samples")
-    dataset.finish(value=cairn.Table([{"sample": n, "weight": 1 / 32} for n in range(32)]))
-    cairn.use("datasets/showcase-samples@latest", role="training-data")
+    with run.client.start("datasets", "showcase-samples") as dataset:
+        dataset.capture(
+            cairn.Table([{"sample": n, "weight": 1 / 32} for n in range(32)]),
+            name="samples",
+        )
+    cairn.use(dataset.id, role="training-data")
 
     for step in range(60):
         loss = round(math.exp(-step / 18) + 0.02, 6)
