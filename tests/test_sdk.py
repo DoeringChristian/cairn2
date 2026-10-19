@@ -88,7 +88,7 @@ def test_capture_consumption_download_and_generic_kind(client, tmp_path):
     source = tmp_path / "input.txt"
     source.write_text("original")
     artifact = client.start("custom-result", "weights")
-    artifact.capture(source)
+    artifact.add(source)
     source.write_text("mutated")
     publication = artifact.finish(value=File(b"weights", name="weights.bin"))
     reader = client.resolve(publication["id"])
@@ -170,3 +170,67 @@ def test_log_preserves_explicit_wall_time_and_does_not_mutate_input(client, monk
         where={"path": "/_wall_time", "op": "gt", "value": 1710000000}
     )
     assert len(filtered) == 1 and filtered[0]["data"]["loss"] == 0.2
+
+
+def test_artifact_context_add_restores_run_and_can_finish_value(tmp_path):
+    def scenario():
+        run = cairn.init(tmp_path / "repo", project="study", provenance=False)
+        with cairn.artifact("datasets", "samples") as dataset:
+            assert dataset.client is not run.client
+            cairn.add(Table([{"sample": 1}]), name="samples")
+            with cairn.artifact("datasets", "nested") as nested:
+                cairn.finish(value=2)
+            cairn.log({"dataset-note": True})
+        cairn.use(dataset.id, role="training-data")
+        cairn.log(loss=0.1)
+        cairn.finish(value=3)
+        with Client(tmp_path / "repo", project="study") as reader:
+            assert reader.resolve(nested.id).read() == 2
+            result = reader.resolve(dataset.id)
+            assert result.descriptor["manifest"]["captures"]["samples"]
+            assert len(result.records()) == 1
+            assert reader.resolve(run.id).records()[0]["data"]["loss"] == 0.1
+        assert not hasattr(cairn, "capture")
+        assert not hasattr(dataset, "capture")
+
+    contextvars.Context().run(scenario)
+
+
+def test_artifact_failure_restores_context_and_standalone_discovery(tmp_path, monkeypatch):
+    monkeypatch.setenv("CAIRN_REPO", str(tmp_path / "repo"))
+    monkeypatch.delenv("CAIRN_URL", raising=False)
+
+    def scenario():
+        with cairn.artifact("datasets", "parent", project="study") as parent:
+            with (
+                pytest.raises(ValueError, match="failed"),
+                cairn.artifact("datasets", "child") as child,
+            ):
+                raise ValueError("failed")
+            cairn.log(restored=True)
+        assert parent.client._closed and child.client._closed
+        with Client(tmp_path / "repo", project="study") as reader:
+            assert reader.resolve(child.id).descriptor["manifest"]["outcome"] == "failed"
+            assert reader.resolve(parent.id).records()[0]["data"]["restored"] is True
+        with pytest.raises(ValidationError):
+            cairn.log(outside=True)
+
+    contextvars.Context().run(scenario)
+
+
+def test_implicit_reports_after_finish(tmp_path):
+    from cairn.reports import build, publish
+
+    def scenario():
+        run = cairn.init(tmp_path / "repo", project="study", provenance=False)
+        cairn.finish(value=1)
+        source = tmp_path / "report.qmd"
+        source.write_text("---\ncairn:\n  inputs:\n    run: " + run.id + "\n---\n# Example\n")
+        result = build(source, tmp_path / "report")
+        published = publish(result.path, name="example")
+        with Client(tmp_path / "repo", project="study") as reader:
+            report = reader.resolve(published["id"])
+            assert report.descriptor["project"] == "study"
+            assert report.descriptor["manifest"]["dependencies"][0]["artifact_id"] == run.id
+
+    contextvars.Context().run(scenario)

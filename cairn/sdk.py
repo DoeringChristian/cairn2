@@ -93,7 +93,7 @@ class Client:
         run = self.start("runs", name or new_id("run"))
         run.update(information)
         for capture_name, content in captures.items():
-            run.capture(content, name=capture_name)
+            run.add(content, name=capture_name)
         return run
 
     def attach(self, artifact_id):
@@ -249,7 +249,7 @@ class Artifact:
             raise ValidationError("Metadata updates must be dictionaries")
         return self._append("metadata", metadata)
 
-    def capture(self, source, *, name=None):
+    def add(self, source, *, name=None):
         if isinstance(source, (str, os.PathLike)):
             path = Path(source)
             value = Directory(path) if path.is_dir() else File(path)
@@ -522,6 +522,67 @@ def init(
     return run
 
 
+def _implicit_client(destination=None, *, project=None, token=None, outbox=None):
+    """Open an independently owned client using the current context's defaults."""
+    current = _default.get()
+    previous = current.client if current is not None else None
+    if destination is None and previous is not None:
+        destination = previous.destination
+        if token is None:
+            token = previous.token
+        if outbox is None:
+            outbox = previous._outbox
+    return Client(
+        destination,
+        project=project if project is not None else previous.project if previous else "default",
+        token=token,
+        outbox=outbox,
+    )
+
+
+class _ContextArtifact(Artifact):
+    def __enter__(self):
+        if getattr(self, "_context_token", None) is not None:
+            raise Conflict("This artifact context is already entered")
+        self._context_token = _default.set(self)
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        try:
+            # Explicit finish(value=...) is allowed inside this convenience scope.
+            if self.result is None:
+                super().__exit__(exc_type, exc, traceback)
+        finally:
+            try:
+                self.client.close()
+            finally:
+                _default.reset(self._context_token)
+                self._context_token = None
+
+
+def artifact(namespace, name, *, destination=None, project=None, token=None, outbox=None):
+    """Start an artifact; a with block temporarily targets top-level SDK calls at it.
+
+    Inherit the current run's repository/project, or use normal discovery without
+    a run. The returned handle owns its client and finishes on context exit.
+    """
+    client = _implicit_client(destination, project=project, token=token, outbox=outbox)
+    try:
+        client._ensure_delivery()
+        args = {"project": client.project, "namespace": namespace, "name": name}
+        response = (
+            client.delivery.start("start", args)
+            if client.delivery
+            else client.backend.start(**args)
+        )
+        handle = _ContextArtifact(client, response)
+        handle._owns_client = True
+        return handle
+    except BaseException:
+        client.close()
+        raise
+
+
 def _current():
     artifact = _default.get()
     if artifact is None:
@@ -541,8 +602,8 @@ def update(metadata):
     return _current().update(metadata)
 
 
-def capture(source, *, name=None):
-    return _current().capture(source, name=name)
+def add(source, *, name=None):
+    return _current().add(source, name=name)
 
 
 def use(ref, *, role="input"):

@@ -14,11 +14,9 @@ from cairn.reports import build, publish
 def main():
     project = "neural-rendering"
     run = cairn.init(project=project, name="showcase-baseline", config={"seed": 42, "samples": 32})
-    destination = run.client.destination
-    print(f"Repository: {destination}")
 
-    with run.client.start("datasets", "showcase-samples") as dataset:
-        dataset.capture(
+    with cairn.artifact("datasets", "showcase-samples") as dataset:
+        cairn.add(
             cairn.Table([{"sample": n, "weight": 1 / 32} for n in range(32)]),
             name="samples",
         )
@@ -30,13 +28,12 @@ def main():
 
     cairn.finish(value={"loss": 0.018, "psnr": 34.2, "converged": True})
 
-    with cairn.Client(destination, project=project) as client:
-        source = Path(__file__).parent / "report-showcase/report.qmd"
-        output = Path("build/report-showcase") / run.id
-        result = build(source, output, client=client)
-        publication = publish(result.path, client=client, name="report-field-guide")
-        print(f"Report files: {result.path}")
-        print(f"Published report: {publication['id']} (project: {project})")
+    source = Path(__file__).parent / "report-showcase/report.qmd"
+    output = Path("build/report-showcase") / run.id
+    result = build(source, output)
+    publication = publish(result.path, name="report-field-guide")
+    print(f"Report files: {result.path}")
+    print(f"Published report: {publication['id']} (project: {project})")
 
 
 if __name__ == "__main__":

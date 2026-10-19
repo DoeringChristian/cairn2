@@ -832,6 +832,14 @@ def build(source, output=None, *, client=None, timeout=120, kernel_name="python3
     Equations use ``$$...$$ {#eq-name}`` or ``$$...$$ (eq-name)``; headings/images use ``{#sec-name}`` or
     ``{#fig-name}``. Static rich HTML is displayed in a restricted iframe.
     """
+    if client is None:
+        from .sdk import _default, _implicit_client
+
+        if _default.get() is not None:
+            with _implicit_client() as implicit:
+                return build(
+                    source, output, client=implicit, timeout=timeout, kernel_name=kernel_name
+                )
     deps = _dependencies()
     nbformat, yaml, _, NotebookClient, *_ = deps
     source = Path(source).absolute()
@@ -1088,8 +1096,13 @@ def _validated_bundle(directory: Path) -> tuple[dict, list]:
     return manifest, [*files, _file_info(directory / "manifest.json", "manifest.json")]
 
 
-def publish(build_directory, *, client, name=None) -> dict:
+def publish(build_directory, *, client=None, name=None) -> dict:
     """Publish a verified complete bundle as an ordinary report artifact."""
+    if client is None:
+        from .sdk import _implicit_client
+
+        with _implicit_client() as implicit:
+            return publish(build_directory, client=implicit, name=name)
     directory = Path(build_directory).absolute()
     manifest, files = _validated_bundle(directory)
     name = name or Path(manifest["source"]).stem

@@ -54,7 +54,7 @@ print(run.id, publication["number"])
 ```
 
 `cairn.init()` installs a context-local default handle and returns that same
-explicit handle. `log`, `track`, `capture`, `update`, `use`, `flush`,
+explicit handle. `log`, `track`, `add`, `update`, `use`, `flush`,
 and `finish` also exist on the handle. Use explicit clients when working with
 several repositories or runs:
 
@@ -68,6 +68,26 @@ with Client("./results") as client:
         run.update({"baseline_loss": baseline.read()["final_loss"]})
     print(run.id, run.result["number"])
 ```
+
+For a standalone dataset or other artifact, no explicit client is needed:
+
+```python
+with cairn.artifact("datasets", "samples") as dataset:
+    cairn.add(cairn.Table([{"sample": 0, "weight": 1.0}]), name="samples")
+cairn.use(dataset.id, role="training-data")
+```
+
+The artifact inherits the current run's repository and project, or uses normal
+discovery when no run exists. Optional `destination=` and `project=` override
+these defaults. Inside the block, top-level calls target the artifact; exiting
+restores the previous run. Use `cairn.finish(value=...)` inside the block to
+set its main value explicitly. Otherwise it finishes automatically.
+`add()` replaces the former Python `capture()` method; no alias is retained.
+It stores named files or typed values, not environment metadata.
+
+After `cairn.init()`, report `build()` and `publish()` can omit `client=`:
+they inherit that run's repository and project even after the run finishes.
+Explicit clients remain supported.
 
 An artifact context finishes on normal exit and requests a failed outcome when
 its body raises. A successfully finished `cairn.init()` handle closes the client
@@ -94,7 +114,7 @@ Source archives exclude repository internals, common credential paths and symlin
 are bounded; provenance metadata records omissions and collection errors. Outside
 Git, capture is limited to the entry script and known dependency files in the
 working directory. Capture happens at initialization, so files changed later
-need an explicit `run.capture(...)`. No raw environment-variable dump is taken.
+need an explicit `run.add(...)`. No raw environment-variable dump is taken.
 The archive records evidence; it does not promise a fully reproducible container.
 Generic `client.start(...)` performs no automatic provenance capture.
 
@@ -127,7 +147,7 @@ require finished artifacts. There is no revision or snapshot API. Starting again
 under the same name creates a new artifact ID; finishing assigns the next label.
 
 `File`, `Directory`, `Image`, `Array`, `Table`, and `Figure` wrap common media.
-`capture(path)` records a named file or directory snapshot. `track(value,
+`add(path)` records a named file or directory snapshot. `track(value,
 metadata=None, key="value")` writes a record containing a value. `TypedValue`
 supports custom formats with explicit blob and artifact references; unknown
 formats remain inspectable through `StoredValue`. No pickle-based object codec

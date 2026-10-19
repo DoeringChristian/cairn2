@@ -28,7 +28,7 @@ def test_remote_journal_recovery_lost_ack_and_immutable_file(tmp_path, monkeypat
 
             with client.delivery._dispatch:
                 monkeypatch.setattr(client.backend, "info", offline)
-                artifact.capture(source)
+                artifact.add(source)
                 logged_after = time.time()
                 for index in range(50):
                     artifact.log({"sample": index, "split": "test"})
@@ -275,3 +275,33 @@ def test_capacity_cleanup_network_failure_preserves_original_error(tmp_path, mon
             artifact.finish(metadata=metadata, timeout=5)
         assert artifact._finish_args is None
         assert artifact.finish(value="corrected", timeout=5)["state"] == "finished"
+
+
+def test_top_level_artifact_inherits_remote_run_and_restores_it(tmp_path):
+    import contextvars
+
+    with closing(Repository(tmp_path / "repo")) as repository, serve(repository) as url:
+
+        def scenario():
+            run = cairn.init(
+                url,
+                project="study",
+                token="test-token",
+                outbox=tmp_path / "outbox",
+                provenance=False,
+            )
+            with cairn.artifact("datasets", "samples") as dataset:
+                cairn.add(cairn.Table([{"sample": 1}]), name="samples")
+            assert not run.client._closed
+            cairn.use(dataset.id, role="training-data")
+            cairn.log(loss=0.2)
+            cairn.finish()
+            descriptor = repository.resolve(dataset.id)
+            assert descriptor["project"] == "study"
+            assert descriptor["manifest"]["captures"]["samples"]
+            assert (
+                repository.resolve(run.id)["manifest"]["dependencies"][0]["artifact_id"]
+                == dataset.id
+            )
+
+        contextvars.Context().run(scenario)

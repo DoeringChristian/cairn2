@@ -125,6 +125,19 @@ and captures. `finish()` returns the finished descriptor; `.id` stays unchanged.
 `Client.resolve()` returns a `Reader` only for a finished artifact. `use()` records
 a dependency on that exact ID. No revision ID or snapshot API is exposed.
 
+`cairn.artifact(namespace, name, *, destination=None, project=None, token=None,
+outbox=None)` starts an independently owned artifact handle. Unspecified
+destination/project inherit the context-local artifact or run, falling back to
+normal discovery and the default project. Its context manager temporarily
+installs it as the default, restores the previous handle on exit, and finishes
+on normal exit or records failure on exceptional exit unless already finished.
+The Python `add()` method replaces `capture()` without an alias; the persisted
+`capture` entry kind is unchanged. `cairn.init()` remains the run entry point.
+Report build/publish may inherit the context's client configuration (including
+after finish); explicit clients take precedence. Without a context, publish
+uses ordinary discovery, while build retains its explicit-client requirement
+for declared inputs.
+
 Reports execute QMD locally, pin declared finished artifact IDs, capture source,
 outputs and package information, then upload an ordinary report artifact. The
 supplied report reader scopes reads to those declared inputs; independent Python
