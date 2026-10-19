@@ -64,9 +64,9 @@ def test_remote_journal_recovery_lost_ack_and_immutable_file(tmp_path, monkeypat
                 assert all(
                     logged_after <= row["data"]["_wall_time"] <= logged_before for row in records
                 )
-                assert reader.download(
-                    "captured.txt", to=tmp_path / "restored.txt"
-                ).read_text() == ("captured before disconnection")
+                assert reader.download("captured.txt", to=tmp_path / "restored").read_text() == (
+                    "captured before disconnection"
+                )
                 assert reader.descriptor["manifest"]["metadata"]["config"] == {"seed": 7}
                 assert recovered.delivery.pending() == 0
                 assert lost
@@ -105,7 +105,10 @@ def test_default_contexts_release_delivery_threads_and_http_connections(tmp_path
         clients = []
         for index in range(5):
             with cairn.init(
-                url, name=f"owned-{index}", token="test-token", outbox=tmp_path / "outbox"
+                name=f"owned-{index}",
+                repo=url,
+                token="test-token",
+                outbox=tmp_path / "outbox",
             ) as artifact:
                 clients.append(artifact.client)
                 cairn.log({"sample": index})
@@ -125,7 +128,7 @@ def test_owned_pending_context_can_retry_after_resource_cleanup(tmp_path):
         Client(url, token="test-token", outbox=tmp_path / "worker") as client,
     ):
         artifact = cairn.init(
-            url, name="owned-pending", token="test-token", outbox=tmp_path / "owner"
+            name="owned-pending", repo=url, token="test-token", outbox=tmp_path / "owner"
         )
         worker = client.attach(artifact.id)
         original_client = artifact.client
@@ -149,7 +152,7 @@ def test_owned_pending_context_can_retry_after_resource_cleanup(tmp_path):
 
 def test_owned_completed_file_finish_retry_uses_no_connection(tmp_path):
     with closing(Repository(tmp_path / "repository")) as repository, serve(repository) as url:
-        artifact = cairn.init(url, token="test-token", outbox=tmp_path / "outbox")
+        artifact = cairn.init(repo=url, token="test-token", outbox=tmp_path / "outbox")
         value = File(b"durable bytes", name="value.bin")
         publication = artifact.finish(value=value, timeout=5)
         assert artifact.client._closed
@@ -284,8 +287,8 @@ def test_top_level_artifact_inherits_remote_run_and_restores_it(tmp_path):
 
         def scenario():
             run = cairn.init(
-                url,
-                project="study",
+                "study",
+                repo=url,
                 token="test-token",
                 outbox=tmp_path / "outbox",
                 provenance=False,
@@ -305,3 +308,20 @@ def test_top_level_artifact_inherits_remote_run_and_restores_it(tmp_path):
             )
 
         contextvars.Context().run(scenario)
+
+
+def test_remove_and_gc_through_server(tmp_path):
+    repository = Repository(tmp_path / "repository")
+    try:
+        with (
+            serve(repository) as url,
+            Client(url, token="test-token", outbox=tmp_path / "outbox") as client,
+        ):
+            artifact = client.start("datasets", "remote")
+            artifact.finish(timeout=5)
+            assert client.remove("datasets/remote@latest")["id"] == artifact.id
+            assert client.gc(grace_seconds=0)["artifacts"] == [artifact.id]
+            assert client.gc(apply=True, grace_seconds=0)["artifacts"] == [artifact.id]
+            assert client.gc(grace_seconds=0)["artifacts"] == []
+    finally:
+        repository.close()

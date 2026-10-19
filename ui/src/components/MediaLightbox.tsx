@@ -6,7 +6,7 @@ import { Scissors, SquareDashed, RotateCcw, Repeat, Copy, Check, CircleAlert, Pl
 import { MediaIconButton } from "./media/MediaIconButton";
 import { createPortal } from "react-dom";
 import { Button, LinkButton } from "./Button";
-import { useContext, useEffect, useRef, useState, type PointerEvent } from "react";
+import { useCallback, useContext, useEffect, useRef, useState, type PointerEvent } from "react";
 import {
   FIT_VIEW,
   fitRect,
@@ -19,12 +19,14 @@ import {
 import "./media/lightbox.css";
 import { Select } from "./Select";
 
+export type Playback = { time: number; playing: boolean };
 export type MediaItem = {
   url: string;
   mime: string;
   name?: string;
   fps?: number;
   time?: number;
+  playing?: boolean;
   source?: {
     artifact_ref?: string;
     hash?: string;
@@ -74,7 +76,7 @@ export function MediaLightbox({
 }: {
   items: MediaItem[];
   initialIndex?: number;
-  onClose: () => void;
+  onClose: (playback?: Playback) => void;
   onSelection?: (selection: MediaSelection) => void;
 }) {
   const artifact=useContext(ReportArtifactContext);
@@ -82,7 +84,12 @@ export function MediaLightbox({
   const dialog = useRef<HTMLDialogElement>(null),
     surface = useRef<HTMLDivElement>(null),
     stage = useRef<HTMLDivElement>(null),
-    video = useRef<HTMLVideoElement>(null);
+    video = useRef<HTMLVideoElement | null>(null);
+  const [videoNode, setVideoNode] = useState<HTMLVideoElement | null>(null);
+  const attachVideo = useCallback((node: HTMLVideoElement | null) => {
+    video.current = node;
+    setVideoNode(node);
+  }, []);
   const [index, setIndex] = useState(
     clamp(initialIndex, 0, Math.max(0, items.length - 1)),
   );
@@ -102,7 +109,7 @@ export function MediaLightbox({
   const [clipStart, setClipStart] = useState<number | null>(null),
     [clipEnd, setClipEnd] = useState<number | null>(null);
   const [selectingTime, setSelectingTime] = useState(false);
-  const [loop, setLoop] = useState(false),
+  const [loop, setLoop] = useState(true),
     [copied, setCopied] = useState(""),
     [failure, setFailure] = useState("");
   const [fps, setFps] = useState(clamp(item?.fps || 30, 1, 240)),
@@ -267,6 +274,12 @@ export function MediaLightbox({
         }
       : {}),
   };
+  const close = () =>
+    onClose(
+      isVideo && video.current
+        ? { time: video.current.currentTime, playing: !video.current.paused }
+        : undefined,
+    );
   const seek = (value: number) => {
     if (video.current && duration) {
       video.current.currentTime = clamp(value, 0, duration);
@@ -364,19 +377,26 @@ export function MediaLightbox({
       aria-label={item.name || "Media viewer"}
       onCancel={(event) => {
         event.preventDefault();
-        onClose();
+        close();
       }}
       onKeyDown={(event) => {
+        const target = event.target as HTMLElement;
         if (
-          event.defaultPrevented ||
-          (event.target as HTMLElement).matches("input,textarea,select")
-        )
+          isVideo &&
+          event.key === " " &&
+          !target.matches("textarea,select,input:not([type=range])")
+        ) {
+          event.preventDefault();
+          play();
+          return;
+        }
+        if (event.defaultPrevented || target.matches("input,textarea,select"))
           return;
         if (event.key === "Escape") {
           event.preventDefault();
           if (document.fullscreenElement === surface.current)
             void document.exitFullscreen();
-          else onClose();
+          else close();
         }
         if (event.key === "0") changeView(FIT_VIEW);
         if (event.key === "+" || event.key === "=")
@@ -396,14 +416,6 @@ export function MediaLightbox({
         if (isVideo && event.key === ",") {
           event.preventDefault();
           step(-1);
-        }
-        if (
-          isVideo &&
-          event.key === " " &&
-          !(event.target as HTMLElement).closest("button")
-        ) {
-          event.preventDefault();
-          play();
         }
         if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
           event.preventDefault();
@@ -441,7 +453,7 @@ export function MediaLightbox({
             <LinkButton small title="Download media" href={item.url} download={item.name || "media"}>
               <Download size={18} aria-hidden="true"/><span className="sr-only">Download media</span>
             </LinkButton>
-            <MediaIconButton autoFocus onClick={onClose} label="Close media viewer" icon={X}/>
+            <MediaIconButton autoFocus onClick={close} label="Close media viewer" icon={X}/>
           </div>
         </header>
         <div
@@ -569,7 +581,7 @@ export function MediaLightbox({
               {isVideo ? (
                 <video
                   key={index + ":" + item.url}
-                  ref={video}
+                  ref={attachVideo}
                   preload="metadata"
                   loop={loop && clipEnd === null}
                   playsInline
@@ -607,6 +619,12 @@ export function MediaLightbox({
                       );
                       setTime(node.currentTime);
                     }
+                    if (item.playing !== false)
+                      void node.play().catch(() => {
+                        node.muted = true;
+                        setMuted(true);
+                        return node.play().catch(() => undefined);
+                      });
                   }}
                   onTimeUpdate={(event) => {
                     const node = event.currentTarget;
@@ -736,7 +754,7 @@ export function MediaLightbox({
           <div className="prism-video-transport">
             <div className="prism-video-main">
               <MediaIconButton onClick={play} label={playing ? "Pause video" : "Play video"} icon={playing ? Pause : Play}/>
-              <VideoTimeline duration={duration} time={time} selecting={selectingTime} clip={selection.clip || null} onSeek={seek} onClip={clip=>{video.current?.pause();setClipStart(clip.start);setClipEnd(clip.end);}}/>
+              <VideoTimeline duration={duration} time={time} media={videoNode} selecting={selectingTime} clip={selection.clip || null} onSeek={seek} onClip={clip=>{video.current?.pause();setClipStart(clip.start);setClipEnd(clip.end);}}/>
               <span>
                 {time.toFixed(3)} / {duration.toFixed(3)} s
               </span>

@@ -1,4 +1,5 @@
-import { readView, writeView } from '../viewCache';
+import { clearViews, readView, writeView } from '../viewCache';
+import { invalidateLists } from '../listCache';
 import { ArtifactTags } from '../components/ArtifactTags';
 import { CopyId } from '../components/CopyId';
 import { useEffect, useState } from 'react';
@@ -10,6 +11,20 @@ import { BlobTable, Button, Crumbs, DataTable, DocumentReader, ErrorNote, Hero, 
 import { RecordsPanel } from './Records';
 
 type Detail = { target: string; selected: Artifact; history: Artifact[] };
+/** Two-step soft removal; artifacts that still depend on it keep it readable by ID. */
+function RemoveArtifact({artifact}: {artifact: Artifact}) {
+  const navigate = useNavigate();
+  const [confirming, setConfirming] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState<Error>();
+  const view = artifact.namespace === 'runs' ? 'runs' : artifact.namespace === 'reports' ? 'reports' : 'artifacts';
+  async function remove() {
+    setBusy(true); setError(undefined);
+    try { await api(`/ui-api/artifacts/${artifact.id}`, {method: 'DELETE'}); invalidateLists(); clearViews(); navigate(`${projectPath(artifact.project)}?view=${view}`); }
+    catch (e) { setError(e as Error); setBusy(false); }
+  }
+  if (!confirming) return <Button small onClick={() => setConfirming(true)}>Remove</Button>;
+  return <span className="remove-confirm" role="group" aria-label="Confirm removal"><span>Remove {artifact.number ? `v${artifact.number}` : 'this artifact'}?</span>
+    <Button small primary disabled={busy} onClick={() => void remove()}>{busy ? 'Removing…' : 'Remove'}</Button><Button small disabled={busy} onClick={() => setConfirming(false)}>Cancel</Button>{error && <ErrorNote error={error}/>}</span>;
+}
 
 export function ArtifactPage() {
   const { project = '', id, version } = useParams();
@@ -84,7 +99,7 @@ export function ArtifactPage() {
   return <main>
     <Hero eyebrow={<Crumbs items={[{ label: 'Projects', to: '/' }, { label: selected.project, to: projectPath(selected.project) }, { label: selected.namespace }]}/>} title={typeof metadata.title === 'string' ? metadata.title : selected.name} subtitle={typeof metadata.description === 'string' ? metadata.description : undefined} status={<StatusPill status={manifest?.outcome || selected.state}/>}/>
     {error && <ErrorNote error={error}/>}
-    <div className="detail-bar"><code className="wrap-any">{ref}</code><Select label="Artifact version" value={selected.id} choices={choices} onChange={target => navigate(artifactPath(selected.project, target))}/><Button small onClick={() => setRefresh(n => n + 1)}>Refresh</Button></div>
+    <div className="detail-bar"><code className="wrap-any">{ref}</code><Select label="Artifact version" value={selected.id} choices={choices} onChange={target => navigate(artifactPath(selected.project, target))}/><Button small onClick={() => setRefresh(n => n + 1)}>Refresh</Button><RemoveArtifact key={selected.id} artifact={selected}/></div>
     <div className="detail-facts"><span>{live ? 'Started' : 'Finished'} {when(selected.finished_at || selected.created_at)}</span><span>{selected.cutoff} entries</span><CopyId value={selected.id} short/></div>
     <ArtifactTags key={`tags:${selected.id}`} artifact={selected} onChange={()=>setRefresh(n=>n+1)}/>
     {live && <Hint>This artifact is {selected.state}. Its ID stays the same when it finishes.</Hint>}

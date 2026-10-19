@@ -3,7 +3,16 @@ import contextvars
 import pytest
 
 import cairn
-from cairn import Client, Conflict, File, NotPublished, Pending, Table, ValidationError
+from cairn import (
+    Client,
+    Conflict,
+    File,
+    NotFound,
+    NotPublished,
+    Pending,
+    Table,
+    ValidationError,
+)
 
 
 @pytest.fixture
@@ -16,7 +25,10 @@ def test_default_init_config_and_arbitrary_records(tmp_path, monkeypatch):
     monkeypatch.setattr("cairn.sdk.time.time", lambda: 1720000000.125)
     config = {"optimizer": {"rate": 0.01}}
     run = cairn.init(
-        tmp_path / "repo", name="training", config=config, metadata={"owner": "research"}
+        name="training",
+        repo=tmp_path / "repo",
+        config=config,
+        metadata={"owner": "research"},
     )
     assert run.namespace == "runs"
     try:
@@ -93,8 +105,22 @@ def test_capture_consumption_download_and_generic_kind(client, tmp_path):
     publication = artifact.finish(value=File(b"weights", name="weights.bin"))
     reader = client.resolve(publication["id"])
     assert reader.read().load() == b"weights"
-    assert reader.download(to=tmp_path / "saved.bin").read_bytes() == b"weights"
-    assert reader.download("input.txt", to=tmp_path / "input-copy.txt").read_text() == "original"
+    assert reader.download(to=tmp_path / "saved") == tmp_path / "saved"
+    assert (tmp_path / "saved/weights.bin").read_bytes() == b"weights"
+    assert (tmp_path / "saved/input.txt").read_text() == "original"
+    assert reader.files == ["input.txt"]
+    assert reader.file("input.txt").load() == b"original"
+    cached = reader.download("input.txt")
+    assert cached == tmp_path / "cache/artifacts" / reader.id / "input.txt"
+    assert cached.read_text() == "original"
+    (tmp_path / "data/sub").mkdir(parents=True)
+    (tmp_path / "data/sub/b.txt").write_text("nested")
+    folder = client.start("datasets", "folder")
+    folder.add(tmp_path / "data")
+    folder.finish()
+    root = tmp_path / "cache/artifacts" / folder.id
+    assert client.resolve(folder).download("data") == root / "data"
+    assert (root / "data/sub/b.txt").read_text() == "nested"
     downstream = client.run("consumer")
     consumed = downstream.use(reader, role="model")
     assert consumed.id == reader.id
@@ -174,19 +200,25 @@ def test_log_preserves_explicit_wall_time_and_does_not_mutate_input(client, monk
 
 def test_artifact_context_add_restores_run_and_can_finish_value(tmp_path):
     def scenario():
-        run = cairn.init(tmp_path / "repo", project="study", provenance=False)
+        run = cairn.init("study", repo=tmp_path / "repo", provenance=False)
         with cairn.artifact("datasets", "samples") as dataset:
             assert dataset.client is not run.client
             cairn.add(Table([{"sample": 1}]), name="samples")
             with cairn.artifact("datasets", "nested") as nested:
                 cairn.finish(value=2)
             cairn.log({"dataset-note": True})
-        cairn.use(dataset.id, role="training-data")
+        cairn.use(dataset, role="training-data")
+        assert repr(dataset).startswith("<Artifact datasets/samples@v1 id=")
+        assert run.version is None and dataset.version == 1
         cairn.log(loss=0.1)
         cairn.finish(value=3)
         with Client(tmp_path / "repo", project="study") as reader:
             assert reader.resolve(nested.id).read() == 2
             result = reader.resolve(dataset.id)
+            assert (
+                repr(result) == f"<Reader datasets/samples@v1 id={dataset.id[:12]} project='study'>"
+            )
+            assert result.version == 1
             assert result.descriptor["manifest"]["captures"]["samples"]
             assert len(result.records()) == 1
             assert reader.resolve(run.id).records()[0]["data"]["loss"] == 0.1
@@ -198,7 +230,6 @@ def test_artifact_context_add_restores_run_and_can_finish_value(tmp_path):
 
 def test_artifact_failure_restores_context_and_standalone_discovery(tmp_path, monkeypatch):
     monkeypatch.setenv("CAIRN_REPO", str(tmp_path / "repo"))
-    monkeypatch.delenv("CAIRN_URL", raising=False)
 
     def scenario():
         with cairn.artifact("datasets", "parent", project="study") as parent:
@@ -222,7 +253,7 @@ def test_implicit_reports_after_finish(tmp_path):
     from cairn.reports import build, publish
 
     def scenario():
-        run = cairn.init(tmp_path / "repo", project="study", provenance=False)
+        run = cairn.init("study", repo=tmp_path / "repo", provenance=False)
         cairn.finish(value=1)
         source = tmp_path / "report.qmd"
         source.write_text("---\ncairn:\n  inputs:\n    run: " + run.id + "\n---\n# Example\n")
@@ -234,3 +265,47 @@ def test_implicit_reports_after_finish(tmp_path):
             assert report.descriptor["manifest"]["dependencies"][0]["artifact_id"] == run.id
 
     contextvars.Context().run(scenario)
+
+
+def test_remove_falls_back_and_gc_purges_only_unreferenced(client):
+    first = client.start("runs", "train")
+    first.finish()
+    second = client.start("runs", "train")
+    second.finish()
+    consumer = client.run("consumer", provenance=False)
+    consumer.use(first)
+    consumer.finish()
+    assert client.remove("runs/train@latest")["id"] == second.id
+    assert client.resolve("runs/train@latest").id == first.id
+    assert client.remove(first)["retained_by"] == [consumer.id]
+    assert client.resolve(first.id).version == 1
+    with pytest.raises(NotPublished):
+        client.resolve("runs/train@latest")
+    assert client.gc(grace_seconds=0)["artifacts"] == [second.id]
+    assert client.gc(grace_seconds=3600)["artifacts"] == []
+    assert client.gc(apply=True, grace_seconds=0)["artifacts"] == [second.id]
+    with pytest.raises(NotFound):
+        client.resolve(second.id)
+    client.remove(consumer)
+    purged = client.gc(apply=True, grace_seconds=0)["artifacts"]
+    assert sorted(purged) == sorted([first.id, consumer.id])
+    with pytest.raises(NotFound):
+        client.resolve(first.id)
+
+
+def test_provenance_files_are_reserved_and_listed_separately(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with Client(tmp_path / "repo") as client:
+        run = client.run("sections", capture_source=False)
+        with pytest.raises(ValidationError, match="reserved"):
+            run.add(b"x", name="provenance/fake.txt")
+        run.add(b"notes", name="notes.txt")
+        run.finish()
+        reader = client.resolve(run)
+        assert reader.files == ["notes.txt"]
+        assert reader.provenance
+        assert all(name.startswith("provenance/") for name in reader.provenance)
+        root = reader.download()
+        assert [path.name for path in root.iterdir()] == ["notes.txt"]
+        assert reader.download("provenance") == root / "provenance"
+        assert all((root / name).is_file() for name in reader.provenance)

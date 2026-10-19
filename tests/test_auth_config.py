@@ -6,13 +6,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from cairn import model
-from cairn.config import ensure_token, resolve_destination, resolve_token, startup_urls
+from cairn.config import ensure_token, resolve_repo, resolve_token, startup_urls
 from cairn.server import create_app
 
 
 @pytest.fixture(autouse=True)
 def isolated_config(tmp_path, monkeypatch):
-    for name in ("CAIRN_TOKEN", "CAIRN_TOKEN_FILE", "CAIRN_URL", "CAIRN_REPO"):
+    for name in ("CAIRN_TOKEN", "CAIRN_TOKEN_FILE", "CAIRN_REPO"):
         monkeypatch.delenv(name, raising=False)
     home = tmp_path / "home"
     home.mkdir()
@@ -48,7 +48,7 @@ def test_json_project_tokens_and_relative_paths(tmp_path):
     nested = project / "nested"
     nested.mkdir()
     assert resolve_token(cwd=nested) == "secret"
-    assert resolve_destination(cwd=nested) == str(project / "data")
+    assert resolve_repo(cwd=nested) == str(project / "data")
     config.write_text(json.dumps({"token": "inline-secret"}))
     assert resolve_token(cwd=nested) == "inline-secret"
 
@@ -84,13 +84,13 @@ def test_invalid_configuration_is_actionable_without_secret_leak(tmp_path, monke
         ensure_token()
 
 
-def test_destination_precedence(tmp_path, monkeypatch):
-    assert resolve_destination() == str(tmp_path / ".cairn/repo")
+def test_repo_precedence(tmp_path, monkeypatch):
+    assert resolve_repo() == str(tmp_path / ".cairn/repo")
     monkeypatch.setenv("CAIRN_REPO", "local")
-    assert resolve_destination() == str(tmp_path / "local")
-    monkeypatch.setenv("CAIRN_URL", "https://example.test/cairn/")
-    assert resolve_destination() == "https://example.test/cairn"
-    assert resolve_destination("explicit") == str(tmp_path / "explicit")
+    assert resolve_repo() == str(tmp_path / "local")
+    monkeypatch.setenv("CAIRN_REPO", "https://example.test/cairn/")
+    assert resolve_repo() == "https://example.test/cairn"
+    assert resolve_repo("explicit") == str(tmp_path / "explicit")
 
 
 def test_startup_urls_include_hostname_and_never_query_tokens(monkeypatch):
@@ -265,7 +265,7 @@ def test_server_discovers_local_sdk_repository(mode, tmp_path, monkeypatch):
 def test_server_rejects_remote_discovery_but_explicit_repo_overrides(tmp_path, monkeypatch, capsys):
     from cairn.cli import main
 
-    monkeypatch.setenv("CAIRN_URL", "http://example.test")
+    monkeypatch.setenv("CAIRN_REPO", "http://example.test")
     assert main(["server", "--no-auth"]) == 1
     assert "remote server" in capsys.readouterr().err
     assert not (tmp_path / ".cairn").exists()

@@ -51,8 +51,8 @@ jobs:
       - run: npx --prefix ui playwright install --with-deps chromium webkit
       - name: Seed two report publications for history and comment tests
         run: |
-          CAIRN_REPO=/tmp/cairn-ci uv run python examples/build_report_showcase.py
-          CAIRN_REPO=/tmp/cairn-ci uv run python examples/build_report_showcase.py
+          CAIRN_REPO=/tmp/cairn-ci uv run python examples/run.py
+          CAIRN_REPO=/tmp/cairn-ci uv run python examples/run.py
       - name: Browser tests
         run: |
           uv run cairn --repo /tmp/cairn-ci server --host 127.0.0.1 --port 18765 --no-auth > /tmp/cairn-server.log 2>&1 &

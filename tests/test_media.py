@@ -17,7 +17,7 @@ from cairn.media import (
     decode,
     encode,
 )
-from cairn.model import ValidationError
+from cairn.model import IntegrityError, ValidationError
 
 
 class Blobs:
@@ -85,14 +85,30 @@ def test_directory_download_and_path_escape(tmp_path):
     (source / "nested/b.txt").write_text("B")
     value = decode(encode(Directory(source), backend.put_blob), backend)
     output = tmp_path / "output"
-    paths = value.download(output)
-    assert len(paths) == 2
+    assert value.download(output) == output
     assert (output / "nested/b.txt").read_text() == "B"
+    digest = hashlib.sha256(b"A").hexdigest()
+    assert (output / "a.txt").samefile(tmp_path / "cache/blobs" / digest)
     with pytest.raises(ValidationError):
         File(b"x", name="../escape")
     (source / "link").symlink_to(source / "a.txt")
     with pytest.raises(ValidationError, match="symlinks"):
         Directory(source)
+
+
+def test_download_cache_verifies_content_and_fetches_once(tmp_path):
+    backend = Blobs()
+    value = decode(encode(File(b"weights", name="w.bin"), backend.put_blob), backend)
+    digest = value.blobs[0]["digest"]
+    backend.values[digest] = b"tampered"
+    with pytest.raises(IntegrityError):
+        value.download(tmp_path / "a")
+    backend.values[digest] = b"weights"
+    first = value.download(tmp_path / "a")
+    backend.values.clear()
+    second = value.download(tmp_path / "b")
+    assert first.samefile(second) and second.read_bytes() == b"weights"
+    assert value.download(tmp_path / "a") == first
 
 
 def test_arrowless_table_is_typed_and_queryable_json():

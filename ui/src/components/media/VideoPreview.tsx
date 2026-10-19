@@ -7,6 +7,7 @@ import {
 } from "react";
 import { Pause, Play, Volume2, VolumeX } from "lucide-react";
 import { MediaOpenButton } from "./MediaOpenButton";
+import { useLiveTime } from "./VideoTimeline";
 import "./video-preview.css";
 
 type VideoState = {
@@ -25,6 +26,8 @@ const initial: VideoState = {
   volume: 1,
   error: "",
 };
+/** Videos paused by the viewer, or handed to the lightbox, stay paused when scrolled into view. */
+export const heldVideos = new WeakSet<HTMLVideoElement>();
 const formatTime = (value: number) =>
   `${Math.floor(value / 60)}:${String(Math.floor(value % 60)).padStart(2, "0")}`;
 
@@ -39,6 +42,7 @@ export function InlineVideoControls({
   label?: string;
 }) {
   const [state, setState] = useState<VideoState>(initial);
+  const time = useLiveTime(element, state.time);
   const enlarge = useRef(onEnlarge);
   enlarge.current = onEnlarge;
   useEffect(() => {
@@ -48,15 +52,14 @@ export function InlineVideoControls({
     }
     element.controls = false;
     element.playsInline = true;
+    element.loop = true;
+    element.muted = true;
     const originalRole = element.getAttribute("role"),
       originalTabIndex = element.getAttribute("tabindex");
     element.setAttribute("role", "button");
     element.tabIndex = 0;
     element.classList.add("prism-video-clickable");
-    const open = () => {
-      element.pause();
-      enlarge.current();
-    };
+    const open = () => enlarge.current();
     const key = (event: KeyboardEvent) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
@@ -89,7 +92,13 @@ export function InlineVideoControls({
     ];
     events.forEach((name) => element.addEventListener(name, read));
     read();
+    const visibility = new IntersectionObserver(([entry]) => {
+      if (!entry.isIntersecting) element.pause();
+      else if (!heldVideos.has(element)) void element.play().catch(() => undefined);
+    });
+    visibility.observe(element);
     return () => {
+      visibility.disconnect();
       events.forEach((name) => element.removeEventListener(name, read));
       element.removeEventListener("click", open);
       element.removeEventListener("keydown", key);
@@ -102,9 +111,12 @@ export function InlineVideoControls({
   }, [element]);
   async function toggle() {
     if (!element) return;
-    if (!element.paused) element.pause();
-    else
+    if (!element.paused) {
+      heldVideos.add(element);
+      element.pause();
+    } else
       try {
+        heldVideos.delete(element);
         await element.play();
       } catch {
         setState((previous) => ({
@@ -141,7 +153,7 @@ export function InlineVideoControls({
           aria-label="Video position"
           min={0}
           max={state.duration || 1}
-          value={Math.min(state.time, state.duration || state.time)}
+          value={Math.min(time, state.duration || time)}
           step={0.01}
           disabled={!state.duration}
           onChange={(event) => {
@@ -155,7 +167,7 @@ export function InlineVideoControls({
           }}
         />
         <output className="prism-inline-time" aria-label="Playback time">
-          {formatTime(state.time)} /{" "}
+          {formatTime(time)} /{" "}
           {state.duration ? formatTime(state.duration) : "—"}
         </output>
       </span>
@@ -192,12 +204,7 @@ export function InlineVideoControls({
             }
           }}
         />
-        <MediaOpenButton
-          onClick={() => {
-            element?.pause();
-            onEnlarge();
-          }}
-        />
+        <MediaOpenButton onClick={onEnlarge} />
       </span>
       {state.error && (
         <span role="alert" className="prism-inline-video-error">

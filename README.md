@@ -44,13 +44,13 @@ upload retries, and can be supplied explicitly for imported measurements.
 ```python
 import cairn
 
-run = cairn.init("./results", name="baseline", config={"learning_rate": 0.01})
+run = cairn.init("default", "baseline", repo="./results", config={"learning_rate": 0.01})
 cairn.log({"step": 0, "loss": 0.8})
 cairn.log({"step": 1, "loss": 0.3})
 cairn.update({"description": "Two recorded steps"})
 publication = cairn.finish(value={"final_loss": 0.3})
 assert publication["id"] == run.id
-print(run.id, publication["number"])
+print(run.id, run.version)
 ```
 
 `cairn.init()` installs a context-local default handle and returns that same
@@ -66,7 +66,7 @@ with Client("./results") as client:
         baseline = run.use("runs/baseline@latest", role="baseline")
         run.log(step=0, loss=0.25)
         run.update({"baseline_loss": baseline.read()["final_loss"]})
-    print(run.id, run.result["number"])
+    print(run.id, run.version)
 ```
 
 For a standalone dataset or other artifact, no explicit client is needed:
@@ -74,11 +74,11 @@ For a standalone dataset or other artifact, no explicit client is needed:
 ```python
 with cairn.artifact("datasets", "samples") as dataset:
     cairn.add(cairn.Table([{"sample": 0, "weight": 1.0}]), name="samples")
-cairn.use(dataset.id, role="training-data")
+cairn.use(dataset, role="training-data")
 ```
 
 The artifact inherits the current run's repository and project, or uses normal
-discovery when no run exists. Optional `destination=` and `project=` override
+discovery when no run exists. Optional `repo=` and `project=` override
 these defaults. Inside the block, top-level calls target the artifact; exiting
 restores the previous run. Use `cairn.finish(value=...)` inside the block to
 set its main value explicitly. Otherwise it finishes automatically.
@@ -103,10 +103,10 @@ manifests/lockfiles, and a bounded source archive. These are ordinary metadata a
 named file captures, available through the same reader/download API as other data.
 
 ```python
-with cairn.init("./results", capture_source=False) as run:
+with cairn.init(repo="./results", capture_source=False) as run:
     run.log({"loss": 0.2})  # Environment/dependencies, without source or diffs.
 
-with cairn.init("./results", provenance=False) as run:
+with cairn.init(repo="./results", provenance=False) as run:
     run.log({"loss": 0.1})  # Only explicit metadata, records and captures.
 ```
 
@@ -152,6 +152,19 @@ metadata=None, key="value")` writes a record containing a value. `TypedValue`
 supports custom formats with explicit blob and artifact references; unknown
 formats remain inspectable through `StoredValue`. No pickle-based object codec
 is used.
+
+Readers list added names with `reader.files` and return one as a value with
+`reader.file(name)` (`.load()`, `.open()`, `.download()`). `reader.download(name=None,
+to=None)` returns one path: the artifact folder, or the named file or folder in
+it. Added items keep their names; final-value files sit at the top level. Without
+`to`, the folder is `<cache>/artifacts/<id>/`. `<cache>` is `$CAIRN_CACHE_DIR`,
+else `$XDG_CACHE_HOME/cairn` or `~/.cache/cairn`. Content is fetched once into
+`<cache>/blobs/<sha256>`, verified, made read-only and hard-linked (or copied
+across filesystems) into the target; copy a file before editing it.
+
+Names under `provenance/` are reserved for Cairn and rejected by `add()`. They are
+not in `reader.files` or a whole-artifact download; `reader.provenance` lists them
+and `reader.download("provenance")` downloads them.
 
 JSON numbers must be finite, and integers must be in the portable exact range
 `-(2**53 - 1)` through `2**53 - 1`. Use typed `Array` values for wider integers or
@@ -211,17 +224,17 @@ cairn --repo ./results --project study artifact list --namespace runs --state fi
 
 ## Select a repository and authenticate
 
-Python clients and ordinary CLI commands use the following destination order:
+Python clients and ordinary CLI commands select the repo in this order:
 
-1. An explicit path/URL (`Client(...)`, `--repo`, or `--url`).
-2. `CAIRN_URL`, then `CAIRN_REPO`.
+1. An explicit path/URL (`repo=`, `Client(...)`, or `--repo`).
+2. `CAIRN_REPO`.
 3. The nearest project `.cairn` directory, or a `.cairn` JSON file containing
-   `url`, `repo`, or `destination`; discovery walks parent directories.
+   `repo`; discovery walks parent directories.
 4. `./.cairn/repo`.
 
 A path selects direct local storage. An HTTP(S) URL selects that server alone.
 Remote reads query the server; they do not combine server results with pending
-local writes. `server` uses the same destination discovery for local repositories;
+local writes. `server` uses the same repo discovery for local repositories;
 if discovery selects a remote URL, it asks for an explicit `--repo` instead.
 Administrative `repo` commands use direct storage configuration, with
 `./.cairn/repo` as their local default.
@@ -232,7 +245,7 @@ Bearer tokens are discovered in this order: explicit `token=`/`--token`,
 project JSON resolve beside that file. For example:
 
 ```json
-{"url": "https://cairn.example.org", "token_file": "./cairn-access-token"}
+{"repo": "https://cairn.example.org", "token_file": "./cairn-access-token"}
 ```
 
 The server uses one shared bearer token. It creates `.cairn/token` with mode
@@ -243,11 +256,11 @@ service supervision are deployment responsibilities.
 
 Remote Python writers stage immutable bytes and ordered events in a durable
 outbox before `log()` returns. The default location is
-`$XDG_STATE_HOME/cairn/outbox/<destination-hash>` or
-`~/.local/state/cairn/outbox/<destination-hash>`. `Client(outbox=...)` selects an
+`$XDG_STATE_HOME/cairn/outbox/<repo-hash>` or
+`~/.local/state/cairn/outbox/<repo-hash>`. `Client(outbox=...)` selects an
 explicit location. `flush(timeout=...)` waits for acknowledgements, and
 `Client.recover()` reopens recorded writers after a restart. A journal is bound
-to its destination and repository identity; it is delivery state, not another
+to its repo URL and repository identity; it is delivery state, not another
 queryable artifact repository. A new remote writer needs server acknowledgement
 before it can accept local records. Direct CLI lifecycle commands issue
 synchronous backend requests rather than providing offline queuing.
@@ -299,13 +312,13 @@ On another machine, copy the same token into `~/.config/cairn/token` with privat
 file permissions. Discovery reads that location automatically:
 
 ```sh
-cairn --url https://cairn.example.org info
-cairn --url https://cairn.example.org artifact list --namespace runs
+cairn --repo https://cairn.example.org info
+cairn --repo https://cairn.example.org artifact list --namespace runs
 ```
 
 ## Use the CLI
 
-Global destination/project/token flags precede the command. JSON inputs accept
+Global repo/project/token flags precede the command. JSON inputs accept
 inline JSON, `@path.json`, or `-` for standard input.
 
 ```sh
@@ -448,14 +461,31 @@ There is no HTTP bulk-transfer job service or automatic repository replication.
 
 ```sh
 cairn --repo ./results repo check --verify-blobs
-cairn --repo ./results repo gc                     # Dry run
-cairn --repo ./results repo gc --apply             # Apply eligible collection
 ```
 
-Garbage collection observes retained references, upload/read leases, and a grace
-period. It does not delete retained artifacts. Logical artifact deletion and
-explicit physical purge are available through the backend/maintenance Python API;
-purge refuses artifacts still referenced by retained evidence.
+## Remove artifacts and collect garbage
+
+`remove` soft-deletes one exact artifact: the reference resolves to an ID first.
+It disappears from listings and names; `@latest` falls back to the highest
+remaining finished version. Artifacts that still depend on it keep it readable by
+ID, and `retained_by` lists them. `gc` purges artifacts removed before the grace
+period that nothing else references, then content no artifact references. It is a
+dry run unless applied, and runs on the server when the repo is a URL.
+
+```sh
+cairn remove "runs/training@latest"
+cairn gc                                           # Dry run
+cairn gc --apply --grace-seconds 3600
+```
+
+```python
+client.remove("runs/training@v2")                  # or cairn.remove(...)
+client.gc(apply=True)
+```
+
+`cairn repo gc` runs the same collection directly against storage, for
+`--database-url` and S3 configurations. Collection also observes upload/read
+leases.
 
 ## Development and boundaries
 

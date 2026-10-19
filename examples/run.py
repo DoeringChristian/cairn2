@@ -13,14 +13,14 @@ from cairn.reports import build, publish
 
 def main():
     project = "neural-rendering"
-    run = cairn.init(project=project, name="showcase-baseline", config={"seed": 42, "samples": 32})
+    run = cairn.init(project, "showcase-baseline", config={"seed": 42, "samples": 32})
 
     with cairn.artifact("datasets", "showcase-samples") as dataset:
         cairn.add(
             cairn.Table([{"sample": n, "weight": 1 / 32} for n in range(32)]),
             name="samples",
         )
-    cairn.use(dataset.id, role="training-data")
+    cairn.use(dataset, role="training-data")
 
     for step in range(60):
         loss = round(math.exp(-step / 18) + 0.02, 6)

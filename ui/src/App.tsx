@@ -1,4 +1,4 @@
-import { FileText, FlaskConical, Boxes } from 'lucide-react';
+import { FileText, FlaskConical, Boxes, Layers } from 'lucide-react';
 import { clearViews, scopeViews } from './viewCache';
 import { invalidateLists, scopeListCache } from './listCache';
 import { setRefreshPaused, useRefresh, useRefreshMode } from './refresh';
@@ -52,6 +52,7 @@ function Rail({ authenticated, noAuth, logout }: {authenticated: boolean; noAuth
         {value:'reports',label:'Reports',Icon:FileText},
         {value:'runs',label:'Runs',Icon:FlaskConical},
         {value:'artifacts',label:'Artifacts',Icon:Boxes},
+        {value:'all',label:'All',Icon:Layers},
       ].map(({value,label,Icon})=><Link key={value} to={project ? `${projectPath(project)}?view=${value}` : '/'}
         aria-current={project && inList && view===value ? 'page' : undefined}><Icon size={18} aria-hidden="true"/>{label}</Link>)}</nav>
     </section>}

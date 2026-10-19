@@ -603,19 +603,43 @@ def purge_artifact(repository, artifact_id):
             raise Conflict(
                 "Retained evidence still references this artifact", details={"owners": incoming}
             )
-        conn.execute(blob_refs.delete().where(blob_refs.c.owner == artifact_id))
-        conn.execute(artifact_refs.delete().where(artifact_refs.c.owner == artifact_id))
-        conn.execute(comments_table.delete().where(comments_table.c.artifact_id == artifact_id))
-        conn.execute(aliases.delete().where(aliases.c.artifact_id == artifact_id))
-        conn.execute(
-            annotation_members.delete().where(annotation_members.c.artifact_id == artifact_id)
-        )
-        conn.execute(records.delete().where(records.c.artifact_id == artifact_id))
-        conn.execute(writers.delete().where(writers.c.artifact_id == artifact_id))
-        conn.execute(names.update().where(names.c.head == artifact_id).values(head=None))
-        conn.execute(artifacts.delete().where(artifacts.c.id == artifact_id))
-        # Names retain their counter; request receipts cannot resurrect deleted artifact IDs.
+        _purge(conn, [artifact_id])
         return {"id": artifact_id, "purged": True}
+
+
+def _purge(conn, identifiers):
+    """Remove rows of artifacts that no artifact outside identifiers references."""
+    for table in (blob_refs, artifact_refs):
+        conn.execute(table.delete().where(table.c.owner.in_(identifiers)))
+    for table in (comments_table, aliases, annotation_members, records, writers):
+        conn.execute(table.delete().where(table.c.artifact_id.in_(identifiers)))
+    conn.execute(names.update().where(names.c.head.in_(identifiers)).values(head=None))
+    # Names retain their counter; request receipts cannot resurrect deleted artifact IDs.
+    conn.execute(artifacts.delete().where(artifacts.c.id.in_(identifiers)))
+
+
+def _purgeable(conn, cutoff):
+    """Removed artifacts past the grace period that only other such artifacts reference."""
+    selected = set(
+        conn.execute(
+            sa.select(artifacts.c.id)
+            .where(artifacts.c.deleted_at.is_not(None), artifacts.c.deleted_at < cutoff)
+            .with_for_update()
+        ).scalars()
+    )
+    while selected:
+        held = set(
+            conn.execute(
+                sa.select(artifact_refs.c.artifact_id).where(
+                    artifact_refs.c.artifact_id.in_(selected),
+                    artifact_refs.c.owner.not_in(selected),
+                )
+            ).scalars()
+        )
+        if not held:
+            break
+        selected -= held
+    return sorted(selected)
 
 
 def collect_garbage(repository, *, grace_seconds=3600, dry_run=True):
@@ -623,17 +647,35 @@ def collect_garbage(repository, *, grace_seconds=3600, dry_run=True):
         raise ValidationError("Grace period cannot be negative")
     removed, candidates = [], []
     timestamp = time.time()
+    cutoff = datetime.fromtimestamp(timestamp - grace_seconds, UTC).isoformat()
     with repository._transaction(write=True) as conn:
         if _maintenance_active(conn):
-            return {"dry_run": dry_run, "pinned": True, "candidates": [], "removed": []}
+            return {
+                "dry_run": dry_run,
+                "pinned": True,
+                "artifacts": [],
+                "candidates": [],
+                "removed": [],
+            }
+        purged = _purgeable(conn, cutoff)
+        if not dry_run and purged:
+            _purge(conn, purged)
+    with repository._transaction(write=True) as conn:
+        if _maintenance_active(conn):
+            return {
+                "dry_run": dry_run,
+                "pinned": True,
+                "artifacts": purged,
+                "candidates": [],
+                "removed": [],
+            }
         candidates = [
             dict(row)
             for row in conn.execute(
                 sa.select(blobs)
                 .where(
                     blobs.c.lease_until <= timestamp,
-                    blobs.c.created_at
-                    < datetime.fromtimestamp(timestamp - grace_seconds, UTC).isoformat(),
+                    blobs.c.created_at < cutoff,
                     ~sa.exists(
                         sa.select(blob_refs.c.owner).where(blob_refs.c.digest == blobs.c.digest)
                     ),
@@ -688,6 +730,7 @@ def collect_garbage(repository, *, grace_seconds=3600, dry_run=True):
     return {
         "dry_run": dry_run,
         "pinned": False,
+        "artifacts": purged,
         "candidates": [row["digest"] for row in candidates],
         "removed": removed,
         "orphans": orphaned,

@@ -1196,16 +1196,39 @@ class Repository:
     def delete(self, artifact_id, *, request_id=None):
         def remove():
             artifact = self._artifact(conn, artifact_id, lock=True, deleted=True)
+            fallback = conn.execute(
+                sa.select(artifacts.c.id)
+                .where(
+                    self._name_condition(artifacts, artifact),
+                    artifacts.c.id != artifact_id,
+                    artifacts.c.state == "finished",
+                    artifacts.c.deleted_at.is_(None),
+                )
+                .order_by(artifacts.c.number.desc())
+                .limit(1)
+            ).scalar()
             conn.execute(
                 names.update()
                 .where(self._name_condition(names, artifact), names.c.head == artifact_id)
-                .values(head=None)
+                .values(head=fallback)
             )
             conn.execute(aliases.delete().where(aliases.c.artifact_id == artifact_id))
-            conn.execute(
-                artifacts.update().where(artifacts.c.id == artifact_id).values(deleted_at=now())
-            )
-            return {"id": artifact_id, "deleted": True}
+            if not artifact["deleted_at"]:
+                conn.execute(
+                    artifacts.update().where(artifacts.c.id == artifact_id).values(deleted_at=now())
+                )
+            retained_by = conn.execute(
+                sa.select(artifact_refs.c.owner)
+                .join(artifacts, artifacts.c.id == artifact_refs.c.owner)
+                .where(
+                    artifact_refs.c.artifact_id == artifact_id,
+                    artifact_refs.c.owner != artifact_id,
+                    artifacts.c.deleted_at.is_(None),
+                )
+                .distinct()
+                .order_by(artifact_refs.c.owner)
+            ).scalars()
+            return {"id": artifact_id, "deleted": True, "retained_by": list(retained_by)}
 
         with self._transaction(write=True) as conn:
             return self._once(conn, request_id, "delete", artifact_id, remove)
@@ -1250,3 +1273,8 @@ class Repository:
     def delete_comment(self, comment_id):
         with self._transaction(write=True) as conn:
             conn.execute(comments_table.delete().where(comments_table.c.id == comment_id))
+
+    def collect_garbage(self, *, grace_seconds=3600, dry_run=True):
+        from .ops import collect_garbage
+
+        return collect_garbage(self, grace_seconds=grace_seconds, dry_run=dry_run)

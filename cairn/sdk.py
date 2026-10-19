@@ -8,12 +8,22 @@ import hashlib
 import os
 import threading
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 from .contract import PUBLICATION_METADATA_LIMIT, PUBLICATION_VALUE_LIMIT
 from .delivery import Delivery, _binary_source
-from .media import Directory, File, StoredValue, TypedValue, decode, encode, references
+from .media import (
+    Directory,
+    File,
+    StoredValue,
+    TypedValue,
+    cache_root,
+    decode,
+    encode,
+    references,
+    save_blob,
+)
 from .model import (
     CapacityError,
     Conflict,
@@ -22,38 +32,41 @@ from .model import (
     ValidationError,
     canonical,
     new_id,
+    safe_path,
 )
 
 if TYPE_CHECKING:
     from .contract import RepositoryProtocol, StartResult
 
+SECTIONS = ("provenance",)
+
 
 class Client:
-    def __init__(self, destination=None, *, project="default", token=None, outbox=None):
-        from .config import resolve_destination
+    def __init__(self, repo=None, *, project="default", token=None, outbox=None):
+        from .config import resolve_repo
 
-        self.destination = resolve_destination(destination)
+        self.repo = resolve_repo(repo)
         self.project = project
         self.backend: RepositoryProtocol
         self.delivery = None
         self._outbox = None
         self._lifecycle_lock = threading.RLock()
         self._closed = False
-        if self.destination.startswith(("http://", "https://")):
+        if self.repo.startswith(("http://", "https://")):
             from .transport import HTTPRepository
 
-            self.backend = HTTPRepository(self.destination, token=token)
-            self.destination = self.backend.url
+            self.backend = HTTPRepository(self.repo, token=token)
+            self.repo = self.backend.url
             self.token = self.backend.token
             if outbox is None:
                 base = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
-                identity = hashlib.sha256(self.destination.encode()).hexdigest()[:24]
+                identity = hashlib.sha256(self.repo.encode()).hexdigest()[:24]
                 outbox = base / "cairn/outbox" / identity
             self._outbox = outbox
         else:
             from .storage import Repository
 
-            self.backend = Repository(self.destination)
+            self.backend = Repository(self.repo)
             self.token = None
 
     def _ensure_delivery(self):
@@ -62,7 +75,7 @@ class Client:
             if self._closed:
                 raise Conflict("Client is closed")
             if self._outbox is not None and self.delivery is None:
-                self.delivery = Delivery(self.backend, self._outbox, self.destination)
+                self.delivery = Delivery(self.backend, self._outbox, self.repo)
             return self.delivery
 
     def start(self, namespace, name):
@@ -93,7 +106,7 @@ class Client:
         run = self.start("runs", name or new_id("run"))
         run.update(information)
         for capture_name, content in captures.items():
-            run.add(content, name=capture_name)
+            run._add(content, capture_name)
         return run
 
     def attach(self, artifact_id):
@@ -113,8 +126,11 @@ class Client:
             return []
         return [Artifact(self, response) for response in self.delivery.recover()]
 
+    def __repr__(self):
+        return f"<Client repo={self.repo!r} project={self.project!r}>"
+
     def resolve(self, ref):
-        if isinstance(ref, Reader):
+        if isinstance(ref, (Artifact, Reader)):
             ref = ref.id
         descriptor = self.backend.resolve(ref, project=self.project)
         if descriptor["state"] != "finished":
@@ -145,6 +161,14 @@ class Client:
             cursor = page["next_cursor"]
             if cursor is None:
                 break
+
+    def remove(self, ref):
+        if isinstance(ref, (Artifact, Reader)):
+            ref = ref.id
+        return self.backend.delete(self.backend.resolve(ref, project=self.project)["id"])
+
+    def gc(self, *, apply=False, grace_seconds=3600):
+        return self.backend.collect_garbage(grace_seconds=grace_seconds, dry_run=not apply)
 
     def annotate(self, ref, patch, *, expected_etag=None):
         """Merge editable annotations; null deletes keys and arrays replace arrays."""
@@ -193,6 +217,17 @@ class Artifact:
         self._finish_request = new_id("request")
         self._lock = threading.RLock()
         self._owns_client = False
+
+    def __repr__(self):
+        ref = f"{self.namespace}/{self.name}"
+        if self.version:
+            ref += f"@v{self.version}"
+        state = "finished" if self.result is not None else "closed" if self._closed else "live"
+        return f"<Artifact {ref} id={self.id[:12]} {state} project={self.project!r}>"
+
+    @property
+    def version(self):
+        return self.result.get("number") if self.result else None
 
     def _encode(self, value, *, describe=False):
         if describe:
@@ -250,6 +285,9 @@ class Artifact:
         return self._append("metadata", metadata)
 
     def add(self, source, *, name=None):
+        return self._add(source, name, reserved=False)
+
+    def _add(self, source, name, *, reserved=True):
         if isinstance(source, (str, os.PathLike)):
             path = Path(source)
             value = Directory(path) if path.is_dir() else File(path)
@@ -261,9 +299,11 @@ class Artifact:
             value = source
             name = name or (source.data.get("name") if isinstance(source.data, dict) else None)
         else:
-            raise ValidationError("Capture expects a path, bytes or a typed value")
+            raise ValidationError("add() expects a path, bytes or a typed value")
         if not name:
-            raise ValidationError("A capture name is required for this typed value")
+            raise ValidationError("add() requires a name for this typed value")
+        if not reserved and name.split("/", 1)[0] in SECTIONS:
+            raise ValidationError(f'"{name.split("/", 1)[0]}/" is reserved for Cairn files')
         return self._append("capture", {"name": name, "value": value})
 
     def annotate(self, patch, *, expected_etag=None):
@@ -313,7 +353,7 @@ class Artifact:
             if self._owns_client and self.client._closed:
                 previous = self.client
                 self.client = Client(
-                    previous.destination,
+                    previous.repo,
                     project=previous.project,
                     token=previous.token,
                     outbox=previous._outbox,
@@ -409,6 +449,15 @@ class Reader:
         self._descriptor = copy.deepcopy(descriptor)
         self.id = descriptor["id"]
 
+    def __repr__(self):
+        info = self._descriptor
+        ref = f"{info['namespace']}/{info['name']}@v{info['number']}"
+        return f"<Reader {ref} id={self.id[:12]} project={info['project']!r}>"
+
+    @property
+    def version(self):
+        return self._descriptor["number"]
+
     @property
     def descriptor(self):
         return copy.deepcopy(self._descriptor)
@@ -453,51 +502,74 @@ class Reader:
                 break
         return result
 
-    def download(self, name=None, *, to):
+    @property
+    def files(self):
+        captures = self._descriptor["manifest"].get("captures", {})
+        return [name for name in captures if name.split("/", 1)[0] not in SECTIONS]
+
+    @property
+    def provenance(self):
+        return self._section("provenance")
+
+    def _section(self, section):
+        captures = self._descriptor["manifest"].get("captures", {})
+        return [name for name in captures if name.split("/", 1)[0] == section]
+
+    def file(self, name):
+        captures = self._descriptor["manifest"].get("captures", {})
+        if name not in captures:
+            raise NotFound(f"No added file or folder named {name!r}")
+        return decode(captures[name], self.client.backend)
+
+    def download(self, name=None, *, to=None):
+        root = Path(to) if to is not None else cache_root() / "artifacts" / self.id
         manifest = self._descriptor["manifest"]
-        captures = manifest.get("captures", {})
-        if name in captures:
-            value = decode(captures[name], self.client.backend)
-            if isinstance(value, StoredValue):
-                return value.download(to)
-        value = self.read()
-        if isinstance(value, StoredValue) and (
-            name is None or any(blob.get("name") == name for blob in value.blobs)
-        ):
-            return value.download(to, name=name)
-        blobs = [
-            blob
-            for kind, blob in references([manifest.get("value"), captures])
-            if kind == "blob" and (name is None or blob.get("name") == name)
-        ]
-        if not blobs:
-            raise NotFound("No matching downloadable value or capture")
-        unique = {(blob.get("name"), blob["digest"]): blob for blob in blobs}
-        names = [blob.get("name") for blob in unique.values()]
-        if len(names) != len(set(names)):
-            raise Conflict("Download names are ambiguous; select a named capture")
-        value = StoredValue(
-            {
-                "$cairn": 1,
-                "format": "directory",
-                "version": 1,
-                "data": {},
-                "blobs": list(unique.values()),
-                "refs": [],
-            },
-            self.client.backend,
-        )
-        return value.download(to)
+        if name is None:
+            added, value = self.files, manifest.get("value")
+        elif name in manifest.get("captures", {}):
+            added, value = [name], None
+        elif name in SECTIONS:
+            added, value = self._section(name), None
+        else:
+            added, value = [], manifest.get("value")
+        files = {}
+
+        def claim(path, blob):
+            if files.setdefault(path, blob)["digest"] != blob["digest"]:
+                raise Conflict(f"Download paths collide: {path}")
+
+        for kind, blob in references(value):
+            if kind == "blob" and (name is None or blob.get("name") == name):
+                claim(safe_path(blob.get("name") or blob["digest"]), blob)
+        for capture in added:
+            stored = self.file(capture)
+            blobs = stored.blobs if isinstance(stored, StoredValue) else []
+            if len(blobs) == 1 and stored.format != "directory":
+                claim(safe_path(capture), blobs[0])
+            else:
+                for blob in blobs:
+                    claim(
+                        f"{safe_path(capture)}/{safe_path(blob.get('name') or blob['digest'])}",
+                        blob,
+                    )
+        if not files:
+            raise NotFound("No matching downloadable file or folder")
+        parents = {str(parent) for path in files for parent in PurePosixPath(path).parents}
+        if parents & files.keys():
+            raise Conflict("Download paths collide with folders")
+        for path, blob in files.items():
+            save_blob(self.client.backend, blob, root, path)
+        return root if name is None else root / safe_path(name)
 
 
 _default = contextvars.ContextVar("cairn_default_artifact", default=None)
 
 
 def init(
-    destination=None,
-    *,
-    name=None,
     project="default",
+    name=None,
+    *,
+    repo=None,
     config=None,
     metadata=None,
     token=None,
@@ -505,7 +577,7 @@ def init(
     provenance=True,
     capture_source=True,
 ):
-    client = Client(destination, project=project, token=token, outbox=outbox)
+    client = Client(repo, project=project, token=token, outbox=outbox)
     try:
         run = client.run(
             name,
@@ -522,18 +594,18 @@ def init(
     return run
 
 
-def _implicit_client(destination=None, *, project=None, token=None, outbox=None):
+def _implicit_client(repo=None, *, project=None, token=None, outbox=None):
     """Open an independently owned client using the current context's defaults."""
     current = _default.get()
     previous = current.client if current is not None else None
-    if destination is None and previous is not None:
-        destination = previous.destination
+    if repo is None and previous is not None:
+        repo = previous.repo
         if token is None:
             token = previous.token
         if outbox is None:
             outbox = previous._outbox
     return Client(
-        destination,
+        repo,
         project=project if project is not None else previous.project if previous else "default",
         token=token,
         outbox=outbox,
@@ -560,13 +632,13 @@ class _ContextArtifact(Artifact):
                 self._context_token = None
 
 
-def artifact(namespace, name, *, destination=None, project=None, token=None, outbox=None):
+def artifact(namespace, name, *, repo=None, project=None, token=None, outbox=None):
     """Start an artifact; a with block temporarily targets top-level SDK calls at it.
 
     Inherit the current run's repository/project, or use normal discovery without
     a run. The returned handle owns its client and finishes on context exit.
     """
-    client = _implicit_client(destination, project=project, token=token, outbox=outbox)
+    client = _implicit_client(repo, project=project, token=token, outbox=outbox)
     try:
         client._ensure_delivery()
         args = {"project": client.project, "namespace": namespace, "name": name}
@@ -604,6 +676,11 @@ def update(metadata):
 
 def add(source, *, name=None):
     return _current().add(source, name=name)
+
+
+def remove(ref, *, repo=None, project=None):
+    with _implicit_client(repo, project=project) as client:
+        return client.remove(ref)
 
 
 def use(ref, *, role="input"):

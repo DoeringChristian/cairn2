@@ -58,9 +58,10 @@ UTC ISO strings; errors have a stable code, message and details.
 | `put_blob(source, *, digest=None, size=None)` | Verified immutable content descriptor `{digest, size}`. |
 | `has_blobs(digests)` | Mapping of digest to availability. |
 | `open_blob(digest)` | Binary stream context manager, caller closes it. |
-| `delete(artifact_id, *, request_id=None)` | Soft deletion; retained finished artifact IDs remain readable for provenance. |
+| `delete(artifact_id, *, request_id=None)` | Soft deletion: `{id, deleted, retained_by}`. Names and aliases stop resolving it; `latest` falls back to the highest remaining finished version. Finished IDs stay readable for provenance until garbage collection. |
 | `add_comment(artifact_id, anchor, body, *, request_id=None)` | Comment on a finished artifact; anchor is structured source location data. |
 | `comments(artifact_id)` / `delete_comment(comment_id)` | Read/delete annotations without changing captured artifact content. |
+| `collect_garbage(*, grace_seconds=3600, dry_run=True)` | `{dry_run, pinned, artifacts, candidates, removed, orphans}`. Purges artifacts deleted before the grace period that only other purged artifacts reference, then unreferenced content. |
 
 There is no snapshot operation. A separate finished checkpoint must be a separate
 artifact. Writer handles and sequence numbers exist only for reliable delivery.
@@ -110,7 +111,8 @@ exact retry intent. The 8 MiB final manifest bound is a defensive check.
 
 Routes are named REST resources: `POST /v1/artifacts`, artifact-scoped writers,
 entries, finalization, aliases and comments; `POST /v1/resolutions`,
-`POST /v1/records/query`, and `GET /v1/history?ref=...&project=...`.
+`POST /v1/records/query`, `GET /v1/history?ref=...&project=...`,
+`DELETE /v1/artifacts/{id}`, and `POST /v1/maintenance/gc`.
 Blob uploads/downloads stream bytes. There are no revision, snapshot or separate
 version resources, and no server report execution/editing routes.
 
@@ -125,9 +127,9 @@ and captures. `finish()` returns the finished descriptor; `.id` stays unchanged.
 `Client.resolve()` returns a `Reader` only for a finished artifact. `use()` records
 a dependency on that exact ID. No revision ID or snapshot API is exposed.
 
-`cairn.artifact(namespace, name, *, destination=None, project=None, token=None,
+`cairn.artifact(namespace, name, *, repo=None, project=None, token=None,
 outbox=None)` starts an independently owned artifact handle. Unspecified
-destination/project inherit the context-local artifact or run, falling back to
+repo/project inherit the context-local artifact or run, falling back to
 normal discovery and the default project. Its context manager temporarily
 installs it as the default, restores the previous handle on exit, and finishes
 on normal exit or records failure on exceptional exit unless already finished.

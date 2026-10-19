@@ -72,6 +72,16 @@ def test_cli_arbitrary_namespace_nested_name_and_default_namespace(tmp_path, cap
     assert json.loads(capsys.readouterr().err)["error"]
 
 
+def test_cli_remove_and_gc(tmp_path, capsys):
+    repo = tmp_path / "repo"
+    opened = invoke(capsys, repo, "artifact", "start", "model")
+    identifier, writer = opened["artifact"]["id"], opened["writer"]["id"]
+    invoke(capsys, repo, "artifact", "finish", identifier, "--writer", writer)
+    assert invoke(capsys, repo, "remove", "artifacts/model@latest")["id"] == identifier
+    collected = invoke(capsys, repo, "gc", "--grace-seconds", "0", "--apply")
+    assert collected["artifacts"] == [identifier]
+
+
 def test_report_new_default_and_machine_readable_error(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     assert main(["report", "new"]) == 0
@@ -90,9 +100,8 @@ def test_python_module_cli_help():
     assert "report" in result.stdout and "server" in result.stdout
 
 
-def test_cli_uses_shared_destination_discovery(tmp_path, monkeypatch, capsys):
+def test_cli_uses_shared_repo_discovery(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("CAIRN_URL", raising=False)
     monkeypatch.setenv("CAIRN_REPO", str(tmp_path / "environment-repo"))
     assert main(["info"]) == 0
     assert json.loads(capsys.readouterr().out)["repository_id"]

@@ -146,6 +146,24 @@ def test_browser_tags_use_annotations_and_reject_conflicts_and_foreign_origins(t
             )
 
 
+def test_browser_removal_requires_session_and_origin(tmp_path):
+    with closing(Repository(tmp_path)) as repo:
+        identifier = repo.start("demo", "runs", "removed")["artifact"]["id"]
+        route = f"/ui-api/artifacts/{identifier}"
+        with TestClient(create_app(repo, token="test-token", ui=True)) as browser:
+            assert browser.delete(route).status_code == 401
+            browser.post("/ui-api/login", json={"token": "test-token"})
+            foreign = browser.delete(route, headers={"origin": "https://foreign.invalid"})
+            assert foreign.status_code == 401
+            assert browser.delete(route).json() == {
+                "id": identifier,
+                "deleted": True,
+                "retained_by": [],
+            }
+            listed = browser.get("/ui-api/artifacts", params={"project": "demo"}).json()
+            assert listed["items"] == []
+
+
 def test_artifact_summaries_are_bounded_filtered_and_exclude_payloads(tmp_path):
     import sqlalchemy as sa
 

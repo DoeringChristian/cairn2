@@ -930,7 +930,7 @@ def build(source, output=None, *, client=None, timeout=120, kernel_name="python3
             filter(None, [package_root, environment.get("PYTHONPATH", "")])
         )
         environment["CAIRN_REPORT_PINS"] = json.dumps(manifest["inputs"])
-        endpoint = str(client.destination) if client is not None else ""
+        endpoint = str(client.repo) if client is not None else ""
         if endpoint and not endpoint.startswith(("http://", "https://")):
             endpoint = str(Path(endpoint).absolute())
         environment["CAIRN_REPORT_ENDPOINT"] = endpoint

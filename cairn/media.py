@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import mimetypes
 import os
+import secrets
 import shutil
 import tempfile
 from collections.abc import Callable
@@ -13,7 +15,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .model import CapacityError, NotFound, Unsupported, ValidationError, canonical, safe_path
+from .model import (
+    CapacityError,
+    IntegrityError,
+    NotFound,
+    Unsupported,
+    ValidationError,
+    canonical,
+    safe_path,
+)
 
 
 @dataclass
@@ -333,38 +343,82 @@ class StoredValue:
                 return stream.read()
         return self.data
 
-    def download(self, to, *, name=None):
+    def download(self, to=None, *, name=None):
         selected = [blob for blob in self.blobs if name is None or blob.get("name") == name]
         if not selected:
             raise NotFound("No matching downloadable blobs")
-        destination = Path(to)
-        many = len(selected) > 1 or self.format == "directory"
-        if many:
-            destination.mkdir(parents=True, exist_ok=True)
-        paths = []
+        if to is None:
+            identity = json.dumps(self.envelope, sort_keys=True, separators=(",", ":"))
+            to = cache_root() / "values" / hashlib.sha256(identity.encode()).hexdigest()
+        to = Path(to)
         for blob in selected:
-            path = destination
-            if many or destination.is_dir():
-                filename = safe_path(blob.get("name") or blob["digest"])
-                path = destination / filename
-                if not path.resolve().is_relative_to(destination.resolve()):
-                    raise ValidationError("Download path escapes the destination")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with (
-                self.backend.open_blob(blob["digest"]) as source,
-                tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as output,
-            ):
-                temporary = Path(output.name)
-                try:
-                    shutil.copyfileobj(source, output, length=1024 * 1024)
-                    output.flush()
-                    os.fsync(output.fileno())
-                except BaseException:
-                    temporary.unlink(missing_ok=True)
-                    raise
-            os.replace(temporary, path)
-            paths.append(path)
-        return paths if many else paths[0]
+            path = save_blob(self.backend, blob, to, blob.get("name") or blob["digest"])
+        return path if name is not None or len(selected) == 1 and self.format != "directory" else to
+
+
+def cache_root():
+    if os.environ.get("CAIRN_CACHE_DIR"):
+        return Path(os.environ["CAIRN_CACHE_DIR"]).expanduser()
+    return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "cairn"
+
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def cached_blob(backend, digest):
+    """Return the verified, read-only cache copy of a blob, fetching it at most once."""
+    path = cache_root() / "blobs" / digest
+    if path.is_file():
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    hasher = hashlib.sha256()
+    with (
+        backend.open_blob(digest) as source,
+        tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as output,
+    ):
+        temporary = Path(output.name)
+        try:
+            while chunk := source.read(1024 * 1024):
+                hasher.update(chunk)
+                output.write(chunk)
+            output.flush()
+            os.fsync(output.fileno())
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+    if hasher.hexdigest() != digest:
+        temporary.unlink()
+        raise IntegrityError("Downloaded content does not match its digest")
+    temporary.chmod(0o444)
+    os.replace(temporary, path)
+    return path
+
+
+def save_blob(backend, blob, root, name):
+    """Hard-link a cached blob to root/name, copying across filesystems."""
+    path = Path(root) / safe_path(name)
+    if not path.resolve().is_relative_to(Path(root).resolve()):
+        raise ValidationError("Download path escapes the destination")
+    source = cached_blob(backend, blob["digest"])
+    if path.is_file() and (os.path.samefile(source, path) or _sha256(path) == blob["digest"]):
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}")
+    try:
+        try:
+            os.link(source, temporary)
+        except OSError:
+            shutil.copyfile(source, temporary)
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    return path
 
 
 def decode(value, backend):

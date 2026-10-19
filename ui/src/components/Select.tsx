@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 
 export type Choice = { value: string; label: string; note?: string };
 
@@ -9,6 +9,7 @@ export function Select({ label, value, choices, onChange }: { label: string; val
   const [active, setActive] = useState(0);
   const root = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLUListElement>(null);
+  const [place, setPlace] = useState<CSSProperties>({ visibility: "hidden" });
   const id = useId();
   const current = choices.find(c => c.value === value) ?? choices[0];
   const show = () => { setActive(Math.max(0, choices.findIndex(c => c.value === value))); setOpen(true); };
@@ -18,6 +19,23 @@ export function Select({ label, value, choices, onChange }: { label: string; val
     const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
     document.addEventListener("pointerdown", outside);
     return () => document.removeEventListener("pointerdown", outside);
+  }, [open]);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const natural = list.current!.scrollWidth;
+    // Fixed placement keeps the menu inside the viewport, flipping above when space below is short.
+    const position = () => {
+      const box = root.current!.getBoundingClientRect(), margin = 8, gap = 6;
+      const width = Math.min(Math.max(natural, box.width), innerWidth - 2 * margin);
+      const below = innerHeight - box.bottom - gap - margin, above = box.top - gap - margin;
+      const up = below < 160 && above > below;
+      setPlace({ position: "fixed", left: Math.max(margin, Math.min(box.left, innerWidth - margin - width)), right: "auto", width, minWidth: 0,
+        maxHeight: Math.min(320, up ? above : below), top: up ? "auto" : box.bottom + gap, bottom: up ? innerHeight - box.top + gap : "auto" });
+    };
+    position();
+    addEventListener("resize", position);
+    addEventListener("scroll", position, true);
+    return () => { removeEventListener("resize", position); removeEventListener("scroll", position, true); setPlace({ visibility: "hidden" }); };
   }, [open]);
   useEffect(() => { if (open) list.current?.children[active]?.scrollIntoView({ block: "nearest" }); }, [open, active]);
   const onKey = (event: React.KeyboardEvent) => {
@@ -40,7 +58,7 @@ export function Select({ label, value, choices, onChange }: { label: string; val
         <span className="select-value">{current?.label}</span>
       </button>
       {open && (
-        <ul className="select-list" role="listbox" id={id} aria-label={label} ref={list}>
+        <ul className="select-list" role="listbox" id={id} aria-label={label} ref={list} style={place}>
           {choices.map((c, i) => (
             <li key={c.value} id={`${id}-${i}`} role="option" aria-selected={c.value === value} className={i === active ? "active" : undefined}
               onPointerEnter={() => setActive(i)} onPointerDown={e => { if (e.pointerType === 'mouse') e.preventDefault(); }} onClick={() => choose(i)}>

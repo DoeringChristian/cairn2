@@ -49,7 +49,7 @@ The suite covers:
   rich static output, failed/tampered build rejection, publication, export, and
   reproducible source-copy/export replay.
 - Token discovery, authentication boundaries, streamed blob transfers, CLI
-  destination discovery, and typed media read/download behavior.
+  repo discovery, and typed media read/download behavior.
 
 PostgreSQL tests used a temporary local PostgreSQL 17 instance. S3 tests used
 Moto's HTTP server with real Boto3 requests; they do not constitute an AWS or

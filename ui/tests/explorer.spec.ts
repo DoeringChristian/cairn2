@@ -355,14 +355,15 @@ test('list cache survives category navigation and reload, refresh bypasses it', 
       name:`cached-${category}`, state:'live', number:null, created_at:'2026-10-18T12:00:00Z',
       annotations:{tags:[]}, annotations_etag:'test'}], total:1}});
   });
+  const nav = page.getByRole('navigation', {name:'Project navigation'});
   await page.goto('/p/cache-demo?view=runs');
   await expect(page.getByRole('link', {name:'cached-runs', exact:true})).toBeVisible();
   await page.getByRole('button', {name:'Auto-refresh · 5s', exact:true}).click();
-  await page.getByRole('tab', {name:'Reports', exact:true}).click();
+  await nav.getByRole('link', {name:'Reports', exact:true}).click();
   await expect(page.getByText('cached-reports', {exact:true})).toBeVisible();
-  await page.getByRole('tab', {name:'Artifacts', exact:true}).click();
+  await nav.getByRole('link', {name:'Artifacts', exact:true}).click();
   await expect(page.getByRole('link', {name:'cached-artifacts', exact:true})).toBeVisible();
-  await page.getByRole('tab', {name:'Runs', exact:true}).click();
+  await nav.getByRole('link', {name:'Runs', exact:true}).click();
   await expect(page.getByRole('link', {name:'cached-runs', exact:true})).toBeVisible();
   expect(requests).toEqual(['runs','reports','artifacts']);
   await page.reload();
@@ -372,7 +373,7 @@ test('list cache survives category navigation and reload, refresh bypasses it', 
   await page.getByRole('button', {name:'Refresh', exact:true}).click();
   await expect.poll(() => requests.length).toBe(4);
   expect(requests.at(-1)).toBe('runs');
-  await page.getByRole('tab', {name:'Reports', exact:true}).click();
+  await nav.getByRole('link', {name:'Reports', exact:true}).click();
   await expect(page.getByText('cached-reports', {exact:true})).toBeVisible();
   expect(requests).toHaveLength(4);
 });

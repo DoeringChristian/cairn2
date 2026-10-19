@@ -121,6 +121,11 @@ class Comment(RequestID):
     body: str
 
 
+class GarbageCollection(StrictBody):
+    grace_seconds: int = 3600
+    dry_run: bool = True
+
+
 def _route_path(scope):
     path, root = scope["path"], scope.get("root_path", "")
     return path[len(root) :] if root and path.startswith(root) else path
@@ -390,6 +395,10 @@ def create_app(
     @app.delete("/v1/artifacts/{artifact_id}")
     def delete(artifact_id: str, body: RequestID):
         return repository.delete(artifact_id, **body.model_dump())
+
+    @app.post("/v1/maintenance/gc")
+    def collect_garbage(body: GarbageCollection):
+        return repository.collect_garbage(**body.model_dump())
 
     @app.post("/v1/artifacts/{artifact_id}/comments")
     def add_comment(artifact_id: str, body: Comment):

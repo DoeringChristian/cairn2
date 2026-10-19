@@ -121,7 +121,11 @@ def test_real_http_contract_and_publication(repositories):
     assert remote.comments(exact) == direct.comments(exact) == [comment]
     assert remote.delete_comment(comment["id"]) is None
     assert remote.comments(exact) == []
-    assert remote.delete(artifact, request_id="delete") == {"id": artifact, "deleted": True}
+    assert remote.delete(artifact, request_id="delete") == {
+        "id": artifact,
+        "deleted": True,
+        "retained_by": [],
+    }
     assert remote.list_artifacts(project="test")["items"] == []
     assert remote.resolve(exact)["id"] == exact
 

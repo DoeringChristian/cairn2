@@ -48,8 +48,8 @@ def test_disable_provenance_preserves_user_metadata_and_config(tmp_path, monkeyp
     monkeypatch.chdir(tmp_path)
     if entrypoint == "init":
         writer = cairn.init(
-            tmp_path / "repo",
             name="minimal",
+            repo=tmp_path / "repo",
             provenance=False,
             config={"seed": 12},
             metadata={"owner": "test"},
@@ -154,7 +154,7 @@ def test_published_run_provenance_preserves_start_time_bytes(source_tree, tmp_pa
         metadata = reader.descriptor["manifest"]["metadata"]
         assert metadata["provenance"]["git"]["head"] == commit
         assert metadata["config"] == {"rate": 0.2}
-        archive = reader.download("provenance/source.tar.gz", to=tmp_path / "saved.tar.gz")
+        archive = reader.download("provenance/source.tar.gz", to=tmp_path / "saved")
         assert unpack(archive.read_bytes())["train.py"] == b"rate = 0.2\n"
         record = reader.records()[0]["data"]
         assert record["loss"] == 1

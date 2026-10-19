@@ -312,6 +312,11 @@ class HTTPRepository:
             "DELETE", f"v1/artifacts/{self._id(artifact_id)}", json={"request_id": request_id}
         )
 
+    def collect_garbage(self, *, grace_seconds=3600, dry_run=True) -> dict[str, JSONValue]:
+        return self._request(
+            "POST", "v1/maintenance/gc", json={"grace_seconds": grace_seconds, "dry_run": dry_run}
+        )
+
     def add_comment(self, artifact_id, anchor, body, *, request_id=None) -> dict[str, JSONValue]:
         return self._request(
             "POST",

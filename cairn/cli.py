@@ -84,11 +84,9 @@ def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(
         prog="cairn", description="Versioned artifacts, Python runs, and local executable reports."
     )
-    destination = root.add_mutually_exclusive_group()
-    destination.add_argument(
-        "--repo", default=None, metavar="PATH", help="Local repository (otherwise use discovery)"
+    root.add_argument(
+        "--repo", metavar="PATH|URL", help="Repository path or server URL (otherwise discovery)"
     )
-    destination.add_argument("--url", metavar="URL", help="Remote Cairn HTTP server")
     root.add_argument("--project", default="default")
     root.add_argument("--token", help="Bearer token; environment or token file is preferable")
     commands = root.add_subparsers(dest="command", required=True)
@@ -102,6 +100,13 @@ def parser() -> argparse.ArgumentParser:
     _log_arguments(commands.add_parser("log", help="Append a record to an existing writer"))
     _inspect_arguments(commands.add_parser("inspect", help="Inspect a live or finished artifact"))
     _query_arguments(commands.add_parser("query", help="Query stable, paginated records"))
+    remove = commands.add_parser("remove", help="Remove one exact artifact; gc reclaims storage")
+    remove.add_argument("reference")
+    remove.set_defaults(action="remove")
+    gc = commands.add_parser("gc", help="Purge removed artifacts and unreferenced content")
+    gc.add_argument("--grace-seconds", type=int, default=3600)
+    gc.add_argument("--apply", action="store_true", help="Delete; otherwise print a dry run")
+    gc.set_defaults(action="gc")
 
     artifacts = commands.add_parser(
         "artifact", help="Artifact lifecycle and records"
@@ -235,8 +240,8 @@ def _repository(args):
     from .objects import S3, Files
     from .storage import Repository
 
-    if args.url:
-        raise ValidationError("Direct storage access requires --repo or --database-url")
+    if args.repo and args.repo.startswith(("http://", "https://")):
+        raise ValidationError("Direct storage access requires a local --repo or --database-url")
     object_store = None
     if args.s3_bucket:
         object_store = S3(
@@ -280,7 +285,7 @@ def _server_socket(host, port):
 
 
 def _serve(args):
-    from .config import ensure_token, resolve_destination, startup_urls
+    from .config import ensure_token, resolve_repo, startup_urls
 
     try:
         import uvicorn
@@ -293,14 +298,14 @@ def _serve(args):
             "Server dependencies are missing. Run 'uv run --extra all cairn server' "
             "(or --extra ui), or install 'cairn2[all]' with pip."
         ) from exc
-    if not args.database_url and not args.url:
-        destination = resolve_destination(args.repo)
-        if destination.startswith(("http://", "https://")):
+    if not args.database_url:
+        repo = resolve_repo(args.repo)
+        if repo.startswith(("http://", "https://")):
             raise ValidationError(
-                "The discovered destination is a remote server. "
+                "The repo is a remote server. "
                 "Use --repo PATH to select the local repository to serve."
             )
-        args.repo = destination
+        args.repo = repo
     repository = _repository(args)
     listener = None
     try:
@@ -371,6 +376,10 @@ def _dispatch(args, client):
         )
     if action == "inspect":
         return backend.resolve(args.reference, project=client.project)
+    if action == "remove":
+        return client.remove(args.reference)
+    if action == "gc":
+        return client.gc(apply=args.apply, grace_seconds=args.grace_seconds)
     if action == "query":
         return backend.query(
             args.reference,
@@ -433,7 +442,7 @@ def _dispatch(args, client):
         operation = reports.copy if action == "report-copy" else reports.export
         return {"path": str(operation(args.reference, args.destination, client=client))}
     if action.startswith("repo-"):
-        from .ops import check_repository, collect_garbage, export_repository, import_repository
+        from .ops import check_repository, export_repository, import_repository
         from .storage import Repository
 
         if not isinstance(backend, Repository):
@@ -450,7 +459,7 @@ def _dispatch(args, client):
                 _print(result)
                 return 1
             return result
-        return collect_garbage(backend, grace_seconds=args.grace_seconds, dry_run=not args.apply)
+        return backend.collect_garbage(grace_seconds=args.grace_seconds, dry_run=not args.apply)
     raise ValidationError(f"Unknown CLI action: {action}")
 
 
@@ -471,7 +480,7 @@ def main(argv=None) -> int:
         if args.action.startswith("repo-"):
             client = SimpleNamespace(backend=_repository(args), project=args.project)
         else:
-            client = Client(args.url or args.repo, project=args.project, token=args.token)
+            client = Client(args.repo, project=args.project, token=args.token)
         try:
             result = _dispatch(args, client)
             if isinstance(result, int):

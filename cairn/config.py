@@ -1,4 +1,4 @@
-"""Small, explicit destination and single-token configuration helpers."""
+"""Small, explicit repo and single-token configuration helpers."""
 
 import json
 import os
@@ -103,17 +103,17 @@ def ensure_token(explicit=None, *, cwd=None):
         temporary.unlink(missing_ok=True)
 
 
-def resolve_destination(explicit=None, *, cwd=None):
+def resolve_repo(explicit=None, *, cwd=None):
     """Resolve an explicit URL/path, environment setting, or project repository."""
     value = explicit
     base = _cwd(cwd)
     if value is None:
-        value = os.environ.get("CAIRN_URL") or os.environ.get("CAIRN_REPO")
+        value = os.environ.get("CAIRN_REPO")
     if value is None:
         for path, config in _projects(cwd):
             if config is None:
                 return str(path / "repo")
-            value = config.get("url") or config.get("repo") or config.get("destination")
+            value = config.get("repo")
             if value is not None:
                 base = path.parent
                 break
@@ -122,9 +122,9 @@ def resolve_destination(explicit=None, *, cwd=None):
     try:
         value = os.fspath(value)
     except TypeError as error:
-        raise ValidationError("Repository destination must be a nonempty URL or path") from error
+        raise ValidationError("Repo must be a nonempty URL or path") from error
     if not isinstance(value, str) or not value.strip():
-        raise ValidationError("Repository destination must be a nonempty URL or path")
+        raise ValidationError("Repo must be a nonempty URL or path")
     if urlsplit(value).scheme in ("http", "https"):
         return value.rstrip("/")
     return str((base / Path(value).expanduser()).resolve())

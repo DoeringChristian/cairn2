@@ -4,7 +4,7 @@ import { useRefresh, useRefreshMode } from '../refresh';
 import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, useResource, artifactPath, when, type Project, type ArtifactSummary } from '../api';
-import { Button, Crumbs, DataTable, ErrorNote, Hero, Hint, Loading, MetricCard, MetricGrid, Pill, ProjectCard, ReportCard, ReportGrid, SearchInput, Section, Tabs, Toolbar } from '../components';
+import { Button, Crumbs, DataTable, ErrorNote, Hero, Hint, Loading, MetricCard, MetricGrid, Pill, ProjectCard, ReportCard, ReportGrid, SearchInput, Section, Toolbar } from '../components';
 export function ProjectsPage() {
   const [revision, refresh] = useState(0), [search, setSearch] = useState('');
   const pulse = useRefresh();
@@ -73,7 +73,7 @@ export function ProjectPage() {
   function changePage(value: number) {const next=new URLSearchParams(params);next.set('page', String(value));setParams(next);}
   const filtered = items;
   return <main><Hero eyebrow={<Crumbs items={[{label:'Projects',to:'/'},{label:project}]}/>} title={project} subtitle="Reports, experiments, and the evidence that connects them."/>
-    <Section title={tab==='reports'?'Your reports':tab==='runs'?'Experiment runs':'Artifact library'} actions={<Button small onClick={refreshList}>Refresh</Button>}><Tabs label="Artifact categories" value={tab} onChange={view => {const next=new URLSearchParams(params);next.set('view',view);next.delete('page');setParams(next);}} tabs={['reports','runs','artifacts','all'].map(value => ({value,label:value[0].toUpperCase()+value.slice(1)}))}/>
+    <Section title={tab==='reports'?'Your reports':tab==='runs'?'Experiment runs':tab==='artifacts'?'Artifact library':'Everything'} actions={<Button small onClick={refreshList}>Refresh</Button>}>
     <Toolbar><SearchInput label={tab==='reports'?'Search reports':'Search artifacts'} value={search} onChange={value=>{setSearch(value);if(page)changePage(0);}}/><form onSubmit={e=>{e.preventDefault();const tag=tagDraft.trim();if(tag&&!selectedTags.includes(tag))toggleTag(tag);setTagDraft('');}}><SearchInput label="Filter by tag" value={tagDraft} onChange={setTagDraft}/></form></Toolbar>
     {(!!availableTags.length||!!selectedTags.length)&&<div className="tag-filters" aria-label="Filter by tags"><span className="muted">Tags</span>{[...new Set([...availableTags,...selectedTags])].map(tag=><button type="button" className="tag-chip" key={tag} aria-pressed={selectedTags.includes(tag)} onClick={()=>toggleTag(tag)}>{tag}</button>)}{!!selectedTags.length&&<button type="button" className="tag-clear" onClick={()=>{const next=new URLSearchParams(params);next.delete('tag');next.delete('page');setParams(next);}}>Clear tags</button>}</div>}
     {loading && !items.length && <Loading/>}{error && <ErrorNote error={error}/>}{!loading && !error && !filtered.length && <Hint>No matching {tab === 'reports' ? 'reports' : 'artifacts'} in this view.</Hint>}

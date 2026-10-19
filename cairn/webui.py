@@ -101,9 +101,14 @@ class BrowserAccess:
                 and parts[1:3] == ["ui-api", "artifacts"]
                 and parts[4] == "tags"
             )
+            removal = (
+                method == "DELETE" and len(parts) == 4 and parts[1:3] == ["ui-api", "artifacts"]
+            )
             # Explicit bearer headers take precedence, including invalid ones.
             if (
-                shell or login or ((read or comment or tag_edit) and self.sessions.valid(request))
+                shell
+                or login
+                or ((read or comment or tag_edit or removal) and self.sessions.valid(request))
             ) and (b"authorization" not in dict(scope["headers"])):
                 scope = {
                     **scope,
@@ -163,6 +168,14 @@ def install(app, repository, token, *, no_auth=False):
             patch={"tags": list(dict.fromkeys(tag.strip() for tag in tags))},
             expected_etag=body.get("expected_etag"),
         )
+
+    @app.delete("/ui-api/artifacts/{artifact_id}")
+    def remove_artifact(artifact_id: str, request: Request):
+        sessions.require(request)
+        origin = request.headers.get("origin")
+        if origin and origin != str(request.base_url).rstrip("/"):
+            raise Unauthorized("Removals must come from this server's origin")
+        return repository.delete(artifact_id)
 
     @app.post("/ui-api/login")
     async def login(request: Request):
