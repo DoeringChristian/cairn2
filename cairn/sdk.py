@@ -42,11 +42,11 @@ SECTIONS = ("provenance",)
 
 
 class Client:
-    def __init__(self, repo=None, *, project="default", token=None, outbox=None):
-        from .config import resolve_repo
+    def __init__(self, repo=None, *, project=None, token=None, outbox=None):
+        from .config import resolve_project, resolve_repo
 
         self.repo = resolve_repo(repo)
-        self.project = project
+        self.project = resolve_project(project)
         self.backend: RepositoryProtocol
         self.delivery = None
         self._outbox = None
@@ -59,9 +59,13 @@ class Client:
             self.repo = self.backend.url
             self.token = self.backend.token
             if outbox is None:
-                base = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
+                base = (
+                    Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "cairn"
+                )
+                if os.environ.get("CAIRN_STATE_DIR"):
+                    base = Path(os.environ["CAIRN_STATE_DIR"]).expanduser()
                 identity = hashlib.sha256(self.repo.encode()).hexdigest()[:24]
-                outbox = base / "cairn/outbox" / identity
+                outbox = base / "outbox" / identity
             self._outbox = outbox
         else:
             from .storage import Repository
@@ -566,9 +570,9 @@ _default = contextvars.ContextVar("cairn_default_artifact", default=None)
 
 
 def init(
-    project="default",
     name=None,
     *,
+    project=None,
     repo=None,
     config=None,
     metadata=None,
@@ -606,7 +610,7 @@ def _implicit_client(repo=None, *, project=None, token=None, outbox=None):
             outbox = previous._outbox
     return Client(
         repo,
-        project=project if project is not None else previous.project if previous else "default",
+        project=project if project is not None or previous is None else previous.project,
         token=token,
         outbox=outbox,
     )

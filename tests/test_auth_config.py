@@ -1,18 +1,17 @@
 import concurrent.futures
-import json
 from urllib.parse import urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
 
 from cairn import model
-from cairn.config import ensure_token, resolve_repo, resolve_token, startup_urls
+from cairn.config import ensure_token, resolve_project, resolve_repo, resolve_token, startup_urls
 from cairn.server import create_app
 
 
 @pytest.fixture(autouse=True)
 def isolated_config(tmp_path, monkeypatch):
-    for name in ("CAIRN_TOKEN", "CAIRN_TOKEN_FILE", "CAIRN_REPO"):
+    for name in ("CAIRN_TOKEN", "CAIRN_TOKEN_FILE", "CAIRN_REPO", "CAIRN_PROJECT"):
         monkeypatch.delenv(name, raising=False)
     home = tmp_path / "home"
     home.mkdir()
@@ -39,18 +38,40 @@ def test_token_precedence_and_parent_project(tmp_path, monkeypatch):
     assert resolve_token("explicit-token", cwd=child) == "explicit-token"
 
 
-def test_json_project_tokens_and_relative_paths(tmp_path):
+def test_toml_settings_merge_and_keep_tokens_with_their_repo(tmp_path):
     project = tmp_path / "project"
-    project.mkdir()
-    config = project / ".cairn"
-    config.write_text(json.dumps({"token_file": "private-token", "repo": "data"}))
+    (project / ".cairn").mkdir(parents=True)
+    (project / ".cairn/token").write_text("local-token\n")
     (project / "private-token").write_text("secret\n")
+    config = project / ".cairn.toml"
+    config.write_text('project = "outer"\nrepo = "data"\ntoken_file = "private-token"\n')
     nested = project / "nested"
     nested.mkdir()
-    assert resolve_token(cwd=nested) == "secret"
     assert resolve_repo(cwd=nested) == str(project / "data")
-    config.write_text(json.dumps({"token": "inline-secret"}))
-    assert resolve_token(cwd=nested) == "inline-secret"
+    assert resolve_token(cwd=nested) == "secret"
+    assert resolve_project(cwd=nested) == "outer"
+    config.write_text('project = "outer"\nrepo = "data"\n')
+    assert resolve_token(cwd=nested) == "local-token"
+    (nested / ".cairn.toml").write_text('project = "inner"\n')
+    assert (resolve_project(cwd=nested), resolve_repo(cwd=nested)) == (
+        "inner",
+        str(project / "data"),
+    )
+    (nested / ".cairn.toml").write_text('repo = "https://example.test"\n')
+    assert (resolve_project(cwd=nested), resolve_repo(cwd=nested)) == (
+        "outer",
+        "https://example.test",
+    )
+    assert resolve_token(cwd=nested) is None
+
+
+def test_project_precedence(tmp_path, monkeypatch):
+    assert resolve_project() == "default"
+    (tmp_path / ".cairn.toml").write_text('project = "configured"\n')
+    assert resolve_project() == "configured"
+    monkeypatch.setenv("CAIRN_PROJECT", "environment")
+    assert resolve_project() == "environment"
+    assert resolve_project("explicit") == "explicit"
 
 
 def test_token_creation_is_private_atomic_and_stable(tmp_path):
@@ -76,11 +97,15 @@ def test_invalid_configuration_is_actionable_without_secret_leak(tmp_path, monke
     with pytest.raises(model.ValidationError, match="Cannot read token file"):
         resolve_token()
     monkeypatch.delenv("CAIRN_TOKEN_FILE")
-    (tmp_path / ".cairn").write_text("[]")
-    with pytest.raises(model.ValidationError, match="configuration must be an object"):
-        resolve_token()
+    (tmp_path / ".cairn.toml").write_text('repo = "data"\nurl = "https://example.test"\n')
+    with pytest.raises(model.ValidationError, match="Unknown settings.*url"):
+        resolve_repo()
+    (tmp_path / ".cairn.toml").write_text("repo = [")
+    with pytest.raises(model.ValidationError, match="Cannot read configuration"):
+        resolve_repo()
+    (tmp_path / ".cairn.toml").unlink()
     (tmp_path / ".cairn").write_text("{}")
-    with pytest.raises(model.ValidationError, match="token or token_file"):
+    with pytest.raises(model.ValidationError, match="must be a folder.*cairn.toml"):
         ensure_token()
 
 
@@ -216,7 +241,8 @@ def test_server_discovers_local_sdk_repository(mode, tmp_path, monkeypatch):
     if mode == "environment":
         monkeypatch.setenv("CAIRN_REPO", str(project / "data"))
     elif mode == "config":
-        (project / ".cairn").write_text('{"repo":"data","token":"test-token"}')
+        (project / "server-token").write_text("test-token\n")
+        (project / ".cairn.toml").write_text('repo = "data"\ntoken_file = "server-token"\n')
     with Client(project="test") as local:
         artifact = local.start("datasets", "local")
         artifact.finish(value={"value": 1})

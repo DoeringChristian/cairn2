@@ -13,7 +13,7 @@ from cairn.reports import build, publish
 
 def main():
     project = "neural-rendering"
-    run = cairn.init(project, "showcase-baseline", config={"seed": 42, "samples": 32})
+    run = cairn.init("showcase-baseline", project=project, config={"seed": 42, "samples": 32})
 
     with cairn.artifact("datasets", "showcase-samples") as dataset:
         cairn.add(

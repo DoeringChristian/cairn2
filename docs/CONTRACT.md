@@ -130,7 +130,7 @@ a dependency on that exact ID. No revision ID or snapshot API is exposed.
 `cairn.artifact(namespace, name, *, repo=None, project=None, token=None,
 outbox=None)` starts an independently owned artifact handle. Unspecified
 repo/project inherit the context-local artifact or run, falling back to
-normal discovery and the default project. Its context manager temporarily
+normal repo and project discovery (`CAIRN_PROJECT`, `.cairn.toml`). Its context manager temporarily
 installs it as the default, restores the previous handle on exit, and finishes
 on normal exit or records failure on exceptional exit unless already finished.
 The Python `add()` method replaces `capture()` without an alias; the persisted

@@ -287,7 +287,7 @@ def test_top_level_artifact_inherits_remote_run_and_restores_it(tmp_path):
 
         def scenario():
             run = cairn.init(
-                "study",
+                project="study",
                 repo=url,
                 token="test-token",
                 outbox=tmp_path / "outbox",
@@ -325,3 +325,10 @@ def test_remove_and_gc_through_server(tmp_path):
             assert client.gc(grace_seconds=0)["artifacts"] == []
     finally:
         repository.close()
+
+
+def test_state_dir_selects_default_outbox(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setenv("CAIRN_STATE_DIR", str(tmp_path / "state"))
+    with Client("http://127.0.0.1:9", token="test-token") as client:
+        assert client._outbox.parent == tmp_path / "state/outbox"

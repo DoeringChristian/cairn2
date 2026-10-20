@@ -44,7 +44,7 @@ upload retries, and can be supplied explicitly for imported measurements.
 ```python
 import cairn
 
-run = cairn.init("default", "baseline", repo="./results", config={"learning_rate": 0.01})
+run = cairn.init("baseline", repo="./results", config={"learning_rate": 0.01})
 cairn.log({"step": 0, "loss": 0.8})
 cairn.log({"step": 1, "loss": 0.3})
 cairn.update({"description": "Two recorded steps"})
@@ -224,13 +224,29 @@ cairn --repo ./results --project study artifact list --namespace runs --state fi
 
 ## Select a repository and authenticate
 
+A project configures Cairn with a `.cairn.toml` file:
+
+```toml
+repo = "https://cairn.example.org"   # path or URL; relative paths resolve beside the file
+project = "neural-rendering"         # default project for init, artifact, Client and the CLI
+token_file = "~/.config/cairn/token" # optional; inline tokens are not accepted
+```
+
+Discovery walks from the working directory to its parents and merges every
+`.cairn.toml`: the nearest file setting a key wins, so a subproject can override
+only `project`. A `.cairn/` folder is data: its `repo/` is the repository unless
+a `.cairn.toml` in the same directory sets `repo`.
+
 Python clients and ordinary CLI commands select the repo in this order:
 
 1. An explicit path/URL (`repo=`, `Client(...)`, or `--repo`).
 2. `CAIRN_REPO`.
-3. The nearest project `.cairn` directory, or a `.cairn` JSON file containing
-   `repo`; discovery walks parent directories.
+3. The nearest `repo` setting or `.cairn/` folder, a `.cairn.toml` shadowing the
+   folder beside it.
 4. `./.cairn/repo`.
+
+The project is an explicit `project=`/`--project`, then `CAIRN_PROJECT`, then
+the nearest `.cairn.toml` `project`, then `default`.
 
 A path selects direct local storage. An HTTP(S) URL selects that server alone.
 Remote reads query the server; they do not combine server results with pending
@@ -240,25 +256,22 @@ Administrative `repo` commands use direct storage configuration, with
 `./.cairn/repo` as their local default.
 
 Bearer tokens are discovered in this order: explicit `token=`/`--token`,
-`CAIRN_TOKEN`, `CAIRN_TOKEN_FILE`, project `.cairn/token` or a `.cairn` JSON
-`token`/`token_file` field, then `~/.config/cairn/token`. Relative token files in
-project JSON resolve beside that file. For example:
-
-```json
-{"repo": "https://cairn.example.org", "token_file": "./cairn-access-token"}
-```
+`CAIRN_TOKEN`, `CAIRN_TOKEN_FILE`, the project token, then
+`~/.config/cairn/token`. The project token comes from the same level as the
+discovered repo: its `.cairn.toml` `token_file`, or `.cairn/token` for a local
+repo. A parent's credentials never pair with a subproject's own repo.
 
 The server uses one shared bearer token. It creates `.cairn/token` with mode
-`0600` when no token is found. A `.cairn` JSON file must supply a token or token
-file instead. Startup prints credential-free URLs. Clients reject base URLs
+`0600` when no token is found. Startup prints credential-free URLs. Clients reject base URLs
 containing credentials, query parameters, or fragments. HTTPS termination and
 service supervision are deployment responsibilities.
 
 Remote Python writers stage immutable bytes and ordered events in a durable
 outbox before `log()` returns. The default location is
-`$XDG_STATE_HOME/cairn/outbox/<repo-hash>` or
-`~/.local/state/cairn/outbox/<repo-hash>`. `Client(outbox=...)` selects an
-explicit location. `flush(timeout=...)` waits for acknowledgements, and
+`<state>/outbox/<repo-hash>`. `<state>` is `$CAIRN_STATE_DIR`, else
+`$XDG_STATE_HOME/cairn` or `~/.local/state/cairn`. Keep it apart from the
+disposable download cache: it may hold the only copy of unsent results.
+`Client(outbox=...)` selects an explicit location. `flush(timeout=...)` waits for acknowledgements, and
 `Client.recover()` reopens recorded writers after a restart. A journal is bound
 to its repo URL and repository identity; it is delivery state, not another
 queryable artifact repository. A new remote writer needs server acknowledgement
@@ -288,8 +301,8 @@ cairn --repo /srv/cairn/repository server --host 127.0.0.1 --port 8765
 ```
 
 The repository contains `metadata.sqlite3` and an `objects/` directory. The token
-file belongs to the nearest existing project `.cairn` directory (otherwise the
-working directory's `.cairn`) unless supplied through
+file belongs to the nearest project directory with `.cairn/` or `.cairn.toml`
+(otherwise the working directory's `.cairn`) unless supplied through
 token discovery.
 
 For PostgreSQL and S3, provision the database and bucket first. Boto3 uses its

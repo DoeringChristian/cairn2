@@ -1,9 +1,9 @@
-"""Small, explicit repo and single-token configuration helpers."""
+"""Small, explicit repo, project and single-token configuration helpers."""
 
-import json
 import os
 import secrets
 import socket
+import tomllib
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -14,22 +14,42 @@ def _cwd(cwd):
     return Path(cwd or Path.cwd()).expanduser().resolve()
 
 
-def _projects(cwd):
+def _read_settings(path):
+    try:
+        with path.open("rb") as file:
+            values = tomllib.load(file)
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise ValidationError(f"Cannot read configuration {path}: {error}") from error
+    if unknown := set(values) - {"repo", "project", "token_file"}:
+        raise ValidationError(f"Unknown settings in {path}: {', '.join(sorted(unknown))}")
+    if any(not isinstance(value, str) or not value.strip() for value in values.values()):
+        raise ValidationError(f"Settings in {path} must be nonempty strings")
+    return values
+
+
+def _settings(cwd):
+    """Merge .cairn.toml files upward; the nearest file setting a key wins.
+
+    The nearest level selecting a repo, by its repo setting or a .cairn/ folder,
+    also supplies the token: its token_file, or .cairn/token for a local repo.
+    """
+    settings = {}
     current = _cwd(cwd)
     for parent in (current, *current.parents):
-        candidate = parent / ".cairn"
-        if candidate.is_dir():
-            yield candidate, None
-        elif candidate.is_file():
-            try:
-                if candidate.stat().st_size > 65536:
-                    raise ValueError("configuration is larger than 64 KiB")
-                value = json.loads(candidate.read_text())
-                if not isinstance(value, dict):
-                    raise TypeError("configuration must be an object")
-            except (OSError, TypeError, ValueError) as error:
-                raise ValidationError(f"Cannot read configuration {candidate}: {error}") from error
-            yield candidate, value
+        folder, path = parent / ".cairn", parent / ".cairn.toml"
+        if folder.is_file():
+            raise ValidationError(f"{folder} must be a folder; move its settings to {path}")
+        values = _read_settings(path) if path.is_file() else {}
+        if "project" in values:
+            settings.setdefault("project", values["project"])
+        if "repo" not in settings and ("repo" in values or folder.is_dir()):
+            repo = values.get("repo", str(folder / "repo"))
+            settings["repo"] = (repo, parent)
+            if "token_file" in values:
+                settings["token_file"] = parent / Path(values["token_file"]).expanduser()
+            elif urlsplit(repo).scheme not in ("http", "https") and (folder / "token").is_file():
+                settings["token_file"] = folder / "token"
+    return settings
 
 
 def _token(value):
@@ -61,16 +81,8 @@ def resolve_token(explicit=None, *, cwd=None):
         return _token(os.environ["CAIRN_TOKEN"])
     if "CAIRN_TOKEN_FILE" in os.environ:
         return _read_token(_cwd(cwd) / Path(os.environ["CAIRN_TOKEN_FILE"]).expanduser())
-    for path, config in _projects(cwd):
-        if config is None:
-            if (path / "token").is_file():
-                return _read_token(path / "token")
-        elif "token" in config:
-            return _token(config["token"])
-        elif "token_file" in config:
-            if not isinstance(config["token_file"], str):
-                raise ValidationError(f"token_file in {path} must be a path string")
-            return _read_token(path.parent / Path(config["token_file"]).expanduser())
+    if path := _settings(cwd).get("token_file"):
+        return _read_token(path)
     path = Path.home() / ".config" / "cairn" / "token"
     return _read_token(path) if path.is_file() else None
 
@@ -81,8 +93,6 @@ def ensure_token(explicit=None, *, cwd=None):
     if existing is not None:
         return existing
     directory = _cwd(cwd) / ".cairn"
-    if directory.is_file():
-        raise ValidationError(f"Add token or token_file to {directory} before serving")
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "token"
     value = secrets.token_urlsafe(32)
@@ -104,21 +114,13 @@ def ensure_token(explicit=None, *, cwd=None):
 
 
 def resolve_repo(explicit=None, *, cwd=None):
-    """Resolve an explicit URL/path, environment setting, or project repository."""
+    """Resolve an explicit URL/path, CAIRN_REPO, .cairn.toml or .cairn/ folder."""
     value = explicit
     base = _cwd(cwd)
     if value is None:
         value = os.environ.get("CAIRN_REPO")
     if value is None:
-        for path, config in _projects(cwd):
-            if config is None:
-                return str(path / "repo")
-            value = config.get("repo")
-            if value is not None:
-                base = path.parent
-                break
-    if value is None:
-        return str(base / ".cairn" / "repo")
+        value, base = _settings(cwd).get("repo", (str(base / ".cairn" / "repo"), base))
     try:
         value = os.fspath(value)
     except TypeError as error:
@@ -128,6 +130,16 @@ def resolve_repo(explicit=None, *, cwd=None):
     if urlsplit(value).scheme in ("http", "https"):
         return value.rstrip("/")
     return str((base / Path(value).expanduser()).resolve())
+
+
+def resolve_project(explicit=None, *, cwd=None):
+    """Resolve an explicit project, CAIRN_PROJECT, .cairn.toml, or "default"."""
+    value = explicit
+    if value is None:
+        value = os.environ.get("CAIRN_PROJECT") or _settings(cwd).get("project", "default")
+    if not isinstance(value, str) or not value.strip():
+        raise ValidationError("Project must be a nonempty string")
+    return value
 
 
 def startup_urls(host, port, *, token=None):

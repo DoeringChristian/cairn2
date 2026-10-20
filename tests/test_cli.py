@@ -108,7 +108,7 @@ def test_cli_uses_shared_repo_discovery(tmp_path, monkeypatch, capsys):
     assert (tmp_path / "environment-repo/metadata.sqlite3").is_file()
     assert not (tmp_path / ".cairn").exists()
     monkeypatch.delenv("CAIRN_REPO")
-    (tmp_path / ".cairn").write_text('{"repo": "configured-repo"}')
+    (tmp_path / ".cairn.toml").write_text('repo = "configured-repo"\n')
     assert main(["info"]) == 0
     assert json.loads(capsys.readouterr().out)["repository_id"]
     assert (tmp_path / "configured-repo/metadata.sqlite3").is_file()

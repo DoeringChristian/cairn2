@@ -200,7 +200,7 @@ def test_log_preserves_explicit_wall_time_and_does_not_mutate_input(client, monk
 
 def test_artifact_context_add_restores_run_and_can_finish_value(tmp_path):
     def scenario():
-        run = cairn.init("study", repo=tmp_path / "repo", provenance=False)
+        run = cairn.init(project="study", repo=tmp_path / "repo", provenance=False)
         with cairn.artifact("datasets", "samples") as dataset:
             assert dataset.client is not run.client
             cairn.add(Table([{"sample": 1}]), name="samples")
@@ -253,7 +253,7 @@ def test_implicit_reports_after_finish(tmp_path):
     from cairn.reports import build, publish
 
     def scenario():
-        run = cairn.init("study", repo=tmp_path / "repo", provenance=False)
+        run = cairn.init(project="study", repo=tmp_path / "repo", provenance=False)
         cairn.finish(value=1)
         source = tmp_path / "report.qmd"
         source.write_text("---\ncairn:\n  inputs:\n    run: " + run.id + "\n---\n# Example\n")
@@ -309,3 +309,12 @@ def test_provenance_files_are_reserved_and_listed_separately(tmp_path, monkeypat
         assert [path.name for path in root.iterdir()] == ["notes.txt"]
         assert reader.download("provenance") == root / "provenance"
         assert all((root / name).is_file() for name in reader.provenance)
+
+
+def test_init_uses_configured_project_and_repo(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CAIRN_REPO", raising=False)
+    (tmp_path / ".cairn.toml").write_text('project = "configured"\nrepo = "store"\n')
+    run = cairn.init("trained", provenance=False)
+    assert (run.project, run.client.repo) == ("configured", str(tmp_path / "store"))
+    cairn.finish()

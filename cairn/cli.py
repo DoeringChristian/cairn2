@@ -87,7 +87,7 @@ def parser() -> argparse.ArgumentParser:
     root.add_argument(
         "--repo", metavar="PATH|URL", help="Repository path or server URL (otherwise discovery)"
     )
-    root.add_argument("--project", default="default")
+    root.add_argument("--project", help="Project namespace (otherwise CAIRN_PROJECT, .cairn.toml)")
     root.add_argument("--token", help="Bearer token; environment or token file is preferable")
     commands = root.add_subparsers(dest="command", required=True)
     commands.add_parser("info", help="Show repository identity and protocol version").set_defaults(
@@ -315,7 +315,11 @@ def _serve(args):
         # the next SDK discovery. Keep the token in the existing project.
         cwd = Path.cwd()
         token_root = next(
-            (parent for parent in (cwd, *cwd.parents) if (parent / ".cairn").exists()),
+            (
+                parent
+                for parent in (cwd, *cwd.parents)
+                if (parent / ".cairn").exists() or (parent / ".cairn.toml").is_file()
+            ),
             cwd,
         )
         token = ensure_token(args.token, cwd=token_root) if not args.no_auth else None
@@ -475,10 +479,13 @@ def main(argv=None) -> int:
 
             _print({"path": str(new(args.destination, title=args.title))})
             return 0
+        from .config import resolve_project
         from .sdk import Client
 
         if args.action.startswith("repo-"):
-            client = SimpleNamespace(backend=_repository(args), project=args.project)
+            client = SimpleNamespace(
+                backend=_repository(args), project=resolve_project(args.project)
+            )
         else:
             client = Client(args.repo, project=args.project, token=args.token)
         try:
