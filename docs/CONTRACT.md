@@ -128,7 +128,9 @@ writes into server results.
 
 `Client.start(namespace, name)` returns a writable `Artifact`; `Client.run()` and
 `cairn.init()` add config and client-captured provenance through ordinary metadata
-and captures. `finish()` returns the finished descriptor; `.id` stays unchanged.
+and captures. Unless `capture_output=False`, they also store the process's stdout and
+stderr as `console/NNNNNN.log` file captures until the run finishes or closes.
+Capture names under `provenance/` and `console/` are reserved for Cairn. `finish()` returns the finished descriptor; `.id` stays unchanged.
 `Client.resolve()` returns a `Reader` only for a finished artifact. `use()` records
 a dependency on that exact ID. No revision ID or snapshot API is exposed.
 

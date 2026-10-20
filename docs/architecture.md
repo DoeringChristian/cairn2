@@ -78,8 +78,11 @@ including references in pending finalization intents.
 Run helpers capture config, Python/platform/process information, package inventory,
 Git state, dirty source changes, a bounded source archive and dependency files.
 Collection happens on the client through ordinary metadata and file captures.
-Omissions are reported; raw environment variables are not dumped. Generic artifact
-creation performs no automatic capture. See README for provenance opt-outs.
+Omissions are reported; raw environment variables are not dumped. Console output
+is redirected at the file-descriptor level, through a pseudo-terminal when the
+output is a terminal, and stored in bounded chunks as `console/` captures while the
+run is live. Generic artifact creation performs no automatic capture. See README for
+provenance and console opt-outs.
 
 The QMD builder captures source/includes/resources, resolves declared finished
 inputs, executes a fresh local kernel and packages outputs plus source mappings.

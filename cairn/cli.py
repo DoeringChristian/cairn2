@@ -115,6 +115,16 @@ def parser() -> argparse.ArgumentParser:
     _log_arguments(commands.add_parser("log", help="Append a record to an existing writer"))
     _inspect_arguments(commands.add_parser("inspect", help="Inspect a live or finished artifact"))
     _query_arguments(commands.add_parser("query", help="Query stable, paginated records"))
+    add = commands.add_parser(
+        "add", help="Publish files and folders as the next version of namespace/name"
+    )
+    add.add_argument("name", metavar="namespace/name")
+    add.add_argument("paths", nargs="+", metavar="path")
+    add.add_argument("--metadata", type=_json)
+    add.add_argument(
+        "--use", action="append", default=[], help="Record an input artifact; repeatable"
+    )
+    add.set_defaults(action="add")
     remove = commands.add_parser("remove", help="Remove one exact artifact; gc reclaims storage")
     remove.add_argument("reference")
     remove.set_defaults(action="remove")
@@ -433,6 +443,23 @@ def _dispatch(args, client):
         )
     if action == "inspect":
         return backend.resolve(args.reference, project=client.project)
+    if action == "add":
+        namespace, separator, name = args.name.partition("/")
+        if not separator or "@" in args.name:
+            raise ValidationError("add expects namespace/name without a version")
+        if args.metadata is not None and not isinstance(args.metadata, dict):
+            raise ValidationError("Metadata must be a JSON object")
+        for path in args.paths:
+            if not Path(path).exists():
+                raise FileNotFoundError(f"No such file or folder: {path}")
+        with client.start(namespace, name) as artifact:
+            if args.metadata:
+                artifact.update(args.metadata)
+            for reference in args.use:
+                artifact.use(reference)
+            for path in args.paths:
+                artifact.add(path)
+        return artifact.result
     if action == "remove":
         return client.remove(args.reference)
     if action == "gc":

@@ -298,6 +298,7 @@ def test_top_level_artifact_inherits_remote_run_and_restores_it(tmp_path):
             assert not run.client._closed
             cairn.use(dataset.id, role="training-data")
             cairn.log(loss=0.2)
+            print("remote output")
             cairn.finish()
             descriptor = repository.resolve(dataset.id)
             assert descriptor["project"] == "study"
@@ -306,6 +307,8 @@ def test_top_level_artifact_inherits_remote_run_and_restores_it(tmp_path):
                 repository.resolve(run.id)["manifest"]["dependencies"][0]["artifact_id"]
                 == dataset.id
             )
+            with Client(url, project="study", token="test-token") as client:
+                assert client.resolve(run.id).console() == "remote output\n"
 
         contextvars.Context().run(scenario)
 

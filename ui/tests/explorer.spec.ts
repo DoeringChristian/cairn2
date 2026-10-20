@@ -462,6 +462,16 @@ test('finished report polling stops and metadata refresh does not re-render pros
   expect(await page.evaluate(()=>(window as any).reportHtmlParses)).toBe(parses);
 });
 
+test('run console shows the output stored by the run',async({page,request})=>{
+  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=runs')).json();
+  const run=items.find((a:any)=>a.name==='showcase-baseline'&&a.state==='finished');
+  await page.goto(`/p/neural-rendering/a/${run.id}`);
+  await page.getByRole('tab',{name:'Console',exact:true}).click();
+  await expect(page.locator('.console-output')).toHaveText('step 0: loss 1.02\nstep 20: loss 0.349193\nstep 40: loss 0.128368\n');
+  await page.getByRole('tab',{name:'Overview',exact:true}).click();
+  await expect(page.getByRole('heading',{name:/^console\//})).toHaveCount(0);
+});
+
 test('live artifact keeps polling until it finishes', async ({page,request}) => {
   const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
   const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];

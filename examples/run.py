@@ -25,6 +25,8 @@ def main():
     for step in range(60):
         loss = round(math.exp(-step / 18) + 0.02, 6)
         cairn.log({"loss": loss}, step=step)
+        if step % 20 == 0:
+            print(f"step {step}: loss {loss}")
 
     cairn.finish(value={"loss": 0.018, "psnr": 34.2, "converged": True})
 

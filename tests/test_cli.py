@@ -82,6 +82,24 @@ def test_cli_remove_and_gc(tmp_path, capsys):
     assert collected["artifacts"] == [identifier]
 
 
+def test_cli_add_publishes_files_and_folders_as_the_next_version(tmp_path, capsys):
+    repo, data = tmp_path / "repo", tmp_path / "shapes"
+    (data / "train").mkdir(parents=True)
+    (data / "train" / "a.txt").write_text("a")
+    (tmp_path / "labels.csv").write_text("x")
+    paths = [str(data), str(tmp_path / "labels.csv")]
+    first = invoke(capsys, repo, "add", "datasets/shapes", *paths, "--metadata", '{"n": 1}')
+    assert (first["number"], first["metadata"]) == (1, {"n": 1})
+    assert sorted(first["manifest"]["captures"]) == ["labels.csv", "shapes"]
+    model = invoke(capsys, repo, "add", "models/m", paths[1], "--use", "datasets/shapes@v1")
+    assert model["manifest"]["dependencies"] == [{"artifact_id": first["id"], "role": "input"}]
+    assert invoke(capsys, repo, "add", "datasets/shapes", paths[1])["number"] == 2
+    for args in (["datasets/shapes@v1", paths[1]], ["shapes", paths[1]], ["data/x", "missing"]):
+        assert main(["--repo", str(repo), "add", *args]) == 1
+        assert json.loads(capsys.readouterr().err)["message"]
+    assert invoke(capsys, repo, "inspect", "datasets/shapes")["number"] == 2
+
+
 def test_report_new_default_and_machine_readable_error(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     assert main(["report", "new"]) == 0

@@ -98,6 +98,14 @@ set its main value explicitly. Otherwise it finishes automatically.
 `add()` replaces the former Python `capture()` method; no alias is retained.
 It stores named files or typed values, not environment metadata.
 
+From the shell, `cairn add` does the same in one step. Each call publishes the
+next version of the name with every given file or folder, named by its base name:
+
+```sh
+cairn add datasets/shapes data/shapes data/labels.csv --metadata '{"source": "survey"}'
+cairn add models/resnet ckpt.pt --use datasets/shapes@v1
+```
+
 After `cairn.init()`, report `build()` and `publish()` can omit `client=`:
 they inherit that run's repository and project even after the run finishes.
 Explicit clients remain supported.
@@ -130,6 +138,17 @@ working directory. Capture happens at initialization, so files changed later
 need an explicit `run.add(...)`. No raw environment-variable dump is taken.
 The archive records evidence; it does not promise a fully reproducible container.
 Generic `client.start(...)` performs no automatic provenance capture.
+
+Runs also store their console output. Standard output and error, including
+output from extensions and subprocesses, are stored as they happen under
+`console/` and still reach the terminal; a terminal stays a terminal, so colours
+and progress bars are unchanged. The two streams are merged in arrival order.
+Chunks are written every few seconds, less often as a run grows, and at finish
+or interpreter exit. Storage stops after 64 MiB with a truncation note. Only one
+run per process captures at a time. Everything printed is stored, so pass
+`capture_output=False` to `cairn.init`, `cairn.run` or `Client.run` when output
+may contain secrets. `reader.console()` returns the text, and the UI shows it in
+a run's Console tab.
 
 Internally, `start(project, namespace, name, request_id=...)` creates only
 one live artifact and its first writer. Metadata follows as ordinary ordered
@@ -175,9 +194,10 @@ else `$XDG_CACHE_HOME/cairn` or `~/.cache/cairn`. Content is fetched once into
 `<cache>/blobs/<sha256>`, verified, made read-only and hard-linked (or copied
 across filesystems) into the target; copy a file before editing it.
 
-Names under `provenance/` are reserved for Cairn and rejected by `add()`. They are
-not in `reader.files` or a whole-artifact download; `reader.provenance` lists them
-and `reader.download("provenance")` downloads them.
+Names under `provenance/` and `console/` are reserved for Cairn and rejected by
+`add()`. They are not in `reader.files` or a whole-artifact download;
+`reader.provenance` lists the former, and `reader.download("provenance")` or
+`reader.download("console")` downloads them.
 
 JSON numbers must be finite, and integers must be in the portable exact range
 `-(2**53 - 1)` through `2**53 - 1`. Use typed `Array` values for wider integers or
@@ -558,7 +578,7 @@ against an existing service.
 
 The API provides one artifact lifecycle, multiple producers, alias compare-and-swap,
 typed values, comments, SQL-filtered record queries, streaming blobs and explicit
-transfer/maintenance. Runs automatically capture client-side provenance. The
+transfer/maintenance. Runs automatically capture client-side provenance and console output. The
 backend has one shared token and ordinal query ordering; no server report executor
 or AI integration. Unknown schemas fail explicitly: repository schema **7**, HTTP
 protocol **4**, durable outbox schema **3**. Typed-value codec envelopes remain

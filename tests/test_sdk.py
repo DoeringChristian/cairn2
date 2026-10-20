@@ -1,4 +1,5 @@
 import contextvars
+import subprocess
 import sys
 
 import pytest
@@ -310,6 +311,46 @@ def test_provenance_files_are_reserved_and_listed_separately(tmp_path, monkeypat
         assert [path.name for path in root.iterdir()] == ["notes.txt"]
         assert reader.download("provenance") == root / "provenance"
         assert all((root / name).is_file() for name in reader.provenance)
+
+
+def test_runs_store_console_output_and_keep_the_terminal(tmp_path):
+    script = (
+        "import os, subprocess, sys, cairn\n"
+        f"with cairn.init('printing', project='study', repo={str(tmp_path / 'repo')!r}, "
+        "provenance=False):\n"
+        "    print('from python', flush=True)\n"
+        "    print('to stderr', file=sys.stderr, flush=True)\n"
+        "    os.write(1, b'from the descriptor\\n')\n"
+        "    subprocess.run(['echo', 'from a subprocess'], check=True)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=True
+    )
+    printed = ["from python", "from the descriptor", "from a subprocess"]
+    assert (result.stdout.splitlines(), result.stderr) == (printed, "to stderr\n")
+    with Client(tmp_path / "repo", project="study") as client:
+        reader = client.resolve("runs/printing")
+        assert sorted(reader.console().splitlines()) == sorted([*printed, "to stderr"])
+        assert reader.files == [] and reader.download("console").is_dir()
+
+
+def test_console_capture_is_optional_bounded_and_held_by_one_run(tmp_path, monkeypatch):
+    monkeypatch.setattr("cairn.console.LIMIT", 8)
+    with Client(tmp_path / "repo", project="study") as client:
+        quiet = client.run("quiet", provenance=False, capture_output=False)
+        loud = client.run("loud", provenance=False)
+        nested = client.run("nested", provenance=False)
+        assert quiet._console is None and nested._console is None
+        print("0123456789")
+        with pytest.raises(ValidationError, match="reserved"):
+            loud.add(b"x", name="console/000002.log")
+        for run in (loud, quiet, nested):
+            run.finish()
+        assert client.resolve(loud).console() == "01234567\n[cairn: console output truncated]\n"
+        assert client.resolve(quiet).console() == ""
+        with Client(tmp_path / "repo", project="study") as other:
+            assert other.run("abandoned", provenance=False)._console is not None
+        assert client.run("later", provenance=False)._console is not None
 
 
 def test_init_uses_configured_project_and_repo(tmp_path, monkeypatch):

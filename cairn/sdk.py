@@ -40,7 +40,7 @@ from .model import (
 if TYPE_CHECKING:
     from .contract import RepositoryProtocol, StartResult
 
-SECTIONS = ("provenance",)
+SECTIONS = ("provenance", "console")
 
 
 class Client:
@@ -54,6 +54,7 @@ class Client:
         self._outbox = None
         self._lifecycle_lock = threading.RLock()
         self._closed = False
+        self._consoles = []
         if self.repo.startswith(("http://", "https://")):
             from .transport import HTTPRepository
 
@@ -92,7 +93,16 @@ class Client:
         )
         return Artifact(self, response)
 
-    def run(self, name=None, *, config=None, metadata=None, provenance=True, capture_source=True):
+    def run(
+        self,
+        name=None,
+        *,
+        config=None,
+        metadata=None,
+        provenance=True,
+        capture_source=True,
+        capture_output=True,
+    ):
         information = copy.deepcopy({} if metadata is None else metadata)
         if not isinstance(information, dict):
             raise ValidationError("Run metadata must be a dictionary")
@@ -100,8 +110,8 @@ class Client:
             if "config" in information and information["config"] != config:
                 raise Conflict("config and metadata['config'] disagree")
             information["config"] = copy.deepcopy(config)
-        if type(provenance) is not bool or type(capture_source) is not bool:
-            raise ValidationError("provenance and capture_source must be booleans")
+        if {type(provenance), type(capture_source), type(capture_output)} != {bool}:
+            raise ValidationError("provenance, capture_source and capture_output must be booleans")
         canonical(information)
         captures = {}
         if provenance:
@@ -113,6 +123,12 @@ class Client:
         run.update(information)
         for capture_name, content in captures.items():
             run._add(content, capture_name)
+        if capture_output:
+            from .console import capture
+
+            run._console = capture(run)
+            if run._console:
+                self._consoles.append(run._console)
         return run
 
     def attach(self, artifact_id):
@@ -218,6 +234,8 @@ class Client:
         with self._lifecycle_lock:
             if self._closed:
                 return
+            for console in self._consoles:
+                console.stop()
             if self.delivery:
                 self.delivery.close()
             self.backend.close()
@@ -247,6 +265,7 @@ class Artifact:
         self._finish_request = new_id("request")
         self._lock = threading.RLock()
         self._owns_client = False
+        self._console = None
 
     def __repr__(self):
         ref = f"{self.namespace}/{self.name}"
@@ -359,6 +378,8 @@ class Artifact:
         outcome="completed",
         timeout=None,
     ):
+        if self._console:
+            self._console.stop()
         with self._lock:
             if outcome not in {"completed", "failed", "cancelled", "incomplete"}:
                 raise ValidationError("Invalid artifact outcome")
@@ -423,6 +444,8 @@ class Artifact:
 
     def close(self, *, timeout=None):
         """Close this producer without requesting artifact finalization."""
+        if self._console:
+            self._console.stop()
         with self._lock:
             if self.client.delivery:
                 self.client.delivery.request_close(self.writer_id)
@@ -543,6 +566,12 @@ class Reader:
     def provenance(self):
         return self._section("provenance")
 
+    def console(self):
+        """The run's stdout and stderr as one text, in the order Cairn received it."""
+        return b"".join(self.file(name).load() for name in sorted(self._section("console"))).decode(
+            "utf-8", "replace"
+        )
+
     def _section(self, section):
         captures = self._descriptor["manifest"].get("captures", {})
         return [name for name in captures if name.split("/", 1)[0] == section]
@@ -608,6 +637,7 @@ def init(
     outbox=None,
     provenance=True,
     capture_source=True,
+    capture_output=True,
 ):
     client = Client(repo, project=project, token=token, outbox=outbox)
     try:
@@ -617,6 +647,7 @@ def init(
             metadata=metadata,
             provenance=provenance,
             capture_source=capture_source,
+            capture_output=capture_output,
         )
     except BaseException:
         client.close()
@@ -637,6 +668,7 @@ def run(
     outbox=None,
     provenance=True,
     capture_source=True,
+    capture_output=True,
 ):
     """Decorate a function so that every call runs inside its own cairn.init() run.
 
@@ -668,6 +700,7 @@ def run(
                 outbox=outbox,
                 provenance=provenance,
                 capture_source=capture_source,
+                capture_output=capture_output,
             ):
                 return function(*args, **kwargs)
 

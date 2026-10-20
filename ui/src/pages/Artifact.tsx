@@ -10,6 +10,7 @@ import { Graph } from '../components/Graph';
 import { api, post, envelope, projectPath, artifactPath, when, type Artifact, type BlobRef, type Json } from '../api';
 import { ActionIcon, BlobTable, Button, Crumbs, DataTable, DocumentReader, ErrorNote, Hero, Hint, JsonBlock, KeyValueTable, LinkButton, Loading, Pill, Section, Select, StatusPill, Tabs, ValueView } from '../components';
 import { RecordsPanel } from './Records';
+import { ConsolePanel } from './Console';
 
 type Detail = { target: string; selected: Artifact; history: Artifact[] };
 /** Soft removal behind a confirmation dialog; artifacts that still depend on it keep it readable by ID. */
@@ -89,7 +90,9 @@ export function ArtifactPage() {
   const ref = `${selected.namespace}/${selected.name}${selected.number ? `@v${selected.number}` : ''}`;
   const choices = history.slice().reverse().map(a => ({ value: a.id, label: `v${a.number} · ${a.manifest?.outcome || a.state}` }));
   if (!choices.some(c => c.value === selected.id)) choices.unshift({ value: selected.id, label: selected.number ? `v${selected.number} · ${selected.manifest?.outcome || selected.state}` : `${selected.state} · ${selected.id.slice(0, 12)}` });
-  const tabs = [{ value: 'overview', label: report ? 'Report' : 'Overview' }, { value: 'records', label: 'Records' }, { value: 'files', label: 'Files' }, { value: 'lineage', label: 'Lineage' }, { value: 'versions', label: 'History', count: history.length }, { value: 'metadata', label: 'Metadata' }];
+  const captures = Object.entries(manifest?.captures || {}).filter(([name]) => !name.startsWith('console/'));
+  const showConsole = run && (live || captures.length < Object.keys(manifest?.captures || {}).length);
+  const tabs = [{ value: 'overview', label: report ? 'Report' : 'Overview' }, { value: 'records', label: 'Records' }, ...(showConsole ? [{ value: 'console', label: 'Console' }] : []), { value: 'files', label: 'Files' }, { value: 'lineage', label: 'Lineage' }, { value: 'versions', label: 'History', count: history.length }, { value: 'metadata', label: 'Metadata' }];
   const namedBlobs: BlobRef[] = [];
   const visit = (v: unknown) => {
     if (!v || typeof v !== 'object') return;
@@ -97,7 +100,7 @@ export function ArtifactPage() {
     if (t) { namedBlobs.push(...(t.blobs || [])); if (t.format === 'json/literal') return; }
     for (const [key, child] of Object.entries(v)) if (key !== 'blobs' && key !== 'refs') visit(child);
   };
-  visit(value); visit(manifest?.captures);
+  visit(value); visit(Object.fromEntries(captures));
   const unique = new Map<string, BlobRef>();
   for (const blob of [...namedBlobs, ...(manifest?.blobs || [])]) if (!unique.has(blob.digest)) unique.set(blob.digest, blob);
 
@@ -115,9 +118,10 @@ export function ArtifactPage() {
         <Section title={run ? 'Final result' : 'Value'}><ValueView value={value}/></Section>
       </>}
       {metadata.config !== undefined && <Section title="Configuration"><JsonBlock value={metadata.config}/></Section>}
-      {manifest && Object.keys(manifest.captures).length > 0 && <Section title="Captures">{Object.entries(manifest.captures).map(([name, value]) => <Section key={name} title={name}><ValueView value={value}/></Section>)}</Section>}
+      {captures.length > 0 && <Section title="Captures">{captures.map(([name, value]) => <Section key={name} title={name}><ValueView value={value}/></Section>)}</Section>}
     </>}
     {tab === 'records' && <RecordsPanel key={`records:${selected.id}`} reference={selected.id} project={selected.project} run={false} live={live} refresh={refresh}/>}
+    {tab === 'console' && <ConsolePanel key={`console:${selected.id}`} reference={selected.id} project={selected.project} live={live}/>}
     {tab === 'files' && <Section title="Files"><BlobTable blobs={[...unique.values()]}/>{live && <Hint>Captured values are available in the capture records while this artifact is live. Finished artifacts collect them here.</Hint>}</Section>}
     {tab === 'metadata' && <><Section title="Metadata"><JsonBlock value={metadata}/></Section><Section title="Identity"><KeyValueTable rows={[["Artifact ID", <CopyId value={selected.id}/>], ["State", selected.state], ["Version label", selected.number ? `v${selected.number}` : 'Not finished'], ["Project", selected.project], ["Namespace", selected.namespace]]}/></Section><Section title="Annotations"><JsonBlock value={selected.annotations}/></Section><Section title="Raw descriptor"><JsonBlock value={selected}/></Section></>}
     {tab === 'lineage' && <Section title="Lineage"><Graph root={selected.id} project={selected.project}/><Section title="Pinned inputs">{manifest?.dependencies.length ? <DataTable head={['Artifact', 'Role']}>{manifest.dependencies.map(d => <tr key={d.artifact_id + d.role}><td><CopyId value={d.artifact_id}/><Link to={artifactPath(selected.project,d.artifact_id)} aria-label="Open input artifact"> ↗</Link></td><td><Pill tone="alias">{d.role}</Pill></td></tr>)}</DataTable> : <Hint>{live ? 'The graph includes the dependencies recorded so far.' : 'No input dependencies recorded.'}</Hint>}</Section></Section>}
