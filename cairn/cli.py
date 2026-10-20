@@ -579,7 +579,12 @@ def _dispatch(args, client):
 
 def main(argv=None) -> int:
     """Return an exit code; errors are machine-readable JSON on stderr."""
-    args = parser().parse_args(argv)
+    command = parser()
+    args, extra = command.parse_known_args(argv)
+    if extra:
+        if args.action != "report-build" or any(item.startswith("-") for item in extra):
+            command.error("unrecognized arguments: " + " ".join(extra))
+        args.overrides += extra
     try:
         if args.action == "server":
             _serve(args)
