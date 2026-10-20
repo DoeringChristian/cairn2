@@ -2,28 +2,33 @@ import { clearViews, readView, writeView } from '../viewCache';
 import { invalidateLists } from '../listCache';
 import { ArtifactTags } from '../components/ArtifactTags';
 import { CopyId } from '../components/CopyId';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { RefreshCw, Trash2 } from 'lucide-react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useRefreshMode } from '../refresh';
 import { Graph } from '../components/Graph';
 import { api, post, envelope, projectPath, artifactPath, when, type Artifact, type BlobRef, type Json } from '../api';
-import { BlobTable, Button, Crumbs, DataTable, DocumentReader, ErrorNote, Hero, Hint, JsonBlock, KeyValueTable, LinkButton, Loading, Pill, Section, Select, StatusPill, Tabs, ValueView } from '../components';
+import { ActionIcon, BlobTable, Button, Crumbs, DataTable, DocumentReader, ErrorNote, Hero, Hint, JsonBlock, KeyValueTable, LinkButton, Loading, Pill, Section, Select, StatusPill, Tabs, ValueView } from '../components';
 import { RecordsPanel } from './Records';
 
 type Detail = { target: string; selected: Artifact; history: Artifact[] };
-/** Two-step soft removal; artifacts that still depend on it keep it readable by ID. */
-function RemoveArtifact({artifact}: {artifact: Artifact}) {
-  const navigate = useNavigate();
-  const [confirming, setConfirming] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState<Error>();
+/** Soft removal behind a confirmation dialog; artifacts that still depend on it keep it readable by ID. */
+function RemoveArtifact({artifact, reference}: {artifact: Artifact; reference: string}) {
+  const navigate = useNavigate(), dialog = useRef<HTMLDialogElement>(null);
+  const [busy, setBusy] = useState(false), [error, setError] = useState<Error>();
   const view = artifact.namespace === 'runs' ? 'runs' : artifact.namespace === 'reports' ? 'reports' : 'artifacts';
   async function remove() {
     setBusy(true); setError(undefined);
     try { await api(`/ui-api/artifacts/${artifact.id}`, {method: 'DELETE'}); invalidateLists(); clearViews(); navigate(`${projectPath(artifact.project)}?view=${view}`); }
     catch (e) { setError(e as Error); setBusy(false); }
   }
-  if (!confirming) return <Button small onClick={() => setConfirming(true)}>Remove</Button>;
-  return <span className="remove-confirm" role="group" aria-label="Confirm removal"><span>Remove {artifact.number ? `v${artifact.number}` : 'this artifact'}?</span>
-    <Button small primary disabled={busy} onClick={() => void remove()}>{busy ? 'Removing…' : 'Remove'}</Button><Button small disabled={busy} onClick={() => setConfirming(false)}>Cancel</Button>{error && <ErrorNote error={error}/>}</span>;
+  return <><ActionIcon danger label="Remove artifact" onClick={() => dialog.current?.showModal()}><Trash2 size={17} aria-hidden="true"/></ActionIcon>
+    <dialog ref={dialog} className="confirm-dialog" aria-labelledby={`remove-${artifact.id}`} onClick={event => {if (event.target === dialog.current && !busy) dialog.current.close();}} onClose={() => setError(undefined)}>
+      <h2 id={`remove-${artifact.id}`}>Remove <code>{reference}</code>?</h2>
+      <p>It disappears from lists and names. Artifacts that use it keep it readable by ID; <code>cairn gc</code> frees its storage.</p>
+      {error && <ErrorNote error={error}/>}
+      <div className="form-actions"><Button disabled={busy} onClick={() => dialog.current?.close()}>Cancel</Button><Button className="danger" disabled={busy} onClick={() => void remove()}>{busy ? 'Removing…' : 'Remove'}</Button></div>
+    </dialog></>;
 }
 
 export function ArtifactPage() {
@@ -99,7 +104,7 @@ export function ArtifactPage() {
   return <main>
     <Hero eyebrow={<Crumbs items={[{ label: 'Projects', to: '/' }, { label: selected.project, to: projectPath(selected.project) }, { label: selected.namespace }]}/>} title={typeof metadata.title === 'string' ? metadata.title : selected.name} subtitle={typeof metadata.description === 'string' ? metadata.description : undefined} status={<StatusPill status={manifest?.outcome || selected.state}/>}/>
     {error && <ErrorNote error={error}/>}
-    <div className="detail-bar"><code className="wrap-any">{ref}</code><Select label="Artifact version" value={selected.id} choices={choices} onChange={target => navigate(artifactPath(selected.project, target))}/><Button small onClick={() => setRefresh(n => n + 1)}>Refresh</Button><RemoveArtifact key={selected.id} artifact={selected}/></div>
+    <div className="detail-bar"><code className="wrap-any">{ref}</code><Select label="Artifact version" value={selected.id} choices={choices} onChange={target => navigate(artifactPath(selected.project, target))}/><ActionIcon label="Refresh" onClick={() => setRefresh(n => n + 1)}><RefreshCw size={17} aria-hidden="true"/></ActionIcon><RemoveArtifact key={selected.id} artifact={selected} reference={ref}/></div>
     <div className="detail-facts"><span>{live ? 'Started' : 'Finished'} {when(selected.finished_at || selected.created_at)}</span><span>{selected.cutoff} entries</span><CopyId value={selected.id} short/></div>
     <ArtifactTags key={`tags:${selected.id}`} artifact={selected} onChange={()=>setRefresh(n=>n+1)}/>
     {live && <Hint>This artifact is {selected.state}. Its ID stays the same when it finishes.</Hint>}

@@ -31,6 +31,11 @@ export function ToggleGroup<T extends string>({ label, value, options, onChange 
   );
 }
 
+/** A square, icon-only page action with its label as tooltip; `danger` paints it red. */
+export function ActionIcon({ label, danger, children, ...rest }: { label: string; danger?: boolean; children: ReactNode } & Omit<ButtonHTMLAttributes<HTMLButtonElement>, "className" | "children">) {
+  return <button type="button" className={"action-icon" + (danger ? " danger" : "")} aria-label={label} title={label} {...rest}>{children}</button>;
+}
+
 /** The round, translucent icon button of the lightbox (`button.icon`), positioned by its extra class. */
 export function IconButton({ label, className, children, ...rest }: { label: string; className?: string; children: ReactNode } & Omit<ButtonHTMLAttributes<HTMLButtonElement>, "className" | "children">) {
   return <button type="button" className={"icon" + (className ? " " + className : "")} aria-label={label} title={label} {...rest}>{children}</button>;

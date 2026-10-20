@@ -2,9 +2,10 @@ import { cachedList, cacheList, invalidateList } from '../listCache';
 import { ArtifactTags, artifactTags } from '../components/ArtifactTags';
 import { useRefresh, useRefreshMode } from '../refresh';
 import { useEffect, useState } from 'react';
+import { RefreshCw } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, useResource, artifactPath, when, type Project, type ArtifactSummary } from '../api';
-import { Button, Crumbs, DataTable, ErrorNote, Hero, Hint, Loading, MetricCard, MetricGrid, Pill, ProjectCard, ReportCard, ReportGrid, SearchInput, Section, Toolbar } from '../components';
+import { ActionIcon, Button, Crumbs, DataTable, ErrorNote, Hero, Hint, Loading, MetricCard, MetricGrid, Pill, ProjectCard, ReportCard, ReportGrid, SearchInput, Section, Toolbar } from '../components';
 export function ProjectsPage() {
   const [revision, refresh] = useState(0), [search, setSearch] = useState('');
   const pulse = useRefresh();
@@ -13,7 +14,7 @@ export function ProjectsPage() {
   const filtered = data?.filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
   return <main><Hero eyebrow="Repository" title="Projects" subtitle="A home for your experiments and the evidence behind them." status="Cairn explorer"/>
     {data && <MetricGrid><MetricCard label="Projects" value={data.length}/><MetricCard label="Artifacts" value={data.reduce((n,p) => n+p.artifacts, 0)} note="Across all namespaces"/><MetricCard label="Reports" value={data.reduce((n,p) => n+p.reports, 0)}/></MetricGrid>}
-    <Section title="Your projects" actions={<Button small onClick={() => refresh(n=>n+1)}>Refresh</Button>}><Toolbar><SearchInput label="Search projects" value={search} onChange={setSearch}/></Toolbar>
+    <Section title="Your projects" actions={<ActionIcon label="Refresh" onClick={() => refresh(n=>n+1)}><RefreshCw size={17} aria-hidden="true"/></ActionIcon>}><Toolbar><SearchInput label="Search projects" value={search} onChange={setSearch}/></Toolbar>
     {loading && <Loading/>}{error && <ErrorNote error={error}/>}{data?.length === 0 && <Hint>No projects yet. Record an experiment or publish an artifact to get started.</Hint>}
     {!!filtered?.length && <div className="project-grid">{filtered.map(p=><ProjectCard key={p.name} project={p}/>)}</div>}
     {!!data?.length && !filtered?.length && <Hint>No projects match “{search}”.</Hint>}</Section></main>;
@@ -73,7 +74,7 @@ export function ProjectPage() {
   function changePage(value: number) {const next=new URLSearchParams(params);next.set('page', String(value));setParams(next);}
   const filtered = items;
   return <main><Hero eyebrow={<Crumbs items={[{label:'Projects',to:'/'},{label:project}]}/>} title={project} subtitle="Reports, experiments, and the evidence that connects them."/>
-    <Section title={tab==='reports'?'Your reports':tab==='runs'?'Experiment runs':tab==='artifacts'?'Artifact library':'Everything'} actions={<Button small onClick={refreshList}>Refresh</Button>}>
+    <Section title={tab==='reports'?'Your reports':tab==='runs'?'Experiment runs':tab==='artifacts'?'Artifact library':'Everything'} actions={<ActionIcon label="Refresh" onClick={refreshList}><RefreshCw size={17} aria-hidden="true"/></ActionIcon>}>
     <Toolbar><SearchInput label={tab==='reports'?'Search reports':'Search artifacts'} value={search} onChange={value=>{setSearch(value);if(page)changePage(0);}}/><form onSubmit={e=>{e.preventDefault();const tag=tagDraft.trim();if(tag&&!selectedTags.includes(tag))toggleTag(tag);setTagDraft('');}}><SearchInput label="Filter by tag" value={tagDraft} onChange={setTagDraft}/></form></Toolbar>
     {(!!availableTags.length||!!selectedTags.length)&&<div className="tag-filters" aria-label="Filter by tags"><span className="muted">Tags</span>{[...new Set([...availableTags,...selectedTags])].map(tag=><button type="button" className="tag-chip" key={tag} aria-pressed={selectedTags.includes(tag)} onClick={()=>toggleTag(tag)}>{tag}</button>)}{!!selectedTags.length&&<button type="button" className="tag-clear" onClick={()=>{const next=new URLSearchParams(params);next.delete('tag');next.delete('page');setParams(next);}}>Clear tags</button>}</div>}
     {loading && !items.length && <Loading/>}{error && <ErrorNote error={error}/>}{!loading && !error && !filtered.length && <Hint>No matching {tab === 'reports' ? 'reports' : 'artifacts'} in this view.</Hint>}
