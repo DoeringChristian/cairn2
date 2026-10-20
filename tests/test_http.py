@@ -119,7 +119,12 @@ def test_real_http_contract_and_publication(repositories):
         exact, {"path": "report.qmd", "line": 2}, "Checked", request_id="comment"
     )
     assert remote.comments(exact) == direct.comments(exact) == [comment]
-    assert remote.delete_comment(comment["id"]) is None
+    edited = remote.update_comment(comment["id"], "Rechecked", expected_revision=1)
+    resolved = remote.resolve_comment(comment["id"], note="Fixed", by="agent", request_id="fix")
+    assert (edited["revision"], resolved["resolution"]) == (2, {"note": "Fixed", "by": "agent"})
+    assert remote.comments(exact, scope="name", include_resolved=False) == []
+    assert remote.comments(exact, scope="name") == direct.comments(exact) == [resolved]
+    assert remote.delete_comment(comment["id"]) == {"id": comment["id"], "deleted": True}
     assert remote.comments(exact) == []
     assert remote.delete(artifact, request_id="delete") == {
         "id": artifact,

@@ -1,4 +1,5 @@
 import contextvars
+import sys
 
 import pytest
 
@@ -318,3 +319,68 @@ def test_init_uses_configured_project_and_repo(tmp_path, monkeypatch):
     run = cairn.init("trained", provenance=False)
     assert (run.project, run.client.repo) == ("configured", str(tmp_path / "store"))
     cairn.finish()
+
+
+def test_run_decorator_starts_one_run_per_call_and_restores_context(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CAIRN_REPO", str(tmp_path / "repo"))
+
+    @cairn.run("train", project="study", provenance=False)
+    def train(rate, *, fail=False):
+        cairn.log(rate=rate)
+        if fail:
+            raise ValueError("diverged")
+        return rate * 2
+
+    @cairn.run
+    def bare():
+        return cairn.update({"bare": True})
+
+    def scenario():
+        assert train(1) == 2 and train(2) == 4
+        with pytest.raises(ValueError, match="diverged"):
+            train(3, fail=True)
+        bare()
+        with pytest.raises(ValidationError):
+            cairn.log(outside=True)
+
+    contextvars.Context().run(scenario)
+    assert train.__name__ == "train"
+    with Client(project="study") as reader:
+        runs = [reader.resolve(f"runs/train@v{number}") for number in (1, 2, 3)]
+        assert [run.records()[0]["data"]["rate"] for run in runs] == [1, 2, 3]
+        outcomes = [run.descriptor["manifest"]["outcome"] for run in runs]
+        assert outcomes == ["completed", "completed", "failed"]
+    with Client() as reader:
+        (bare_run,) = reader.find(namespace="runs")
+        assert reader.resolve(bare_run["id"]).descriptor["manifest"]["metadata"]["bare"] is True
+
+
+def test_run_decorator_records_dictconfig_argument(tmp_path, monkeypatch):
+    class DictConfig(dict):
+        pass
+
+    class OmegaConf:
+        @staticmethod
+        def to_container(config, *, resolve, throw_on_missing):
+            assert resolve and throw_on_missing
+            return dict(config)
+
+    module = type(sys)("omegaconf")
+    module.DictConfig, module.OmegaConf = DictConfig, OmegaConf
+    monkeypatch.setitem(sys.modules, "omegaconf", module)
+
+    @cairn.run("hydra", project="study", repo=tmp_path / "repo", provenance=False)
+    def main(cfg):
+        return cfg["rate"]
+
+    @cairn.run("explicit", project="study", repo=tmp_path / "repo", config={"fixed": 1})
+    def explicit(cfg):
+        return cfg["rate"]
+
+    assert main(DictConfig(rate=0.1)) == 0.1 and explicit(DictConfig(rate=0.2)) == 0.2
+    with Client(tmp_path / "repo", project="study") as reader:
+        config = reader.resolve("runs/hydra@latest").descriptor["manifest"]["metadata"]["config"]
+        assert config == {"rate": 0.1}
+        explicit_run = reader.resolve("runs/explicit@latest")
+        assert explicit_run.descriptor["manifest"]["metadata"]["config"] == {"fixed": 1}

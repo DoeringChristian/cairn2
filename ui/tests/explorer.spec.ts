@@ -159,9 +159,49 @@ test('report overview groups versions and opens latest publication',async({page,
   await expect(page.locator('.report-card')).toHaveCount(new Set(items.map((a:any)=>a.name)).size);
   const card=page.locator('.report-card').filter({hasText:'The report field guide'});
   await expect(card).toHaveCount(1);
-  await expect(card).toHaveAttribute('href',`/p/neural-rendering/a/${reports[0].id}`);
+  await expect(card).toHaveAttribute('href',`/p/neural-rendering/a/${encodeURIComponent('reports/report-field-guide@latest')}`);
   await card.click();
   await expect(page.getByRole('button',{name:'Artifact version'})).toContainText(`v${reports[0].number}`);
+});
+
+test('comments resolve, hide, show on request and reopen across versions',async({page,request})=>{
+  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
+  const reports=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number);
+  const body=`Resolve check ${Date.now()}`;
+  const comment=await (await request.post(`/ui-api/reports/${reports[1].id}/comments`,{data:{anchor:{quote:'This is a working tour'},body,author:'reviewer'}})).json();
+  const state=async()=>(await (await request.get(`/ui-api/reports/${reports[0].id}/comments`)).json()).find((c:any)=>c.id===comment.id)?.resolved_at??null;
+  try{
+    await page.goto(`/p/neural-rendering/a/${reports[0].id}`);
+    const editor=page.getByRole('group',{name:'Add report comment'}),marker=page.getByTitle(body,{exact:true});
+    await page.locator('.native-document p').filter({hasText:'This is a working tour'}).first().scrollIntoViewIfNeeded();
+    await marker.click();
+    await expect(editor).toContainText(`v${reports[1].number} · reviewer`);
+    await editor.getByRole('button',{name:'Resolve comment'}).click();
+    await expect(editor).toHaveCount(0);await expect(marker).toHaveCount(0);
+    await expect.poll(state).not.toBeNull();
+    await page.getByRole('button',{name:'Show resolved comments'}).click();
+    await expect(marker).toHaveClass(/resolved/);
+    await marker.click();await expect(editor).toContainText('Resolved');
+    await editor.getByRole('button',{name:'Reopen comment'}).click();
+    await expect.poll(state).toBeNull();
+  }finally{await request.delete(`/ui-api/reports/${reports[0].id}/comments/${comment.id}`);}
+});
+
+test('all-versions tags reach every version of a name',async({page,request})=>{
+  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=runs')).json();
+  const runs=items.filter((a:any)=>a.name==='showcase-baseline'),tag=`shared-${Date.now()}`;
+  expect(runs.length).toBeGreaterThan(1);
+  try{
+    await page.goto(`/p/neural-rendering/a/${runs[0].id}`);
+    await page.getByRole('button',{name:'All versions',exact:true}).click();
+    await page.getByLabel('New tag',{exact:true}).fill(tag);
+    await page.getByRole('button',{name:'Add tag',exact:true}).click();
+    await expect(page.getByRole('button',{name:`Remove tag ${tag}`})).toBeVisible();
+    await expect.poll(async()=>(await (await request.get(`/v1/artifacts/${runs[1].id}/annotations`)).json()).annotations.tags||[]).toContain(tag);
+  }finally{
+    const current=await (await request.get(`/v1/artifacts/${runs[0].id}/annotations`)).json();
+    await request.patch(`/ui-api/artifacts/${runs[0].id}/tags`,{data:{tags:(current.name.tags||[]).filter((t:string)=>t!==tag),scope:'name'}});
+  }
 });
 
 test('media comments keep region and time and empty edits delete',async({page,request})=>{
@@ -431,10 +471,10 @@ test('live artifact keeps polling until it finishes', async ({page,request}) => 
   await page.goto(`/p/neural-rendering/a/${report.id}`);
   await expect(page.locator('article.native-document')).toBeVisible();
   expect(checks).toBe(1);
-  await page.clock.fastForward(5100);
-  await expect.poll(()=>checks).toBe(2);
-  await page.clock.fastForward(5100);
-  await expect.poll(()=>checks).toBe(3);
+  // The next check is scheduled only after a response settles; advance until it fires.
+  const advanceTo=(count:number)=>expect.poll(async()=>{await page.clock.fastForward(1000);return checks;}).toBe(count);
+  await advanceTo(2);
+  await advanceTo(3);
   await expect(page.getByText('This artifact is live. Its ID stays the same when it finishes.',{exact:true})).toHaveCount(0);
   await page.clock.fastForward(16000);
   expect(checks).toBe(3);

@@ -61,6 +61,7 @@ class HTTPRepository:
         self._timeout = contextvars.ContextVar(f"cairn_timeout_{id(self)}", default=None)
         headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
         self._client = httpx.Client(base_url=self.url + "/", headers=headers, timeout=timeout)
+        self._features = None
 
     def close(self) -> None:
         self._client.close()
@@ -121,6 +122,12 @@ class HTTPRepository:
 
     def capabilities(self):
         return self._request("GET", "v1/capabilities")
+
+    def _require(self, feature):
+        if self._features is None:
+            self._features = self.capabilities().get("features", [])
+        if feature not in self._features:
+            raise model.Unsupported(f"The server does not support {feature}; upgrade it")
 
     def start(self, project, namespace, name, *, request_id=None) -> StartResult:
         return self._request(
@@ -231,13 +238,19 @@ class HTTPRepository:
         )
 
     def annotate(
-        self, artifact_id, patch, *, expected_etag=None, request_id=None
+        self, artifact_id, patch, *, expected_etag=None, target="artifact", request_id=None
     ) -> ArtifactDescriptor:
+        body = {"patch": patch, "expected_etag": expected_etag, "request_id": request_id}
+        if target != "artifact":
+            self._require("annotations")
+            body["target"] = target
         return self._request(
-            "PATCH",
-            f"v1/artifacts/{self._id(artifact_id)}/annotations",
-            json={"patch": patch, "expected_etag": expected_etag, "request_id": request_id},
+            "PATCH", f"v1/artifacts/{self._id(artifact_id)}/annotations", json=body
         )
+
+    def annotation_layers(self, artifact_id) -> dict[str, JSONValue]:
+        self._require("annotations")
+        return self._request("GET", f"v1/artifacts/{self._id(artifact_id)}/annotations")
 
     def query(
         self, ref, *, project="default", where=None, fields=None, limit=100, cursor=None, kind=None
@@ -317,19 +330,46 @@ class HTTPRepository:
             "POST", "v1/maintenance/gc", json={"grace_seconds": grace_seconds, "dry_run": dry_run}
         )
 
-    def add_comment(self, artifact_id, anchor, body, *, request_id=None) -> dict[str, JSONValue]:
+    def add_comment(
+        self, artifact_id, anchor, body, *, author=None, request_id=None
+    ) -> dict[str, JSONValue]:
+        payload = {"anchor": anchor, "body": body, "request_id": request_id}
+        if author is not None:
+            self._require("annotations")
+            payload["author"] = author
+        return self._request("POST", f"v1/artifacts/{self._id(artifact_id)}/comments", json=payload)
+
+    def comments(
+        self, artifact_id, *, scope="artifact", include_resolved=True
+    ) -> list[dict[str, JSONValue]]:
+        params = {}
+        if scope != "artifact" or not include_resolved:
+            self._require("annotations")
+            params = {"scope": scope, "include_resolved": str(include_resolved).lower()}
+        return self._request("GET", f"v1/artifacts/{self._id(artifact_id)}/comments", params=params)
+
+    def update_comment(
+        self, comment_id, body, *, expected_revision=None, request_id=None
+    ) -> dict[str, JSONValue]:
+        self._require("annotations")
         return self._request(
-            "POST",
-            f"v1/artifacts/{self._id(artifact_id)}/comments",
-            json={
-                "anchor": anchor,
-                "body": body,
-                "request_id": request_id,
-            },
+            "PUT",
+            f"v1/comments/{self._id(comment_id)}",
+            json={"body": body, "expected_revision": expected_revision, "request_id": request_id},
         )
 
-    def comments(self, artifact_id) -> list[dict[str, JSONValue]]:
-        return self._request("GET", f"v1/artifacts/{self._id(artifact_id)}/comments")
+    def resolve_comment(
+        self, comment_id, *, resolved=True, note=None, by=None, request_id=None
+    ) -> dict[str, JSONValue]:
+        self._require("annotations")
+        return self._request(
+            "PUT",
+            f"v1/comments/{self._id(comment_id)}/resolution",
+            json={"resolved": resolved, "note": note, "by": by, "request_id": request_id},
+        )
 
-    def delete_comment(self, comment_id) -> None:
-        return self._request("DELETE", f"v1/comments/{self._id(comment_id)}")
+    def delete_comment(self, comment_id, *, request_id=None) -> dict[str, JSONValue]:
+        self._request(
+            "DELETE", f"v1/comments/{self._id(comment_id)}", json={"request_id": request_id}
+        )
+        return {"id": comment_id, "deleted": True}

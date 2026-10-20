@@ -58,13 +58,14 @@ idempotency identity across recovery.
 
 - `artifacts`: identity, name, state, metadata, acknowledged cutoff, finish intent,
   final manifest, numeric label, capacity counter and timestamps.
-- Annotation JSON and an ETag on each artifact; a derived array-member lookup for
-  indexed SQLite filtering, and a PostgreSQL GIN annotation index.
+- `annotations`: mutable properties and comments, each targeting an exact artifact
+  or every version of a name. Each artifact stores its effective properties and
+  their ETag as a projection, with a derived array-member lookup for indexed
+  SQLite filtering and a PostgreSQL GIN annotation index.
 - `names`, `aliases`: name-level counters and pointers to artifacts.
 - `writers`, `records`: producer acknowledgements and append-only evidence.
 - `blobs`, `blob_refs`, `artifact_refs`: immutable content and retained dependencies.
 - `requests`: mutation retry receipts.
-- `comments`: annotations on finished artifacts, separate from their content.
 - `meta`: repository identity, schema and temporary maintenance leases.
 
 Records remain in the same artifact when it finishes. Query cursors freeze an
@@ -96,8 +97,9 @@ hides named discovery; retained finished IDs remain readable until explicit purg
 
 Publication collections are bounded and checked during ingestion; large payloads
 belong in blobs. Limits are advertised by `info()` and documented in CONTRACT.md.
-The schema is 6, protocol 4 and client journal schema 3. Older prototype stores
-require an explicit conversion; no implicit migration is attempted.
+The schema is 7, protocol 4 and client journal schema 3. Schema 6 repositories
+convert only through the explicit `cairn repo migrate`; no implicit migration is
+attempted, and older prototype stores are rejected.
 
 `tools/count_python.py` counts all handwritten package Python, including comments
 and blank lines. UI implementation is owned separately; this lifecycle refactor

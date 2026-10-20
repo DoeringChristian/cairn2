@@ -151,8 +151,11 @@ class RepositoryProtocol(Protocol):
         patch: dict[str, JSONValue],
         *,
         expected_etag: str | None = None,
+        target: Literal["artifact", "name"] = "artifact",
         request_id: str | None = None,
     ) -> ArtifactDescriptor: ...
+
+    def annotation_layers(self, artifact_id: str) -> dict[str, JSONValue]: ...
 
     def versions(self, ref: str, *, project: str = "default") -> list[ArtifactDescriptor]: ...
 
@@ -194,12 +197,45 @@ class RepositoryProtocol(Protocol):
     ) -> dict[str, JSONValue]: ...
 
     def add_comment(
-        self, artifact_id: str, anchor: JSONValue, body: str, *, request_id: str | None = None
+        self,
+        artifact_id: str,
+        anchor: JSONValue,
+        body: str,
+        *,
+        author: str | None = None,
+        request_id: str | None = None,
     ) -> dict[str, JSONValue]: ...
 
-    def comments(self, artifact_id: str) -> list[dict[str, JSONValue]]: ...
+    def comments(
+        self,
+        artifact_id: str,
+        *,
+        scope: Literal["artifact", "name"] = "artifact",
+        include_resolved: bool = True,
+    ) -> list[dict[str, JSONValue]]: ...
 
-    def delete_comment(self, comment_id: str) -> None: ...
+    def update_comment(
+        self,
+        comment_id: str,
+        body: str,
+        *,
+        expected_revision: int | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, JSONValue]: ...
+
+    def resolve_comment(
+        self,
+        comment_id: str,
+        *,
+        resolved: bool = True,
+        note: str | None = None,
+        by: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, JSONValue]: ...
+
+    def delete_comment(
+        self, comment_id: str, *, request_id: str | None = None
+    ) -> dict[str, JSONValue]: ...
 
     def collect_garbage(
         self, *, grace_seconds: int = 3600, dry_run: bool = True

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import contextvars
 import copy
+import functools
 import hashlib
 import os
+import sys
 import threading
 import time
 from pathlib import Path, PurePosixPath
@@ -174,15 +176,39 @@ class Client:
     def gc(self, *, apply=False, grace_seconds=3600):
         return self.backend.collect_garbage(grace_seconds=grace_seconds, dry_run=not apply)
 
-    def annotate(self, ref, patch, *, expected_etag=None):
-        """Merge editable annotations; null deletes keys and arrays replace arrays."""
+    def annotate(self, ref, patch, *, expected_etag=None, target="artifact"):
+        """Merge editable annotations; null deletes keys and arrays replace arrays.
+
+        target="name" annotates every version of the name; a version's own keys win.
+        """
         if self._closed:
             raise Conflict("Client is closed")
         if isinstance(ref, (Artifact, Reader)):
             ref = ref.id
         artifact = self.backend.resolve(ref, project=self.project)
         return self.backend.annotate(
-            artifact["id"], patch, expected_etag=expected_etag, request_id=new_id("request")
+            artifact["id"],
+            patch,
+            expected_etag=expected_etag,
+            target=target,
+            request_id=new_id("request"),
+        )
+
+    def comments(self, ref, *, scope="name", include_resolved=False):
+        """Comments on every version of the name, or with scope="artifact" on this one."""
+        if isinstance(ref, (Artifact, Reader)):
+            ref = ref.id
+        artifact = self.backend.resolve(ref, project=self.project)
+        return self.backend.comments(artifact["id"], scope=scope, include_resolved=include_resolved)
+
+    def resolve_comment(self, comment_id, *, note=None, by=None):
+        return self.backend.resolve_comment(
+            comment_id, note=note, by=by, request_id=new_id("request")
+        )
+
+    def reopen_comment(self, comment_id):
+        return self.backend.resolve_comment(
+            comment_id, resolved=False, request_id=new_id("request")
         )
 
     def flush(self, *, timeout=None):
@@ -310,8 +336,8 @@ class Artifact:
             raise ValidationError(f'"{name.split("/", 1)[0]}/" is reserved for Cairn files')
         return self._append("capture", {"name": name, "value": value})
 
-    def annotate(self, patch, *, expected_etag=None):
-        return self.client.annotate(self.id, patch, expected_etag=expected_etag)
+    def annotate(self, patch, *, expected_etag=None, target="artifact"):
+        return self.client.annotate(self.id, patch, expected_etag=expected_etag, target=target)
 
     def use(self, ref, *, role="input"):
         reader = self.client.resolve(ref)
@@ -466,8 +492,10 @@ class Reader:
     def descriptor(self):
         return copy.deepcopy(self._descriptor)
 
-    def annotate(self, patch, *, expected_etag=None):
-        self._descriptor = self.client.annotate(self.id, patch, expected_etag=expected_etag)
+    def annotate(self, patch, *, expected_etag=None, target="artifact"):
+        self._descriptor = self.client.annotate(
+            self.id, patch, expected_etag=expected_etag, target=target
+        )
         return self.descriptor
 
     def read(self):
@@ -596,6 +624,60 @@ def init(
     run._owns_client = True
     _default.set(run)
     return run
+
+
+def run(
+    name=None,
+    *,
+    project=None,
+    repo=None,
+    config=None,
+    metadata=None,
+    token=None,
+    outbox=None,
+    provenance=True,
+    capture_source=True,
+):
+    """Decorate a function so that every call runs inside its own cairn.init() run.
+
+    Without config=, a Hydra/OmegaConf DictConfig first argument is resolved into the config.
+    """
+    if callable(name):
+        return run()(name)
+
+    def decorate(function):
+        def call(args, kwargs):
+            recorded = config
+            omegaconf = sys.modules.get("omegaconf")
+            if (
+                recorded is None
+                and args
+                and omegaconf
+                and isinstance(args[0], omegaconf.DictConfig)
+            ):
+                recorded = omegaconf.OmegaConf.to_container(
+                    args[0], resolve=True, throw_on_missing=True
+                )
+            with init(
+                name,
+                project=project,
+                repo=repo,
+                config=recorded,
+                metadata=metadata,
+                token=token,
+                outbox=outbox,
+                provenance=provenance,
+                capture_source=capture_source,
+            ):
+                return function(*args, **kwargs)
+
+        @functools.wraps(function)
+        def wrapper(*args, **kwargs):
+            return contextvars.copy_context().run(call, args, kwargs)
+
+        return wrapper
+
+    return decorate
 
 
 def _implicit_client(repo=None, *, project=None, token=None, outbox=None):

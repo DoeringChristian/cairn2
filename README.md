@@ -69,6 +69,19 @@ with Client("./results") as client:
     print(run.id, run.version)
 ```
 
+`cairn.run(...)` is the decorator form of `cairn.init()` with the same
+arguments. Every call starts its own run, finishes it when the function returns
+or records a failure and re-raises, and then restores the previous default
+handle. Without `config=`, a Hydra/OmegaConf `DictConfig` first argument is
+resolved and stored as the run config:
+
+```python
+@hydra.main(config_path="conf", config_name="config", version_base="1.3")
+@cairn.run("train")
+def main(cfg):
+    cairn.log(loss=cfg.learning_rate)
+```
+
 For a standalone dataset or other artifact, no explicit client is needed:
 
 ```python
@@ -201,6 +214,15 @@ the patch atomically. A conflict preserves the newer data. Annotation edits do n
 create artifact versions or change the captured manifest. Writer and reader handles
 also expose `.annotate(patch, expected_etag=...)`.
 
+`target="name"` annotates every version of a name, including later ones. Each
+artifact's `annotations` are its name's properties overlaid key by key by its own,
+so removing a version's key shows the name's value again:
+
+```python
+client.annotate("reports/direction", {"tags": ["paper"]}, target="name")
+client.backend.annotation_layers(artifact["id"])  # {"name": ..., "artifact": ..., ...}
+```
+
 `find()` yields artifact descriptors and fetches pages automatically; `limit` caps
 the total results. Without `state`, live and finished artifacts are included.
 Predicate paths start with `/metadata` or `/annotations`. `contains` means exact
@@ -221,6 +243,25 @@ cairn --repo ./results --project study artifact annotate runs/training@latest \
 cairn --repo ./results --project study artifact list --namespace runs --state finished \
   --where '{"path":"/annotations/tags","op":"contains","value":"paper"}'
 ```
+
+## Comments
+
+Comments made in the UI anchor to an exact report version (source path, lines,
+quote or media position) and show on every version of that report. An agent or
+script can pull the open ones, address them and mark them resolved:
+
+```sh
+cairn comments list reports/direction           # open comments on every version
+cairn comments list reports/direction --json    # full anchors for agents
+cairn comments resolve c_123 --note "Rewrote report.qmd:42-44" --by agent
+cairn comments reopen c_123
+```
+
+`--all` includes resolved comments and `--exact` limits the list to the referenced
+version. Python offers `client.comments(ref, scope="name", include_resolved=False)`,
+`client.resolve_comment(id, note=..., by=...)` and `client.reopen_comment(id)`.
+The UI hides resolved comments unless "Show resolved comments" is on. Authors and
+resolvers are free text; Cairn has no user accounts.
 
 ## Select a repository and authenticate
 
@@ -366,8 +407,9 @@ The server serves the bundled React UI and prints an immediate login link.
 Browser sessions last 12 hours. Use `--no-ui` for API-only operation or
 `--no-auth` for local development without a token. Reports open directly with
 a table of contents, interactive figures and media, source copying, and comments
-that carry across reports with the same project and name. Artifact/run pages
-include lineage, records, files, editable tags, and click-to-copy IDs.
+that carry across reports with the same project and name and can be resolved.
+Artifact/run pages include lineage, records, files, editable tags for one version
+or all versions, and click-to-copy IDs.
 
 The UI source lives in [ui/](ui/README.md). Rebuild the bundled assets after
 changes with `npm ci --prefix ui && npm run build --prefix ui`.
@@ -460,7 +502,7 @@ cairn repo \
 For another SQLite/files destination, use
 `cairn --repo ./restored repo import ./cairn-transfer`. Export requires a new
 destination directory. Artifact, writer and record identities, version labels,
-aliases, comments and dependencies are preserved. The destination keeps its own
+aliases, annotations, comments and dependencies are preserved. The destination keeps its own
 repository identity. Conflicting data fails rather than merging silently;
 reimporting identical data is idempotent. Imported producer handles are closed.
 Live artifacts remain live under the same IDs and can attach new producers;
@@ -518,9 +560,11 @@ The API provides one artifact lifecycle, multiple producers, alias compare-and-s
 typed values, comments, SQL-filtered record queries, streaming blobs and explicit
 transfer/maintenance. Runs automatically capture client-side provenance. The
 backend has one shared token and ordinal query ordering; no server report executor
-or AI integration. Unknown schemas fail explicitly: repository schema **6**, HTTP
+or AI integration. Unknown schemas fail explicitly: repository schema **7**, HTTP
 protocol **4**, durable outbox schema **3**. Typed-value codec envelopes remain
-version 1. Earlier prototype schemas require explicit conversion. Names use
+version 1. A schema 6 repository opens again after `cairn repo export` (a backup)
+and `cairn --repo PATH repo migrate`, which converts it in one transaction; use
+`--database-url` with `--objects` or `--s3-bucket` for PostgreSQL. Names use
 slash-separated namespaces; colon-style references are unsupported.
 
 See [architecture and guarantees](docs/architecture.md) and the

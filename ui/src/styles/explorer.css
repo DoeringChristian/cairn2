@@ -24,6 +24,7 @@ button, input { font-family: inherit; }
 .detail-bar > code { flex:1; color:var(--accent); font-size:13px; }
 .action-icon { display:inline-grid; place-items:center; flex:none; width:36px; height:36px; padding:0; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--muted); cursor:pointer; }
 .action-icon:hover, .action-icon:focus-visible { border-color:var(--accent); color:var(--accent); }
+.action-icon[aria-pressed="true"] { border-color:var(--accent); background:var(--accent-soft); color:var(--accent); }
 .action-icon.danger { border-color:#e7b9b2; background:#fcefed; color:#b42318; }
 .action-icon.danger:hover, .action-icon.danger:focus-visible { background:#b42318; border-color:#b42318; color:white; }
 .confirm-dialog { width:min(440px,calc(100vw - 32px)); padding:24px; border-radius:var(--radius); background:var(--card); color:var(--ink); box-shadow:var(--shadow); }
@@ -195,6 +196,7 @@ button, input { font-family: inherit; }
 .report-comment small { color: var(--muted); }
 /* Saved annotations stay next to their text; no discussion panel or footer. */
 .report-comment-marker { position: fixed; z-index: 35; }
+.report-comment-marker.resolved { opacity: .5; }
 .comment-popover .media-icon-button { width: 26px; height: 26px; min-height: 26px; padding: 4px; border: 0; box-shadow: none; background: transparent; }
 .comment-popover .media-icon-button svg { width: 14px; height: 14px; }
 .comment-popover header { display: flex; justify-content: flex-end; align-items: center; gap: 3px; }

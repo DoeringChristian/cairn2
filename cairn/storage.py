@@ -44,8 +44,9 @@ from .model import (
 )
 from .objects import Files, ensure_directory
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 schema = sa.MetaData()
+NAME_KEYS = ("project", "namespace", "name")
 # PostgreSQL JSON preserves the logged numeric representation (-0.0, 1e20).
 # JSONB would rewrite these and invalidate replay hashes; queries cast explicitly.
 JSON = sa.JSON()
@@ -163,14 +164,52 @@ requests = sa.Table(
     sa.Column("hash", sa.String, nullable=False),
     sa.Column("result", JSON),
 )
-comments_table = sa.Table(
-    "cairn_comments",
+# Mutable properties and comments; artifact_id NULL targets every version of the name.
+annotations_table = sa.Table(
+    "cairn_annotations",
     schema,
     sa.Column("id", sa.String, primary_key=True),
-    sa.Column("artifact_id", sa.ForeignKey(artifacts.c.id), nullable=False),
-    sa.Column("anchor", JSON, nullable=False),
-    sa.Column("body", sa.Text, nullable=False),
+    sa.Column("project", sa.String, nullable=False),
+    sa.Column("namespace", sa.String, nullable=False),
+    sa.Column("name", sa.String, nullable=False),
+    sa.Column("artifact_id", sa.ForeignKey(artifacts.c.id)),
+    sa.Column("kind", sa.String, nullable=False),
+    sa.Column("key", sa.String),
+    sa.Column("value", JSON, nullable=False),
+    sa.Column("author", sa.String),
     sa.Column("created_at", sa.String, nullable=False),
+    sa.Column("updated_at", sa.String, nullable=False),
+    sa.Column("revision", sa.Integer, nullable=False),
+    sa.Column("resolved_at", sa.String),
+    sa.Column("resolution", JSON),
+)
+for _label, _columns, _target in (
+    (
+        "cairn_exact_properties",
+        ("artifact_id", "key"),
+        annotations_table.c.artifact_id.is_not(None),
+    ),
+    ("cairn_name_properties", (*NAME_KEYS, "key"), annotations_table.c.artifact_id.is_(None)),
+):
+    _where = sa.and_(annotations_table.c.kind == "property", _target)
+    sa.Index(
+        _label,
+        *(annotations_table.c[column] for column in _columns),
+        unique=True,
+        sqlite_where=_where,
+        postgresql_where=_where,
+    )
+sa.Index("cairn_annotation_names", *(annotations_table.c[key] for key in NAME_KEYS))
+sa.Index("cairn_annotation_targets", annotations_table.c.artifact_id, annotations_table.c.kind)
+# Schema 6 comments, read only by the explicit migration.
+legacy_comments = sa.Table(
+    "cairn_comments",
+    sa.MetaData(),
+    sa.Column("id", sa.String, primary_key=True),
+    sa.Column("artifact_id", sa.String),
+    sa.Column("anchor", JSON),
+    sa.Column("body", sa.Text),
+    sa.Column("created_at", sa.String),
 )
 sa.Index("cairn_discovery", artifacts.c.project, artifacts.c.namespace, artifacts.c.id)
 sa.Index("cairn_record_kind", records.c.artifact_id, records.c.kind, records.c.ordinal)
@@ -206,8 +245,41 @@ def _merge_patch(previous, patch):
     return result
 
 
+def _text(value, label, limit, *, optional=False):
+    if value is None and optional:
+        return
+    if not isinstance(value, str) or not value.strip() or len(value) > limit:
+        raise ValidationError(f"{label} must contain 1–{limit} characters")
+
+
+def annotation_layers(conn, artifact):
+    """Name-level and exact properties; exact keys override the name's in the projection."""
+    result = {"name": {}, "artifact": {}}
+    for owner, key, value in conn.execute(
+        sa.select(
+            annotations_table.c.artifact_id, annotations_table.c.key, annotations_table.c.value
+        )
+        .where(
+            annotations_table.c.kind == "property",
+            *(annotations_table.c[key] == artifact[key] for key in NAME_KEYS),
+            sa.or_(
+                annotations_table.c.artifact_id.is_(None),
+                annotations_table.c.artifact_id == artifact["id"],
+            ),
+        )
+        .order_by(annotations_table.c.key)
+    ):
+        result["artifact" if owner else "name"][key] = value
+    return result
+
+
+def effective_annotations(conn, artifact):
+    layers = annotation_layers(conn, artifact)
+    return {**layers["name"], **layers["artifact"]}
+
+
 class Repository:
-    def __init__(self, path=None, *, database_url=None, object_store=None):
+    def __init__(self, path=None, *, database_url=None, object_store=None, migrate=False):
         if path is not None and database_url is not None:
             raise ValidationError("Choose a local path or database URL")
         self.path = (
@@ -244,17 +316,29 @@ class Repository:
             if self.dialect == "postgresql":
                 conn.execute(sa.text("SELECT pg_advisory_xact_lock(731804171)"))
             existing = sa.inspect(conn).get_table_names()
+            upgrade = False
             if meta.name in existing:
                 version = conn.execute(
                     sa.select(meta.c.value).where(meta.c.key == "schema_version")
                 ).scalar()
-                if version != SCHEMA_VERSION:
-                    raise Unsupported(
-                        f"Repository schema {version!r}; this client requires {SCHEMA_VERSION}"
+                upgrade = migrate and version == 6
+                if version != SCHEMA_VERSION and not upgrade:
+                    hint = (
+                        "; export a backup, then run `cairn repo migrate`" if version == 6 else ""
                     )
+                    raise Unsupported(
+                        f"Repository schema {version!r}; this client requires {SCHEMA_VERSION}{hint}",
+                        details={"schema_version": version},
+                    )
+                if migrate and not upgrade:
+                    raise Conflict(f"Repository schema is already {version}")
+            elif migrate:
+                raise NotFound("No repository to migrate")
             elif any(name.startswith("cairn_") for name in existing):
                 raise IntegrityError("Repository tables exist without schema metadata")
             schema.create_all(conn)
+            if upgrade:
+                self._upgrade(conn)
             if not conn.execute(sa.select(meta.c.key).limit(1)).first():
                 conn.execute(
                     meta.insert(),
@@ -263,6 +347,61 @@ class Repository:
                         {"key": "repository_id", "value": new_id("repo")},
                     ],
                 )
+
+    def _upgrade(self, conn):
+        """Schema 6 to 7: inline annotations become exact properties and comments move along."""
+        stamp, rows = now(), []
+        columns = (
+            artifacts.c.id,
+            *(artifacts.c[key] for key in NAME_KEYS),
+            artifacts.c.annotations,
+        )
+        stored = list(conn.execute(sa.select(*columns)).mappings())
+        for artifact in stored:
+            for key, value in artifact["annotations"].items():
+                rows.append(
+                    {
+                        **{name: artifact[name] for name in NAME_KEYS},
+                        "id": new_id("a"),
+                        "artifact_id": artifact["id"],
+                        "kind": "property",
+                        "key": key,
+                        "value": value,
+                        "created_at": stamp,
+                        "updated_at": stamp,
+                        "revision": 1,
+                    }
+                )
+        comments = conn.execute(
+            sa.select(legacy_comments, *(artifacts.c[key] for key in NAME_KEYS)).join(
+                artifacts, artifacts.c.id == legacy_comments.c.artifact_id
+            )
+        ).mappings()
+        for comment in comments:
+            rows.append(
+                {
+                    **{name: comment[name] for name in NAME_KEYS},
+                    "id": comment["id"],
+                    "artifact_id": comment["artifact_id"],
+                    "kind": "comment",
+                    "key": None,
+                    "value": {"anchor": comment["anchor"], "body": comment["body"]},
+                    "created_at": comment["created_at"],
+                    "updated_at": comment["created_at"],
+                    "revision": 1,
+                }
+            )
+        if rows:
+            conn.execute(annotations_table.insert(), rows)
+        legacy_comments.drop(conn)
+        for artifact in stored:
+            if canonical(effective_annotations(conn, artifact)) != canonical(
+                artifact["annotations"]
+            ):
+                raise IntegrityError("Migrated annotations differ", details={"id": artifact["id"]})
+        conn.execute(
+            meta.update().where(meta.c.key == "schema_version").values(value=SCHEMA_VERSION)
+        )
 
     def close(self):
         self.engine.dispose()
@@ -346,43 +485,116 @@ class Repository:
     def _descriptors(conn, rows):
         return [{**dict(row), "entity": "artifact"} for row in rows]
 
-    def annotate(self, artifact_id, patch, *, expected_etag=None, request_id=None):
+    def _lock_name(self, conn, key):
+        # Serializes property writes and starts per name; SQLite writers are already serial.
+        if self.dialect == "postgresql":
+            conn.execute(
+                sa.text("SELECT pg_advisory_xact_lock(:key)"),
+                {"key": int(digest([key[name] for name in NAME_KEYS])[:15], 16)},
+            )
+
+    def _project(self, conn, artifact):
+        """Store the effective annotations, their ETag and membership index on the artifact."""
+        value = effective_annotations(conn, artifact)
+        members = validate_annotations(value)
+        etag = digest(value)
+        conn.execute(
+            artifacts.update()
+            .where(artifacts.c.id == artifact["id"])
+            .values(annotations=value, annotations_etag=etag)
+        )
+        conn.execute(
+            annotation_members.delete().where(annotation_members.c.artifact_id == artifact["id"])
+        )
+        if members:
+            conn.execute(
+                annotation_members.insert(),
+                [
+                    {"artifact_id": artifact["id"], "path_key": path, "value_key": member}
+                    for path, member in sorted(members)
+                ],
+            )
+        return {**artifact, "annotations": value, "annotations_etag": etag}
+
+    def annotate(
+        self, artifact_id, patch, *, expected_etag=None, target="artifact", request_id=None
+    ):
         validate_annotations(patch)
         if expected_etag is not None:
             validate_digest(expected_etag)
+        if target not in ("artifact", "name"):
+            raise ValidationError("Annotation target must be artifact or name")
 
         def update():
+            self._lock_name(conn, self._artifact(conn, artifact_id))
             artifact = self._artifact(conn, artifact_id, lock=True)
             if expected_etag is not None and artifact["annotations_etag"] != expected_etag:
                 raise Conflict("Annotations changed since they were read")
-            value = _merge_patch(artifact["annotations"], patch)
-            members = validate_annotations(value)
-            etag = digest(value)
-            conn.execute(
-                artifacts.update()
-                .where(artifacts.c.id == artifact_id)
-                .values(annotations=value, annotations_etag=etag)
+            current = annotation_layers(conn, artifact)[target]
+            value, stamp = _merge_patch(current, patch), now()
+            owner = artifact_id if target == "artifact" else None
+            selected = [annotations_table.c.kind == "property"] + (
+                [annotations_table.c.artifact_id == owner]
+                if owner
+                else [
+                    annotations_table.c.artifact_id.is_(None),
+                    *(annotations_table.c[key] == artifact[key] for key in NAME_KEYS),
+                ]
             )
-            conn.execute(
-                annotation_members.delete().where(annotation_members.c.artifact_id == artifact_id)
-            )
-            if members:
+            for key in current.keys() - value.keys():
                 conn.execute(
-                    annotation_members.insert(),
-                    [
-                        {"artifact_id": artifact_id, "path_key": path, "value_key": member}
-                        for path, member in sorted(members)
-                    ],
+                    annotations_table.delete().where(*selected, annotations_table.c.key == key)
                 )
-            return {**artifact, "annotations": value, "annotations_etag": etag}
+            for key, item in value.items():
+                if key not in current:
+                    conn.execute(
+                        annotations_table.insert().values(
+                            **{name: artifact[name] for name in NAME_KEYS},
+                            id=new_id("a"),
+                            artifact_id=owner,
+                            kind="property",
+                            key=key,
+                            value=item,
+                            created_at=stamp,
+                            updated_at=stamp,
+                            revision=1,
+                        )
+                    )
+                elif canonical(item) != canonical(current[key]):
+                    conn.execute(
+                        annotations_table.update()
+                        .where(*selected, annotations_table.c.key == key)
+                        .values(
+                            value=item,
+                            updated_at=stamp,
+                            revision=annotations_table.c.revision + 1,
+                        )
+                    )
+            if owner:
+                return self._project(conn, artifact)
+            family = conn.execute(
+                sa.select(artifacts).where(self._name_condition(artifacts, artifact))
+            ).mappings()
+            projected = {
+                row["id"]: self._project(conn, row) for row in self._descriptors(conn, family)
+            }
+            return projected[artifact_id]
 
+        payload = [artifact_id, patch, expected_etag] + ([target] if target != "artifact" else [])
         with self._transaction(write=True) as conn:
             # Reject replay against deleted artifacts without acquiring their row
             # lock ahead of the receipt lock (finish uses receipt -> artifact).
             self._artifact(conn, artifact_id)
-            return self._once(
-                conn, request_id, "annotate", [artifact_id, patch, expected_etag], update
-            )
+            return self._once(conn, request_id, "annotate", payload, update)
+
+    def annotation_layers(self, artifact_id):
+        with self._transaction() as conn:
+            artifact = self._artifact(conn, artifact_id, deleted=True)
+            return {
+                **annotation_layers(conn, artifact),
+                "annotations": artifact["annotations"],
+                "annotations_etag": artifact["annotations_etag"],
+            }
 
     @staticmethod
     def _name_condition(table, artifact):
@@ -400,6 +612,7 @@ class Repository:
 
         def create():
             key = {"project": project, "namespace": namespace, "name": name}
+            self._lock_name(conn, key)
             if not conn.execute(sa.select(names).where(self._name_condition(names, key))).first():
                 try:
                     with conn.begin_nested():
@@ -423,6 +636,8 @@ class Repository:
                 "deleted_at": None,
             }
             conn.execute(artifacts.insert().values(**artifact))
+            if annotation_layers(conn, artifact)["name"]:
+                artifact = self._project(conn, artifact)
             return {
                 "artifact": {**artifact, "entity": "artifact"},
                 "writer": self._new_writer(conn, artifact["id"]),
@@ -1233,46 +1448,136 @@ class Repository:
         with self._transaction(write=True) as conn:
             return self._once(conn, request_id, "delete", artifact_id, remove)
 
-    def add_comment(self, artifact_id, anchor, body, *, request_id=None):
+    @staticmethod
+    def _comments(conn, *conditions, lock=False):
+        statement = (
+            sa.select(
+                annotations_table,
+                artifacts.c.number,
+                artifacts.c.deleted_at.label("artifact_deleted_at"),
+            )
+            .join(artifacts, artifacts.c.id == annotations_table.c.artifact_id)
+            .where(annotations_table.c.kind == "comment", *conditions)
+            .order_by(annotations_table.c.created_at, annotations_table.c.id)
+        )
+        if lock:
+            statement = statement.with_for_update(of=annotations_table)
+        comments = []
+        for row in conn.execute(statement).mappings():
+            row = dict(row)
+            value = row.pop("value")
+            del row["kind"], row["key"]
+            row["artifact_deleted"] = row.pop("artifact_deleted_at") is not None
+            comments.append({**row, **value})
+        return comments
+
+    def _comment(self, conn, comment_id):
+        if not isinstance(comment_id, str) or not comment_id:
+            raise ValidationError("Expected a nonempty identifier")
+        found = self._comments(conn, annotations_table.c.id == comment_id, lock=True)
+        if not found:
+            raise NotFound(f"Unknown comment: {comment_id}")
+        return found[0]
+
+    def add_comment(self, artifact_id, anchor, body, *, author=None, request_id=None):
         if not isinstance(anchor, dict) or len(canonical(anchor)) > 65536:
             raise ValidationError("Comment anchor must be a bounded object")
-        if not isinstance(body, str) or not body.strip() or len(body) > 65536:
-            raise ValidationError("Comment body must contain 1–65536 characters")
+        _text(body, "Comment body", 65536)
+        _text(author, "Comment author", 256, optional=True)
 
         def add():
-            target = self._artifact(conn, artifact_id, deleted=True)
+            target = self._artifact(conn, artifact_id)
             if target["state"] != "finished":
                 raise ValidationError("Comments require a finished artifact")
-            comment = {
-                "id": new_id("c"),
-                "artifact_id": artifact_id,
-                "anchor": anchor,
-                "body": body,
-                "created_at": now(),
-            }
-            conn.execute(comments_table.insert().values(**comment))
-            return comment
+            identifier, stamp = new_id("c"), now()
+            conn.execute(
+                annotations_table.insert().values(
+                    **{key: target[key] for key in NAME_KEYS},
+                    id=identifier,
+                    artifact_id=artifact_id,
+                    kind="comment",
+                    value={"anchor": anchor, "body": body},
+                    author=author,
+                    created_at=stamp,
+                    updated_at=stamp,
+                    revision=1,
+                )
+            )
+            return self._comment(conn, identifier)
 
+        payload = [artifact_id, anchor, body] + ([author] if author is not None else [])
         with self._transaction(write=True) as conn:
-            return self._once(conn, request_id, "add_comment", [artifact_id, anchor, body], add)
+            return self._once(conn, request_id, "add_comment", payload, add)
 
-    def comments(self, artifact_id):
+    def comments(self, artifact_id, *, scope="artifact", include_resolved=True):
+        if scope not in ("artifact", "name"):
+            raise ValidationError("Comment scope must be artifact or name")
         with self._transaction() as conn:
             target = self._artifact(conn, artifact_id, deleted=True)
             if target["state"] != "finished":
                 raise ValidationError("Comments require a finished artifact")
-            return [
-                dict(row)
-                for row in conn.execute(
-                    sa.select(comments_table)
-                    .where(comments_table.c.artifact_id == artifact_id)
-                    .order_by(comments_table.c.created_at, comments_table.c.id)
-                ).mappings()
-            ]
+            selected = (
+                [annotations_table.c.artifact_id == artifact_id]
+                if scope == "artifact"
+                else [annotations_table.c[key] == target[key] for key in NAME_KEYS]
+            )
+            if not include_resolved:
+                selected.append(annotations_table.c.resolved_at.is_(None))
+            return self._comments(conn, *selected)
 
-    def delete_comment(self, comment_id):
+    def _change_comment(self, comment_id, request_id, operation, payload, change):
+        def apply():
+            comment = self._comment(conn, comment_id)
+            values = change(comment)
+            conn.execute(
+                annotations_table.update()
+                .where(annotations_table.c.id == comment_id)
+                .values(**values, updated_at=now(), revision=comment["revision"] + 1)
+            )
+            return self._comment(conn, comment_id)
+
         with self._transaction(write=True) as conn:
-            conn.execute(comments_table.delete().where(comments_table.c.id == comment_id))
+            return self._once(conn, request_id, operation, [comment_id, *payload], apply)
+
+    def update_comment(self, comment_id, body, *, expected_revision=None, request_id=None):
+        _text(body, "Comment body", 65536)
+        if expected_revision is not None and (
+            type(expected_revision) is not int or expected_revision < 1
+        ):
+            raise ValidationError("Expected revision must be a positive integer")
+
+        def change(comment):
+            if expected_revision is not None and comment["revision"] != expected_revision:
+                raise Conflict("Comment changed since it was read")
+            return {"value": {"anchor": comment["anchor"], "body": body}}
+
+        payload = [body, expected_revision]
+        return self._change_comment(comment_id, request_id, "update_comment", payload, change)
+
+    def resolve_comment(self, comment_id, *, resolved=True, note=None, by=None, request_id=None):
+        if type(resolved) is not bool:
+            raise ValidationError("resolved must be a boolean")
+        _text(note, "Resolution note", 65536, optional=True)
+        _text(by, "Resolver", 256, optional=True)
+        if not resolved and (note is not None or by is not None):
+            raise ValidationError("Reopening takes no note")
+
+        def change(comment):
+            if not resolved:
+                return {"resolved_at": None, "resolution": None}
+            return {"resolved_at": now(), "resolution": {"note": note, "by": by}}
+
+        payload = [resolved, note, by]
+        return self._change_comment(comment_id, request_id, "resolve_comment", payload, change)
+
+    def delete_comment(self, comment_id, *, request_id=None):
+        def remove():
+            self._comment(conn, comment_id)
+            conn.execute(annotations_table.delete().where(annotations_table.c.id == comment_id))
+            return {"id": comment_id, "deleted": True}
+
+        with self._transaction(write=True) as conn:
+            return self._once(conn, request_id, "delete_comment", comment_id, remove)
 
     def collect_garbage(self, *, grace_seconds=3600, dry_run=True):
         from .ops import collect_garbage

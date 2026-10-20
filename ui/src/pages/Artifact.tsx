@@ -3,7 +3,7 @@ import { invalidateLists } from '../listCache';
 import { ArtifactTags } from '../components/ArtifactTags';
 import { CopyId } from '../components/CopyId';
 import { useEffect, useRef, useState } from 'react';
-import { RefreshCw, Trash2 } from 'lucide-react';
+import { CheckCheck, RefreshCw, Trash2 } from 'lucide-react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useRefreshMode } from '../refresh';
 import { Graph } from '../components/Graph';
@@ -106,11 +106,11 @@ export function ArtifactPage() {
     {error && <ErrorNote error={error}/>}
     <div className="detail-bar"><code className="wrap-any">{ref}</code><Select label="Artifact version" value={selected.id} choices={choices} onChange={target => navigate(artifactPath(selected.project, target))}/><ActionIcon label="Refresh" onClick={() => setRefresh(n => n + 1)}><RefreshCw size={17} aria-hidden="true"/></ActionIcon><RemoveArtifact key={selected.id} artifact={selected} reference={ref}/></div>
     <div className="detail-facts"><span>{live ? 'Started' : 'Finished'} {when(selected.finished_at || selected.created_at)}</span><span>{selected.cutoff} entries</span><CopyId value={selected.id} short/></div>
-    <ArtifactTags key={`tags:${selected.id}`} artifact={selected} onChange={()=>setRefresh(n=>n+1)}/>
+    <ArtifactTags key={`tags:${selected.id}`} artifact={selected} scopes onChange={()=>setRefresh(n=>n+1)}/>
     {live && <Hint>This artifact is {selected.state}. Its ID stays the same when it finishes.</Hint>}
     <Tabs label="Artifact detail" tabs={tabs} value={tab} onChange={tab => { const next = new URLSearchParams(params); next.set('tab', tab); setParams(next); }}/>
     {tab === 'overview' && <>
-      {report ? <Section title="Published report" actions={<LinkButton href={`/ui-api/reports/${selected.id}/index.html`}>HTML export</LinkButton>}><DocumentReader documentVersion={documentVersion} key={selected.id} project={selected.project} version={selected.id} blobs={typed?.blobs || []}/></Section> : <>
+      {report ? <Section title="Published report" actions={<><ActionIcon label={params.get('resolved')==='1'?'Hide resolved comments':'Show resolved comments'} aria-pressed={params.get('resolved')==='1'} onClick={()=>{const next=new URLSearchParams(params);if(next.get('resolved')==='1')next.delete('resolved');else next.set('resolved','1');setParams(next,{replace:true});}}><CheckCheck size={17} aria-hidden="true"/></ActionIcon><LinkButton href={`/ui-api/reports/${selected.id}/index.html`}>HTML export</LinkButton></>}><DocumentReader documentVersion={documentVersion} key={selected.id} project={selected.project} version={selected.id} blobs={typed?.blobs || []}/></Section> : <>
         {run && <RecordsPanel key={`records:${selected.id}`} reference={selected.id} project={selected.project} run overview live={live} refresh={refresh}/>}
         <Section title={run ? 'Final result' : 'Value'}><ValueView value={value}/></Section>
       </>}

@@ -32,14 +32,16 @@ from .model import (
 )
 from .objects import sync_directory
 from .storage import (
+    NAME_KEYS,
     SCHEMA_VERSION,
     aliases,
     annotation_members,
+    annotations_table,
     artifact_refs,
     artifacts,
     blob_refs,
     blobs,
-    comments_table,
+    effective_annotations,
     meta,
     names,
     records,
@@ -56,7 +58,7 @@ TRANSFER_TABLES = (
     blob_refs,
     artifact_refs,
     annotation_members,
-    comments_table,
+    annotations_table,
 )
 
 
@@ -396,6 +398,8 @@ def _check_artifact(conn, artifact):
     expected = validate_annotations(artifact["annotations"])
     if artifact["annotations_etag"] != digest(artifact["annotations"]):
         raise IntegrityError("Annotation hash mismatch")
+    if canonical(effective_annotations(conn, artifact)) != canonical(artifact["annotations"]):
+        raise IntegrityError("Annotations differ from their stored properties")
     actual = set(
         conn.execute(
             sa.select(annotation_members.c.path_key, annotation_members.c.value_key).where(
@@ -536,6 +540,33 @@ def _integrity_errors(conn):
                 "error": "Annotation index refers to an unknown artifact",
             }
 
+    stray = conn.execute(
+        sa.select(annotations_table.c.id)
+        .outerjoin(artifacts, artifacts.c.id == annotations_table.c.artifact_id)
+        .where(
+            sa.or_(
+                ~annotations_table.c.kind.in_(["property", "comment"]),
+                ~sa.exists(
+                    sa.select(names.c.name).where(
+                        *(names.c[key] == annotations_table.c[key] for key in NAME_KEYS)
+                    )
+                ),
+                sa.and_(
+                    annotations_table.c.artifact_id.is_not(None),
+                    sa.or_(*(artifacts.c[key] != annotations_table.c[key] for key in NAME_KEYS)),
+                ),
+                sa.and_(
+                    annotations_table.c.kind == "comment",
+                    sa.or_(
+                        annotations_table.c.artifact_id.is_(None), artifacts.c.state != "finished"
+                    ),
+                ),
+            )
+        )
+        .limit(1)
+    ).scalar()
+    if stray:
+        yield {"table": annotations_table.name, "id": stray, "error": "Annotation target mismatch"}
     for table, check in ((names, _check_name), (artifacts, _check_artifact)):
         for row in conn.execute(sa.select(table)).mappings():
             try:
@@ -611,7 +642,7 @@ def _purge(conn, identifiers):
     """Remove rows of artifacts that no artifact outside identifiers references."""
     for table in (blob_refs, artifact_refs):
         conn.execute(table.delete().where(table.c.owner.in_(identifiers)))
-    for table in (comments_table, aliases, annotation_members, records, writers):
+    for table in (annotations_table, aliases, annotation_members, records, writers):
         conn.execute(table.delete().where(table.c.artifact_id.in_(identifiers)))
     conn.execute(names.update().where(names.c.head.in_(identifiers)).values(head=None))
     # Names retain their counter; request receipts cannot resurrect deleted artifact IDs.

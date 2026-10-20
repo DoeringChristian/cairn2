@@ -88,11 +88,12 @@ class BrowserAccess:
             parts = path.split("/")
             comment = (
                 path.startswith("/ui-api/reports/")
-                and len(parts) in {5, 6}
+                and len(parts) in {5, 6, 7}
                 and parts[4] == "comments"
                 and (
                     (method == "POST" and len(parts) == 5)
                     or (method in {"PUT", "DELETE"} and len(parts) == 6)
+                    or (method == "PUT" and len(parts) == 7 and parts[6] == "resolution")
                 )
             )
             tag_edit = (
@@ -163,10 +164,14 @@ def install(app, repository, token, *, no_auth=False):
             not isinstance(tag, str) or not tag.strip() for tag in tags
         ):
             raise ValidationError("Tags must be an array of nonempty strings")
+        if body.get("scope", "artifact") not in ("artifact", "name"):
+            raise ValidationError("Tag scope must be artifact or name")
         return repository.annotate(
             artifact_id,
-            patch={"tags": list(dict.fromkeys(tag.strip() for tag in tags))},
+            # An empty list removes the key, so tags set for every version show again.
+            patch={"tags": list(dict.fromkeys(tag.strip() for tag in tags)) or None},
             expected_etag=body.get("expected_etag"),
+            target=body.get("scope", "artifact"),
         )
 
     @app.delete("/ui-api/artifacts/{artifact_id}")
@@ -464,25 +469,10 @@ def install(app, repository, token, *, no_auth=False):
 
     @app.get("/ui-api/reports/{artifact_id}/comments")
     def report_comments(artifact_id: str):
-        from .storage import comments_table
+        # Comments keep their original version and anchor and show across the report's name.
+        return repository.comments(report_target(artifact_id)["id"], scope="name")
 
-        target = report_target(artifact_id)
-        # Keep each comment's original anchor/identity while showing the discussion
-        # across the report family. Publishing does not copy or mutate comments.
-        statement = (
-            sa.select(comments_table, artifacts.c.number.label("number"))
-            .join(artifacts, artifacts.c.id == comments_table.c.artifact_id)
-            .where(
-                artifacts.c.project == target["project"],
-                artifacts.c.namespace == target["namespace"],
-                artifacts.c.name == target["name"],
-            )
-            .order_by(comments_table.c.created_at, comments_table.c.id)
-        )
-        with repository._transaction() as connection:
-            return [dict(row) for row in connection.execute(statement).mappings()]
-
-    from .server import Comment
+    from .server import Comment, Resolution
 
     @app.post("/ui-api/reports/{artifact_id}/comments")
     def add_report_comment(artifact_id: str, body: Comment, request: Request):
@@ -495,59 +485,31 @@ def install(app, repository, token, *, no_auth=False):
         report_target(artifact_id)
         return repository.add_comment(artifact_id, **body.model_dump())
 
-    def check_comment_write(request):
+    def check_comment_write(request, artifact_id, comment_id):
         sessions.require(request)
         origin = request.headers.get("origin")
         if origin and origin != str(request.base_url).rstrip("/"):
             raise Unauthorized("Comments must come from this server's origin")
-
-    def family_comment(connection, artifact_id, comment_id):
-        from .storage import comments_table
-
-        target = report_target(artifact_id)
-        row = (
-            connection.execute(
-                sa.select(comments_table)
-                .join(artifacts, artifacts.c.id == comments_table.c.artifact_id)
-                .where(
-                    comments_table.c.id == comment_id,
-                    artifacts.c.project == target["project"],
-                    artifacts.c.namespace == target["namespace"],
-                    artifacts.c.name == target["name"],
-                )
-            )
-            .mappings()
-            .first()
-        )
-        if row is None:
+        family = repository.comments(report_target(artifact_id)["id"], scope="name")
+        if all(comment["id"] != comment_id for comment in family):
             raise NotFound("Comment not found in this report")
-        return dict(row)
 
     @app.put("/ui-api/reports/{artifact_id}/comments/{comment_id}")
     def update_report_comment(artifact_id: str, comment_id: str, body: Comment, request: Request):
-        from .storage import comments_table
+        check_comment_write(request, artifact_id, comment_id)
+        return repository.update_comment(comment_id, body.body)
 
-        check_comment_write(request)
-        if not body.body.strip() or len(body.body) > 65536:
-            raise ValidationError("Comment body must contain 1–65536 characters")
-        with repository._transaction(write=True) as connection:
-            comment = family_comment(connection, artifact_id, comment_id)
-            connection.execute(
-                comments_table.update()
-                .where(comments_table.c.id == comment_id)
-                .values(body=body.body)
-            )
-            return {**comment, "body": body.body}
+    @app.put("/ui-api/reports/{artifact_id}/comments/{comment_id}/resolution")
+    def resolve_report_comment(
+        artifact_id: str, comment_id: str, body: Resolution, request: Request
+    ):
+        check_comment_write(request, artifact_id, comment_id)
+        return repository.resolve_comment(comment_id, **body.model_dump())
 
     @app.delete("/ui-api/reports/{artifact_id}/comments/{comment_id}")
     def remove_report_comment(artifact_id: str, comment_id: str, request: Request):
-        from .storage import comments_table
-
-        check_comment_write(request)
-        with repository._transaction(write=True) as connection:
-            family_comment(connection, artifact_id, comment_id)
-            connection.execute(comments_table.delete().where(comments_table.c.id == comment_id))
-        return {"deleted": True}
+        check_comment_write(request, artifact_id, comment_id)
+        return repository.delete_comment(comment_id)
 
     from .ui_preview import ReportPreviews
 

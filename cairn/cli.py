@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-from .model import CairnError, ValidationError
+from .model import CairnError, Unsupported, ValidationError
 
 
 def _json(value: str):
@@ -29,6 +29,21 @@ def _json(value: str):
 
 def _print(value):
     print(json.dumps(value, ensure_ascii=False, allow_nan=False, indent=2, default=str))
+
+
+def _comment_line(comment):
+    anchor, where = comment["anchor"], comment["anchor"].get("path", "-")
+    if "line_start" in anchor:
+        end = anchor.get("line_end", anchor["line_start"])
+        where += f":{anchor['line_start']}" + (f"-{end}" if end != anchor["line_start"] else "")
+    parts = [comment["id"], f"v{comment['number']}", where]
+    if "time" in anchor.get("media", {}):
+        parts.append(f"@{anchor['media']['time']:.1f}s")
+    if anchor.get("quote"):
+        parts.append(json.dumps(anchor["quote"], ensure_ascii=False))
+    if comment["resolved_at"]:
+        parts.append("[resolved]")
+    return "  ".join(parts) + "  → " + comment["body"].replace("\n", "\n    ")
 
 
 def _start_arguments(parser, namespace="artifacts"):
@@ -107,6 +122,23 @@ def parser() -> argparse.ArgumentParser:
     gc.add_argument("--grace-seconds", type=int, default=3600)
     gc.add_argument("--apply", action="store_true", help="Delete; otherwise print a dry run")
     gc.set_defaults(action="gc")
+    comments = commands.add_parser(
+        "comments", help="List and resolve comments made in the UI"
+    ).add_subparsers(dest="comments_command", required=True)
+    listing = comments.add_parser("list", help="Open comments on every version of a name")
+    listing.add_argument("reference")
+    listing.add_argument("--all", action="store_true", help="Include resolved comments")
+    listing.add_argument("--exact", action="store_true", help="Only the referenced version")
+    listing.add_argument("--json", action="store_true", help="Print full comment objects")
+    listing.set_defaults(action="comments")
+    resolve = comments.add_parser("resolve", help="Mark a comment as addressed")
+    resolve.add_argument("comment_id")
+    resolve.add_argument("--note", help="What was done, shown beside the comment")
+    resolve.add_argument("--by", help="Who resolved it, e.g. an agent name")
+    resolve.set_defaults(action="comment-resolve")
+    reopen = comments.add_parser("reopen", help="Mark a resolved comment as open again")
+    reopen.add_argument("comment_id")
+    reopen.set_defaults(action="comment-reopen")
 
     artifacts = commands.add_parser(
         "artifact", help="Artifact lifecycle and records"
@@ -129,6 +161,9 @@ def parser() -> argparse.ArgumentParser:
     annotation.add_argument("patch", type=_json)
     annotation.add_argument("--expected-etag")
     annotation.add_argument("--request-id")
+    annotation.add_argument(
+        "--name", action="store_true", help="Annotate every version of the referenced name"
+    )
     annotation.set_defaults(action="annotate")
     versions = artifacts.add_parser("versions")
     versions.add_argument("artifact_id")
@@ -204,6 +239,9 @@ def parser() -> argparse.ArgumentParser:
         sub = repositories.add_parser(operation)
         sub.add_argument(argument)
         sub.set_defaults(action="repo-" + operation)
+    repositories.add_parser(
+        "migrate", help="Upgrade a schema 6 repository in place; export a backup first"
+    ).set_defaults(action="repo-migrate")
     check = repositories.add_parser("check")
     check.add_argument("--verify-blobs", action="store_true")
     check.set_defaults(action="repo-check")
@@ -236,7 +274,7 @@ def _close_writer(backend, artifact_id, writer, final_sequence=None):
     return backend.close_writer(artifact_id, writer, final_sequence)
 
 
-def _repository(args):
+def _repository(args, *, migrate=False):
     from .objects import S3, Files
     from .storage import Repository
 
@@ -255,8 +293,10 @@ def _repository(args):
     if args.database_url:
         if object_store is None:
             raise ValidationError("--database-url requires --objects or --s3-bucket")
-        return Repository(database_url=args.database_url, object_store=object_store)
-    return Repository(args.repo or ".cairn/repo", object_store=object_store)
+        return Repository(
+            database_url=args.database_url, object_store=object_store, migrate=migrate
+        )
+    return Repository(args.repo or ".cairn/repo", object_store=object_store, migrate=migrate)
 
 
 def _server_socket(host, port):
@@ -306,7 +346,20 @@ def _serve(args):
                 "Use --repo PATH to select the local repository to serve."
             )
         args.repo = repo
-    repository = _repository(args)
+    try:
+        repository = _repository(args)
+    except Unsupported as exc:
+        if exc.details.get("schema_version") != 6 or not sys.stdin.isatty():
+            raise
+        print(
+            f"{exc}.\nMigrate this repository to the current schema now? [y/N] ",
+            end="",
+            file=sys.stderr,
+        )
+        if input().strip().lower() not in {"y", "yes"}:
+            raise
+        repository = _repository(args, migrate=True)
+        print("Repository migrated.", file=sys.stderr)
     listener = None
     try:
         listener = _server_socket(args.host, args.port)
@@ -409,8 +462,24 @@ def _dispatch(args, client):
             artifact["id"],
             args.patch,
             expected_etag=args.expected_etag,
+            target="name" if args.name else "artifact",
             request_id=args.request_id,
         )
+    if action == "comments":
+        found = client.comments(
+            args.reference,
+            scope="artifact" if args.exact else "name",
+            include_resolved=args.all,
+        )
+        if args.json:
+            return found
+        for comment in found:
+            print(_comment_line(comment))
+        return 0
+    if action == "comment-resolve":
+        return client.resolve_comment(args.comment_id, note=args.note, by=args.by)
+    if action == "comment-reopen":
+        return client.reopen_comment(args.comment_id)
     if action == "versions":
         return backend.versions(args.artifact_id, project=client.project)
     if action == "writer":
@@ -457,6 +526,8 @@ def _dispatch(args, client):
             return {"path": str(export_repository(backend, args.destination))}
         if action == "repo-import":
             return import_repository(backend, args.source)
+        if action == "repo-migrate":
+            return {"schema_version": backend.info()["schema_version"]}
         if action == "repo-check":
             result = check_repository(backend, verify_blobs=args.verify_blobs)
             if not result.get("ok"):
@@ -484,7 +555,8 @@ def main(argv=None) -> int:
 
         if args.action.startswith("repo-"):
             client = SimpleNamespace(
-                backend=_repository(args), project=resolve_project(args.project)
+                backend=_repository(args, migrate=args.action == "repo-migrate"),
+                project=resolve_project(args.project),
             )
         else:
             client = Client(args.repo, project=args.project, token=args.token)

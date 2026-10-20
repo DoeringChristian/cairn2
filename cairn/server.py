@@ -100,6 +100,7 @@ class Alias(RequestID):
 class Annotations(RequestID):
     patch: dict[str, Any]
     expected_etag: str | None = None
+    target: Literal["artifact", "name"] = "artifact"
 
 
 class Records(StrictBody):
@@ -119,6 +120,18 @@ class Digests(StrictBody):
 class Comment(RequestID):
     anchor: dict[str, Any]
     body: str
+    author: str | None = None
+
+
+class CommentEdit(RequestID):
+    body: str
+    expected_revision: int | None = None
+
+
+class Resolution(RequestID):
+    resolved: bool = True
+    note: str | None = None
+    by: str | None = None
 
 
 class GarbageCollection(StrictBody):
@@ -204,6 +217,8 @@ def _queries(request: Request):
         allowed = ("project", "namespace", "where", "state", "limit", "cursor")
     elif path == "/v1/blobs" and request.method == "PUT":
         allowed = ("digest", "size")
+    elif path.endswith("/comments") and request.method == "GET":
+        allowed = ("scope", "include_resolved")
     keys = list(request.query_params.keys())
     repeated = any(len(request.query_params.getlist(key)) > 1 for key in keys)
     if set(keys) - set(allowed) or repeated:
@@ -279,7 +294,7 @@ def create_app(
             "max_json_bytes": max_json_bytes,
             "max_blob_bytes": max_blob_bytes,
             "authentication": "none" if no_auth else "bearer",
-            "features": ["writers", "aliases", "comments", "streaming_blobs"],
+            "features": ["writers", "aliases", "comments", "annotations", "streaming_blobs"],
         }
 
     @app.post("/v1/artifacts")
@@ -345,6 +360,10 @@ def create_app(
     def annotate(artifact_id: str, body: Annotations):
         return repository.annotate(artifact_id, **body.model_dump())
 
+    @app.get("/v1/artifacts/{artifact_id}/annotations")
+    def annotation_layers(artifact_id: str, request: Request):
+        return repository.annotation_layers(artifact_id)
+
     @app.post("/v1/records/query")
     def query(body: Records):
         return repository.query(**body.model_dump())
@@ -405,12 +424,25 @@ def create_app(
         return repository.add_comment(artifact_id, **body.model_dump())
 
     @app.get("/v1/artifacts/{artifact_id}/comments")
-    def comments(artifact_id: str, request: Request):
-        return repository.comments(artifact_id)
+    def comments(
+        artifact_id: str,
+        request: Request,
+        scope: Literal["artifact", "name"] = "artifact",
+        include_resolved: bool = True,
+    ):
+        return repository.comments(artifact_id, scope=scope, include_resolved=include_resolved)
+
+    @app.put("/v1/comments/{comment_id}")
+    def update_comment(comment_id: str, body: CommentEdit):
+        return repository.update_comment(comment_id, **body.model_dump())
+
+    @app.put("/v1/comments/{comment_id}/resolution")
+    def resolve_comment(comment_id: str, body: Resolution):
+        return repository.resolve_comment(comment_id, **body.model_dump())
 
     @app.delete("/v1/comments/{comment_id}")
-    def delete_comment(comment_id: str, request: Request):
-        repository.delete_comment(comment_id)
+    def delete_comment(comment_id: str, request: Request, body: RequestID | None = None):
+        repository.delete_comment(comment_id, request_id=body.request_id if body else None)
         return Response(status_code=204)
 
     if ui:
