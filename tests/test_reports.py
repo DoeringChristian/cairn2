@@ -243,6 +243,66 @@ def test_live_input_requires_finished_artifact(tmp_path):
     client.backend.close()
 
 
+def test_hydra_config_overrides_groups_and_multirun(tmp_path, capsys):
+    from hydra import initialize
+    from hydra.core.global_hydra import GlobalHydra
+
+    from cairn.cli import main
+
+    (tmp_path / "conf/model").mkdir(parents=True)
+    (tmp_path / "conf/model/resnet.yaml").write_text("name: resnet\nlr: 0.1\n")
+    (tmp_path / "conf/model/vit.yaml").write_text("name: vit\nlr: 0.01\n")
+    source = tmp_path / "ablation.qmd"
+    source.write_text("""---
+title: Ablation
+config:
+  defaults:
+    - model: resnet
+    - _self_
+  alpha: 0.1
+  label: ${model.name}-${alpha}
+cairn:
+  config_path: conf
+---
+
+```{python}
+print(cfg.label, cfg.model.lr)
+```
+""")
+    with initialize(config_path=None, version_base=None):
+        result = reports.build(source, tmp_path / "vit", overrides=["model=vit", "alpha=0.5"])
+        assert GlobalHydra.instance().is_initialized()
+    assert "vit-0.5 0.01" in (result.path / "index.html").read_text()
+    assert result.manifest["config"] == {
+        "model": {"name": "vit", "lr": 0.01},
+        "alpha": 0.5,
+        "label": "vit-0.5",
+    }
+    assert result.manifest["overrides"] == ["model=vit", "alpha=0.5"]
+    assert (result.path / "sources/conf/model/vit.yaml").is_file()
+    for overrides in (["beta=1"], ["model=missing"]):
+        with pytest.raises(reports.ReportBuildError, match="Invalid report config"):
+            reports.build(source, overrides=overrides)
+    plain = tmp_path / "plain.qmd"
+    plain.write_text("No config.\n")
+    with pytest.raises(reports.ReportBuildError, match="require a config"):
+        reports.build(plain, overrides=["alpha=1"])
+    plain.write_text("---\nconfig:\n  hydra: {}\n---\n")
+    with pytest.raises(reports.ReportBuildError, match="without a hydra key"):
+        reports.build(plain)
+    with pytest.raises(ValidationError, match="list of strings"):
+        reports.build(source, overrides="alpha=1")
+    repo = str(tmp_path / "repo")
+    arguments = ["--repo", repo, "report", "build", str(source), "-m", "alpha=1,2"]
+    assert main([*arguments, "--output", str(tmp_path / "sweep"), "--publish"]) == 0
+    built = json.loads(capsys.readouterr().out)
+    assert [item["directory"] for item in built] == [str(tmp_path / f"sweep/{i}") for i in (0, 1)]
+    client = Client(repo)
+    versions = client.backend.versions("reports/ablation@latest")
+    assert [item["metadata"]["config"]["label"] for item in versions] == ["resnet-1", "resnet-2"]
+    client.backend.close()
+
+
 def test_pinned_reader_scope_and_read_operations(client, tmp_path):
     original = seed(client.backend)
     pins = [

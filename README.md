@@ -464,6 +464,40 @@ print(inputs["baseline"].read())
 ```
 ````
 
+A report can be configured with Hydra. The front matter `config` is the primary
+config, `cairn.config_path` optionally names a folder of config groups, and the
+build's overrides apply on top:
+
+````markdown
+---
+title: Ablation
+config:
+  defaults:
+    - model: resnet
+    - _self_
+  alpha: 0.1
+cairn:
+  config_path: conf
+---
+
+```{python}
+print(cfg.model.name, cfg.alpha)
+```
+````
+
+```sh
+cairn report build ablation.qmd model=vit alpha=0.5
+cairn report build ablation.qmd --publish -m alpha=0.1,0.2,0.3
+```
+
+Cells see the composed config as `cfg`. The resolved config is stored in the
+manifest and in the published artifact's metadata `config`, like a run's config,
+and the config folder is captured with the sources. `-m` builds once per
+combination of Hydra sweep values (`a=1,2`, `range()`, `choice()`), into
+numbered subfolders of `--output`; with `--publish` each becomes a version.
+Hydra's runtime (the `hydra:` node, output directories, logging, `${hydra:...}`)
+and sweeper plugins are not used.
+
 All declared inputs resolve together before any cell executes. The builder
 captures source/includes and declared local resources, starts a fresh Python
 kernel, and emits HTML, native document JSON, an executed notebook, assets,

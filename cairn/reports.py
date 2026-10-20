@@ -15,6 +15,7 @@ import base64
 import hashlib
 import html
 import importlib.metadata
+import itertools
 import json
 import mimetypes
 import os
@@ -316,6 +317,71 @@ def _pin_report_inputs(client, metadata, source, sources):
     return pinned
 
 
+def _compose(metadata: dict, settings: dict, overrides: list, sources) -> dict | None:
+    """Compose the front-matter config with Hydra, using cairn.config_path for config groups."""
+    config = metadata.get("config")
+    if config is None:
+        if overrides:
+            raise ValidationError("Config overrides require a config in the report front matter")
+        return None
+    if not isinstance(config, dict) or "hydra" in config:
+        raise ValidationError("Report config must be a mapping without a hydra key")
+    try:
+        from hydra import compose, initialize, initialize_config_dir
+        from hydra.core.config_store import ConfigStore
+        from hydra.core.global_hydra import GlobalHydra
+        from hydra.core.singleton import Singleton
+        from hydra.errors import HydraException
+        from omegaconf import OmegaConf
+        from omegaconf.errors import OmegaConfBaseException
+    except ImportError as exc:
+        raise ValidationError(
+            "Reports require the 'reports' extra: pip install 'cairn2[reports]'"
+        ) from exc
+    path = settings.get("config_path")
+    if path is not None:
+        if not isinstance(path, str):
+            raise ValidationError("cairn.config_path must be a relative directory")
+        sources.resource(path)
+        folder = _inside(sources.destination, path)
+        if not folder.is_dir():
+            raise ValidationError(f"cairn.config_path is not a directory: {path}")
+    state = Singleton.get_state()
+    try:
+        GlobalHydra.instance().clear()
+        ConfigStore.instance().store(name="cairn-report", node=config)
+        context = (
+            initialize_config_dir(config_dir=str(folder), version_base=None)
+            if path is not None
+            else initialize(config_path=None, version_base=None)
+        )
+        with context:
+            composed = compose("cairn-report", overrides=list(overrides))
+        return OmegaConf.to_container(composed, resolve=True, throw_on_missing=True)
+    except (HydraException, OmegaConfBaseException) as exc:
+        raise ValidationError(f"Invalid report config: {exc}") from exc
+    finally:
+        Singleton.set_state(state)
+
+
+def sweep(overrides) -> list[list[str]]:
+    """Expand Hydra sweep overrides (a=1,2, range(), choice()) into one list per build."""
+    from hydra.core.override_parser.overrides_parser import OverridesParser
+    from hydra.errors import HydraException
+
+    try:
+        parsed = OverridesParser.create().parse_overrides(list(overrides))
+    except HydraException as exc:
+        raise ValidationError(f"Invalid config overrides: {exc}") from exc
+    axes = [
+        [f"{item.get_key_element()}={value}" for value in item.sweep_string_iterator()]
+        if item.is_sweep_override()
+        else [item.input_line]
+        for item in parsed
+    ]
+    return [list(combination) for combination in itertools.product(*axes)]
+
+
 class _PinnedBackend:
     """Read operations scoped to one report's repository and declared inputs."""
 
@@ -383,9 +449,13 @@ _pins = _json.loads(_os.environ.pop("CAIRN_REPORT_PINS"))
 _endpoint = _os.environ.pop("CAIRN_REPORT_ENDPOINT", "")
 _token = _os.environ.pop("CAIRN_REPORT_TOKEN", "") or None
 _project = _os.environ.pop("CAIRN_REPORT_PROJECT", "default")
+_config = _os.environ.pop("CAIRN_REPORT_CONFIG", "")
 _source_client = _Client(_endpoint, project=_project, token=_token) if _endpoint else None
 client = _PinnedInputs(_source_client, _pins) if _source_client else None
 inputs = {pin["name"]: client.resolve(pin["artifact_id"]) for pin in _pins}
+if _config:
+    from omegaconf import OmegaConf as _OmegaConf
+    cfg = _OmegaConf.create(_json.loads(_config))
 del _token
 import importlib.metadata as _metadata, platform as _platform
 from IPython.display import display as _display
@@ -823,7 +893,9 @@ def _new_directory(output, source: Path) -> Path:
     return directory
 
 
-def build(source, output=None, *, client=None, timeout=120, kernel_name="python3") -> BuildResult:
+def build(
+    source, output=None, *, client=None, timeout=120, kernel_name="python3", overrides=()
+) -> BuildResult:
     """Capture, pin, execute and render a report locally, preserving failed builds.
 
     Supported execution options are ``echo`` and ``eval`` in front matter;
@@ -831,6 +903,8 @@ def build(source, output=None, *, client=None, timeout=120, kernel_name="python3
     ``tbl-cap``. Includes use ``{{< include relative.qmd >}}`` on a line by itself.
     Equations use ``$$...$$ {#eq-name}`` or ``$$...$$ (eq-name)``; headings/images use ``{#sec-name}`` or
     ``{#fig-name}``. Static rich HTML is displayed in a restricted iframe.
+    A front-matter ``config`` is composed with Hydra and ``overrides`` and is
+    available to cells as ``cfg``.
     """
     if client is None:
         from .sdk import _default, _implicit_client
@@ -838,7 +912,12 @@ def build(source, output=None, *, client=None, timeout=120, kernel_name="python3
         if _default.get() is not None:
             with _implicit_client() as implicit:
                 return build(
-                    source, output, client=implicit, timeout=timeout, kernel_name=kernel_name
+                    source,
+                    output,
+                    client=implicit,
+                    timeout=timeout,
+                    kernel_name=kernel_name,
+                    overrides=overrides,
                 )
     deps = _dependencies()
     nbformat, yaml, _, NotebookClient, *_ = deps
@@ -849,6 +928,8 @@ def build(source, output=None, *, client=None, timeout=120, kernel_name="python3
         raise ValidationError("Report source must be a .qmd or .md file")
     if not isinstance(timeout, int) or timeout <= 0:
         raise ValidationError("Report cell timeout must be a positive number of seconds")
+    if isinstance(overrides, str) or any(not isinstance(item, str) for item in overrides):
+        raise ValidationError("Config overrides must be a list of strings")
     directory = _new_directory(output, source)
     manifest = {
         "format": "cairn/report",
@@ -878,6 +959,9 @@ def build(source, output=None, *, client=None, timeout=120, kernel_name="python3
             raise ValidationError("cairn.resources must be a list of relative paths")
         for resource in resources:
             sources.resource(resource)
+        config = _compose(metadata, settings, overrides, sources)
+        if config is not None:
+            manifest.update(config=config, overrides=list(overrides))
         pins = _pin_report_inputs(client, metadata, source, sources)
         manifest["inputs"] = [{k: v for k, v in pin.items() if k != "descriptor"} for pin in pins]
         manifest["dependencies"] = [
@@ -935,6 +1019,7 @@ def build(source, output=None, *, client=None, timeout=120, kernel_name="python3
             endpoint = str(Path(endpoint).absolute())
         environment["CAIRN_REPORT_ENDPOINT"] = endpoint
         environment["CAIRN_REPORT_PROJECT"] = client.project if client is not None else "default"
+        environment["CAIRN_REPORT_CONFIG"] = json.dumps(config) if config is not None else ""
         environment["CAIRN_REPORT_TOKEN"] = (client.token or "") if client is not None else ""
         manifest["environment"] = {
             "python": platform.python_version(),
@@ -1139,7 +1224,11 @@ def publish(build_directory, *, client=None, name=None) -> dict:
             {
                 "sequence": 1,
                 "kind": "metadata",
-                "data": {"title": manifest["title"], "build_created_at": manifest["created_at"]},
+                "data": {
+                    "title": manifest["title"],
+                    "build_created_at": manifest["created_at"],
+                    **({"config": manifest["config"]} if "config" in manifest else {}),
+                },
             }
         ],
     )

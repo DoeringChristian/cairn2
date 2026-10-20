@@ -85,7 +85,8 @@ run is live. Generic artifact creation performs no automatic capture. See README
 provenance and console opt-outs.
 
 The QMD builder captures source/includes/resources, resolves declared finished
-inputs, executes a fresh local kernel and packages outputs plus source mappings.
+inputs, composes an optional front-matter Hydra config with the build's overrides,
+executes a fresh local kernel and packages outputs plus source mappings.
 Its explicit pinned reader avoids global backend monkeypatches. A report is an
 ordinary artifact containing the completed bundle. Editing and execution are local;
 the server stores, queries and serves data only.

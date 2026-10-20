@@ -153,7 +153,9 @@ for declared inputs.
 Reports execute QMD locally, pin declared finished artifact IDs, capture source,
 outputs and package information, then upload an ordinary report artifact. The
 supplied report reader scopes reads to those declared inputs; independent Python
-clients remain independent. Reports are not a Python security sandbox.
+clients remain independent. Reports are not a Python security sandbox. A
+front-matter `config` is composed with Hydra and build `overrides`; cells see it
+as `cfg`, and the resolved config is the manifest's and artifact metadata's `config`.
 
 Repository export/import preserves artifact IDs, labels, records and retained
 bytes. Imported producer handles are closed; live artifacts can register a new

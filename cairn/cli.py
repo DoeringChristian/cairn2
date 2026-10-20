@@ -217,6 +217,10 @@ def parser() -> argparse.ArgumentParser:
         "build", help="Pin inputs, execute a fresh Python kernel, and create a portable bundle"
     )
     build.add_argument("source")
+    build.add_argument("overrides", nargs="*", help="Hydra overrides of the front-matter config")
+    build.add_argument(
+        "--multirun", "-m", action="store_true", help="One build per combination of sweep values"
+    )
     build.add_argument("--output", "-o")
     build.add_argument("--timeout", type=int, default=120)
     build.add_argument("--kernel", default="python3")
@@ -524,19 +528,27 @@ def _dispatch(args, client):
         from . import reports
 
         if action == "report-build":
-            result = reports.build(
-                args.source,
-                args.output,
-                client=client,
-                timeout=args.timeout,
-                kernel_name=args.kernel,
-            )
-            output = {"directory": str(result.directory), "manifest": result.manifest}
-            if args.publish:
-                output["publication"] = reports.publish(
-                    result.directory, client=client, name=args.name
+            outputs = []
+            sweeps = reports.sweep(args.overrides) if args.multirun else [args.overrides]
+            for index, overrides in enumerate(sweeps):
+                directory = args.output
+                if args.multirun and directory is not None:
+                    directory = Path(directory) / str(index)
+                result = reports.build(
+                    args.source,
+                    directory,
+                    client=client,
+                    timeout=args.timeout,
+                    kernel_name=args.kernel,
+                    overrides=overrides,
                 )
-            return output
+                output = {"directory": str(result.directory), "manifest": result.manifest}
+                if args.publish:
+                    output["publication"] = reports.publish(
+                        result.directory, client=client, name=args.name
+                    )
+                outputs.append(output)
+            return outputs if args.multirun else outputs[0]
         if action == "report-publish":
             return reports.publish(args.directory, client=client, name=args.name)
         operation = reports.copy if action == "report-copy" else reports.export
