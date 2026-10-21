@@ -355,6 +355,54 @@ print("loss output")
     client.backend.close()
 
 
+def test_citations_from_bibtex_in_author_year_and_numeric_styles(tmp_path):
+    (
+        tmp_path / "refs.bib"
+    ).write_text(r"""@article{smith2020, author={Smith, John and Doe, Alice and M{\"u}ller, Kai},
+  title={Fast {GPU} rendering}, journal={Graphics J.}, year={2020}, volume={12}, number={3},
+  pages={45--67}, doi={10.1/x}}
+@book{knuth, author={Donald E. Knuth}, title={The Art}, publisher={Addison-Wesley}, year=1968}
+@misc{unused, title={Never cited}, year={2001}}
+""")
+    source = tmp_path / "cited.qmd"
+    body = """## Intro {#sec-intro}
+
+Fast [@smith2020, p. 3]. @knuth agrees [see @knuth; -@smith2020]. Kept: @nobody, a@b.com, @sec-intro.
+
+::: {#refs}
+:::
+
+After the references.
+"""
+    source.write_text("---\nbibliography: refs.bib\n---\n" + body)
+    page = (reports.build(source, tmp_path / "author-year").path / "index.html").read_text()
+    cite = '<a class="citation" href="#ref-{}">{}</a>'
+    assert f"Fast ({cite.format('smith2020', 'Smith et al. 2020')}, p. 3)." in page
+    assert f"Knuth ({cite.format('knuth', '1968')}) agrees" in page
+    assert f"(see {cite.format('knuth', 'Knuth 1968')}; {cite.format('smith2020', '2020')})" in page
+    assert 'Kept: @nobody, a@b.com, <a class="crossref" href="#sec-intro">Section 1</a>.' in page
+    knuth = page.index('id="ref-knuth"')
+    assert knuth < page.index('id="ref-smith2020"') < page.index("After the references")
+    assert (
+        "Smith, J., Doe, A., &amp; Müller, K. (2020). Fast GPU rendering. <em>Graphics J.</em>, 12(3), 45–67."
+        in page
+    )
+    assert '<a href="https://doi.org/10.1/x">' in page and "Never cited" not in page
+    assert "<h2>References</h2>" not in page
+    source.write_text(
+        "---\nbibliography: refs.bib\ncitation-style: numeric\n---\n"
+        + body.replace("::: {#refs}\n:::\n", "")
+    )
+    page = (reports.build(source, tmp_path / "numeric").path / "index.html").read_text()
+    assert (
+        f"Fast [{cite.format('smith2020', '1')}, p. 3]. Knuth [{cite.format('knuth', '2')}]" in page
+    )
+    assert '<h2>References</h2><p id="ref-smith2020" class="reference">[1] Smith' in page
+    source.write_text("---\nbibliography: refs.bib\ncitation-style: chicago\n---\n")
+    with pytest.raises(reports.ReportBuildError, match="citation-style"):
+        reports.build(source)
+
+
 def test_includes_resources_images_static_html_and_source_locations(tmp_path):
     (tmp_path / "parts").mkdir()
     (tmp_path / "data.txt").write_text("captured data")

@@ -375,6 +375,150 @@ def sweep(overrides) -> list[list[str]]:
     return [list(combination) for combination in itertools.product(*axes)]
 
 
+_KEY = r"[\w](?:[\w:.#$%&+?<>~/-]*\w)?"
+_CITATIONS = re.compile(r"\[([^\[\]]*@[^\[\]]*)\]|(?<![\w\\@\[])@(" + _KEY + ")")
+_CITATION = re.compile(r"\s*(.*?)(-?)@(" + _KEY + r")(?:,\s*(.*?))?\s*", re.DOTALL)
+
+
+class _Citations:
+    """BibTeX entries cited as [@key], [@a; @b, p. 3], [-@key] or @key."""
+
+    def __init__(self, metadata, sources):
+        files = metadata.get("bibliography", [])
+        files = [files] if isinstance(files, str) else files
+        if not isinstance(files, list) or any(not isinstance(name, str) for name in files):
+            raise ValidationError("bibliography must be a BibTeX file or a list of them")
+        self.numeric = metadata.get("citation-style", "author-year") == "numeric"
+        if metadata.get("citation-style", "author-year") not in {"author-year", "numeric"}:
+            raise ValidationError("citation-style must be author-year or numeric")
+        self.entries, self.cited = {}, []
+        if files:
+            import bibtexparser
+            from bibtexparser import middlewares
+
+            for name in files:
+                library = bibtexparser.parse_string(
+                    sources.capture(name).read_text("utf-8"),
+                    append_middleware=[
+                        middlewares.LatexDecodingMiddleware(),
+                        middlewares.SeparateCoAuthors(),
+                        middlewares.SplitNameParts(),
+                    ],
+                )
+                if library.failed_blocks:
+                    raise ValidationError(f"Cannot parse {name}: {library.failed_blocks[0].error}")
+                self.entries.update({entry.key: entry for entry in library.entries})
+
+    def _field(self, key, name):
+        field = self.entries[key].fields_dict.get(name)
+        return field.value if field else ""
+
+    def _year(self, key):
+        return str(self._field(key, "year") or str(self._field(key, "date"))[:4] or "n.d.")
+
+    def _short(self, key):
+        names = [
+            " ".join(n.von + n.last)
+            for n in self._field(key, "author") or self._field(key, "editor") or []
+        ]
+        if not names:
+            return str(self._field(key, "title"))
+        return (
+            names[0]
+            if len(names) == 1
+            else f"{names[0]} and {names[1]}"
+            if len(names) == 2
+            else f"{names[0]} et al."
+        )
+
+    def _link(self, key, text):
+        if key not in self.cited:
+            self.cited.append(key)
+        return f'<a class="citation" href="#ref-{html.escape(key, quote=True)}">{html.escape(text)}</a>'
+
+    def render(self, match):
+        """HTML for a citation match, or None to leave the text as written."""
+        if match.group(2):
+            key = match.group(2)
+            if key not in self.entries:
+                return None
+            label = str(self.cited.index(key) + 1 if key in self.cited else len(self.cited) + 1)
+            if self.numeric:
+                return f"{html.escape(self._short(key))} [{self._link(key, label)}]"
+            return f"{html.escape(self._short(key))} ({self._link(key, self._year(key))})"
+        items = [_CITATION.fullmatch(part) for part in match.group(1).split(";")]
+        if not all(items) or any(item.group(3) not in self.entries for item in items):
+            return None
+        parts = []
+        for item in items:
+            prefix, suppress, key, locator = item.groups()
+            number = self.cited.index(key) + 1 if key in self.cited else len(self.cited) + 1
+            text = (
+                str(number)
+                if self.numeric
+                else self._year(key)
+                if suppress
+                else f"{self._short(key)} {self._year(key)}"
+            )
+            parts.append(
+                (html.escape(prefix.strip()) + " " if prefix.strip() else "")
+                + self._link(key, text)
+                + (", " + html.escape(locator) if locator else "")
+            )
+        return f"[{', '.join(parts)}]" if self.numeric else f"({'; '.join(parts)})"
+
+    def bibliography(self):
+        """Formatted entries of every cited key, numbered in citation order or by author."""
+        keys = (
+            self.cited
+            if self.numeric
+            else sorted(self.cited, key=lambda k: (self._short(k).lower(), self._year(k)))
+        )
+        for number, key in enumerate(keys, 1):
+            names = [
+                " ".join(n.von + n.last)
+                + (", " + " ".join(p[0] + "." for p in n.first) if n.first else "")
+                for n in self._field(key, "author") or self._field(key, "editor") or []
+            ]
+            authors = (
+                names[0]
+                if len(names) == 1
+                else ", ".join(names[:-1]) + ", & " + names[-1]
+                if names
+                else ""
+            )
+            title = html.escape(str(self._field(key, "title")))
+            container = self._field(key, "journal") or self._field(key, "booktitle")
+            details = ", ".join(
+                str(part)
+                for part in (
+                    self._field(key, "volume")
+                    + (f"({self._field(key, 'number')})" if self._field(key, "number") else ""),
+                    self._field(key, "pages"),
+                )
+                if part
+            )
+            text = (f"[{number}] " if self.numeric else "") + (
+                html.escape(authors) + " " if authors else ""
+            )
+            text += f"({html.escape(self._year(key))}). "
+            text += (
+                f"{title}. <em>{html.escape(str(container))}</em>"
+                if container
+                else f"<em>{title}</em>"
+            )
+            text += (", " + html.escape(details) if details else "") + "."
+            if publisher := self._field(key, "publisher"):
+                text += f" {html.escape(str(publisher))}."
+            doi, url = self._field(key, "doi"), self._field(key, "url")
+            link = f"https://doi.org/{doi}" if doi else url
+            if str(link).startswith(("https://", "http://")):
+                text += (
+                    f' <a href="{html.escape(str(link), quote=True)}">{html.escape(str(link))}</a>'
+                )
+            yield key, text
+
+
 class _References:
     """Other reports referenced or embedded by the text, resolved once per build."""
 
@@ -834,7 +978,7 @@ def _native_output(output: dict, directory: Path) -> dict:
     return result
 
 
-def _prepare_markdown(text, segments, md, sources, mapping, directory, references):
+def _prepare_markdown(text, segments, md, sources, mapping, directory, references, citations):
     from markdown_it.token import Token
 
     # Parse the full document once so definitions, references, and footnotes
@@ -1011,6 +1155,34 @@ def _prepare_markdown(text, segments, md, sources, mapping, directory, reference
         cells = [child for child in children if not child.get("caption")]
         if any(key in segment["attributes"] for key in ("layout", "layout-ncol", "layout-nrow")):
             segment["grid"] = _grid(segment["attributes"], len(cells))
+
+    def crossrefs(content):
+        """Text and links for @label and @namespace/name#label references in content."""
+        result, position = [], 0
+        for match in _REFERENCE.finditer(content):
+            reference, name = match.groups()
+            before = Token("text", "", 0)
+            before.content = content[position : match.start()]
+            link = Token("html_inline", "", 0)
+            if reference:
+                report, text = references.label(reference, name)
+                link.content = (
+                    f'<a class="crossref" href="{html.escape(report["url"], quote=True)}#'
+                    f'{html.escape(name)}">{html.escape(text)} in '
+                    f"<em>{html.escape(report['title'])}</em></a>"
+                )
+            elif name not in labels:
+                raise ValidationError(f"Unknown report cross reference: @{name}")
+            else:
+                link.content = (
+                    f'<a class="crossref" href="#{html.escape(name)}">{labels[name]["text"]}</a>'
+                )
+            result.extend([before, link])
+            position = match.end()
+        after = Token("text", "", 0)
+        after.content = content[position:]
+        return [*result, after]
+
     for segment in segments:
         for token in segment.get("tokens", []):
             if not token.children:
@@ -1020,29 +1192,58 @@ def _prepare_markdown(text, segments, md, sources, mapping, directory, reference
                 if child.type != "text":
                     children.append(child)
                     continue
-                position = 0
-                for match in _REFERENCE.finditer(child.content):
-                    reference, name = match.groups()
-                    before = Token("text", "", 0)
-                    before.content = child.content[position : match.start()]
-                    link = Token("html_inline", "", 0)
-                    if reference:
-                        report, text = references.label(reference, name)
-                        link.content = (
-                            f'<a class="crossref" href="{html.escape(report["url"], quote=True)}#'
-                            f'{html.escape(name)}">{html.escape(text)} in '
-                            f"<em>{html.escape(report['title'])}</em></a>"
-                        )
-                    elif name not in labels:
-                        raise ValidationError(f"Unknown report cross reference: @{name}")
-                    else:
-                        link.content = f'<a class="crossref" href="#{html.escape(name)}">{labels[name]["text"]}</a>'
-                    children.extend([before, link])
-                    position = match.end()
-                after = Token("text", "", 0)
-                after.content = child.content[position:]
-                children.append(after)
+                position, content, child.content = 0, child.content, ""
+                for match in _CITATIONS.finditer(content):
+                    if (rendered := citations.render(match)) is not None:
+                        child.content += content[position : match.start()]
+                        child.content += "\0" + rendered + "\0"
+                        position = match.end()
+                child.content += content[position:]
+                pieces = child.content.split("\0")
+                for index, piece in enumerate(pieces):
+                    if index % 2:
+                        cited = Token("html_inline", "", 0)
+                        cited.content = piece
+                        children.append(cited)
+                        continue
+                    children.extend(crossrefs(piece))
             token.children = children
+    if citations.cited:
+        heading = [
+            Token("heading_open", "h2", 1),
+            Token("inline", "", 0),
+            Token("heading_close", "h2", -1),
+        ]
+        title = Token("text", "", 0)
+        title.content = "References"
+        heading[1].children = [title]
+        entries = []
+        for key, formatted in citations.bibliography():
+            entry = Token("html_inline", "", 0)
+            entry.content = formatted
+            line = Token("inline", "", 0)
+            line.children = [entry]
+            opened = Token("paragraph_open", "p", 1)
+            opened.attrs = {"id": f"ref-{key}", "class": "reference"}
+            entries += [opened, line, Token("paragraph_close", "p", -1)]
+        position = next(
+            (
+                i
+                for i, s in enumerate(segments)
+                if s["kind"] == "open" and s["attributes"].get("id") == "refs"
+            ),
+            None,
+        )
+        segments.insert(
+            len(segments) if position is None else position + 1,
+            {
+                "kind": "markdown",
+                "text": "",
+                "tokens": entries if position is not None else heading + entries,
+                "offset": len(mapping),
+                "source": _source_range(mapping, max(0, len(mapping) - 1), len(mapping)),
+            },
+        )
     for segment in segments:
         segment["inline"] = [
             match.group(1)
@@ -1405,9 +1606,9 @@ def build(
         _write_json(directory / "source-map.json", mapping)
         md = _markdown_engine(deps)
         segments = _segments(text, mapping, md, yaml)
-        references = _References(client)
+        references, citations = _References(client), _Citations(metadata, sources)
         labels, markdown_env = _prepare_markdown(
-            text, segments, md, sources, mapping, directory, references
+            text, segments, md, sources, mapping, directory, references, citations
         )
         for segment in segments:
             if segment["kind"] == "embed":
