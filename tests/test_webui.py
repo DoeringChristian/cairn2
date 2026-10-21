@@ -373,3 +373,38 @@ def test_v2_reports_serve_assets_without_legacy_preview_cache(tmp_path, monkeypa
             response = browser.get(base + "html/0/0")
             assert response.status_code == 200 and "Interactive" in response.text
             assert "sandbox allow-scripts" in response.headers["content-security-policy"]
+
+
+def test_report_viewers_read_their_report_files_through_a_signed_link(tmp_path):
+    from cairn import reports
+    from cairn.sdk import Client
+
+    (tmp_path / "viewer.html").write_text("<script>fetch('mesh.txt')</script>")
+    (tmp_path / "mesh.txt").write_text("vertices")
+    (tmp_path / "scene.qmd").write_text(
+        "---\ncairn:\n  resources: [mesh.txt]\n---\n![Scene](viewer.html){#fig-scene height=300}\n"
+    )
+    built = reports.build(tmp_path / "scene.qmd", tmp_path / "build")
+    assert (
+        '<iframe class="viewer" sandbox="allow-scripts allow-same-origin"'
+        in (built.path / "index.html").read_text()
+    )
+    with Client(tmp_path / "repo") as client:
+        identifier = reports.publish(built.path, client=client)["id"]
+    with closing(Repository(tmp_path / "repo")) as repo:
+        app = create_app(repo, token="test-token", ui=True)
+        with TestClient(app) as browser:
+            assert browser.get(f"/ui-api/viewer-tokens/{identifier}").status_code == 401
+            browser.post("/ui-api/login", json={"link_token": "test-token"})
+            url = browser.get(f"/ui-api/viewer-tokens/{identifier}").json()["url"]
+            browser.post("/ui-api/logout")
+            page = browser.get(url + "sources/viewer.html")
+            assert page.status_code == 200 and "fetch('mesh.txt')" in page.text
+            assert page.headers["content-security-policy"].startswith("sandbox allow-scripts;")
+            assert "allow-same-origin" not in page.headers["content-security-policy"]
+            data = browser.get(url + "sources/mesh.txt")
+            assert data.text == "vertices" and data.headers["access-control-allow-origin"] == "*"
+            assert browser.get(url + "sources/missing.txt").status_code == 404
+            forged = url.replace("/ui-api/viewers/", "/ui-api/viewers/x")
+            assert browser.get(forged + "sources/mesh.txt").status_code == 401
+            assert browser.get(f"/ui-api/reports/{identifier}/sources/mesh.txt").status_code == 401

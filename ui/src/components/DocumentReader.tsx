@@ -1,6 +1,6 @@
 import { OutputComment } from "./OutputComment";
 import { SyntaxCode } from "./SyntaxCode";
-import { HtmlOutput } from "./HtmlOutput";
+import { HtmlOutput, ViewerFrame } from "./HtmlOutput";
 import { ReportArtifactContext } from "./ReportContext";
 import { ReportComments, ReportCommentsProvider } from "./ReportComments";
 import { PlotlyFigure } from "./PlotlyFigure";
@@ -38,13 +38,16 @@ const classes=(value?:string)=>value&&/^[\w -]+$/.test(value)?value:undefined;
 const length=(value?:string)=>value&&/^\d+(\.\d+)?(px|%|em|rem)?$/.test(value)?(/\d$/.test(value)?value+'px':value):undefined;
 const size=(attrs:Record<string,string>)=>({width:length(attrs.width),height:length(attrs.height)});
 function safeHref(value:string) {return /^(https?:|mailto:|#)/i.test(value)?value:undefined;}
-function resource(base:string,raw:string,source:Source,blobs:BlobRef[]) {
-  if(/^data:image\/(png|jpeg|gif|webp);base64,/i.test(raw)) return raw;
+function bundled(raw:string,source:Source,blobs:BlobRef[]) {
   if(/^[a-z]+:|^\/|\\/i.test(raw))return undefined;
   let path:string; try{path=decodeURIComponent(raw.split(/[?#]/)[0]);}catch{return undefined;}
   const parent=source.path.split('/').slice(0,-1).join('/');
   const options=[path,`sources/${parent?parent+'/':''}${path}`];
-  const name=options.find(name=>!name.split('/').includes('..')&&blobs.some(b=>b.name===name));
+  return options.find(name=>!name.split('/').includes('..')&&blobs.some(b=>b.name===name));
+}
+function resource(base:string,raw:string,source:Source,blobs:BlobRef[]) {
+  if(/^data:image\/(png|jpeg|gif|webp);base64,/i.test(raw)) return raw;
+  const name=bundled(raw,source,blobs);
   return name?base+name.split('/').map(encodeURIComponent).join('/'):undefined;
 }
 function inlineText(text:string,labels:Document['labels']):ReactNode[] {
@@ -62,6 +65,7 @@ function nodesToReact(nodes:Node[],base:string,source:Source,blobs:BlobRef[],lab
       if(node.type==='text'){out.push(<Fragment key={key}>{inlineText(node.content,labels)}</Fragment>);continue;}
       if(node.type==='code_inline'){out.push(<code key={key}>{node.content}</code>);continue;}
       if(node.type==='softbreak'||node.type==='hardbreak'){out.push(node.type==='hardbreak'?<br key={key}/>:'\n');continue;}
+      if(node.type==='image'&&/\.html$/i.test(attrs.src||'')){const name=bundled(attrs.src,source,blobs);out.push(name?<ViewerFrame key={key} path={name} title={node.content} height={length(attrs.height)}/>:<span key={key}>[Viewer unavailable: {node.content}]</span>);continue;}
       if(node.type==='image'){const src=resource(base,attrs.src||'',source,blobs);out.push(src?<ZoomImage key={key} src={src} alt={node.content} className={classes(attrs.class)} style={size(attrs)} source={{file:source.path,line:source.line_start}}/>:<span key={key}>[Image unavailable: {node.content}]</span>);continue;}
       if(node.type.startsWith('math_')){out.push(<div key={key} id={node.type==='math_block_label'?node.info:undefined} className={node.type==='math_inline'?'native-inline-math':'native-math'}><MathValue tex={node.content} block={node.type!=='math_inline'}/>{node.info&&labels[node.info]&&<small>{labels[node.info].text}</small>}</div>);continue;}
       if(node.type==='html_inline'&&node.content.startsWith('<input class="task-list-item-checkbox"')){out.push(<input key={key} type="checkbox" className="task-list-item-checkbox" checked={node.content.includes('checked=')} disabled/>);continue;}

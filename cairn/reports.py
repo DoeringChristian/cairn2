@@ -504,6 +504,21 @@ def _markdown_engine(deps):
                     keep = _ALLOWED | ({"src", "alt"} if child.type == "image" else set())
                     child.attrs = {k: v for k, v in child.attrs.items() if k in keep}
 
+    def image(self, tokens, index, options, env):
+        """An HTML file in image syntax is an interactive viewer in a sandboxed frame."""
+        token = tokens[index]
+        if not token.attrGet("src").endswith(".html"):
+            return self.image(tokens, index, options, env)
+        height = token.attrGet("height") or "480"
+        height = height + "px" if height.isdigit() else height
+        style = f' style="height:{height}"' if _LENGTH.fullmatch(height) else ""
+        return (
+            f'<iframe class="viewer" sandbox="allow-scripts allow-same-origin" '
+            f'src="{html.escape(token.attrGet("src"), quote=True)}" '
+            f'title="{html.escape(token.content, quote=True)}"{style}></iframe>'
+        )
+
+    md.add_render_rule("image", image)
     md.inline.ruler.before("attr", "cairn_attributes", attributes)
     md.core.ruler.push("cairn_attributes", allowed)
 
@@ -884,6 +899,9 @@ def _prepare_markdown(text, segments, md, sources, mapping, directory):
                     Path(source["path"]).parent / safe_path(unquote(parsed.path))
                 ).as_posix()
                 captured = sources.capture(relative)
+                if captured.suffix.lower() == ".html":
+                    child.attrSet("src", "sources/" + relative)
+                    continue
                 child.attrSet(
                     "src", _asset(directory, captured.read_bytes(), captured.suffix.lower())
                 )
@@ -993,7 +1011,7 @@ def _rich_output(output: dict, directory: Path, md) -> str:
     return '<pre class="output">' + html.escape(data.get("text/plain", "")) + "</pre>"
 
 
-_CSS = """body{font:17px/1.65 system-ui,sans-serif;color:#253139;margin:0;background:#fafaf8}main{max-width:900px;margin:4rem auto;padding:0 2rem 5rem}h1,h2,h3{line-height:1.2;color:#153b38}h1{font-size:2.7rem}h2{margin-top:2.5rem}a{color:#146e67}pre{overflow:auto;padding:1rem;background:#eef1ef;border-radius:6px;font:14px/1.5 ui-monospace,monospace}code{font-family:ui-monospace,monospace}table{border-collapse:collapse;width:100%;margin:1.5rem 0}th,td{padding:.6rem;text-align:left;border-bottom:1px solid #ccd4d0}th{background:#edf1ef}img{max-width:100%;height:auto}.output-image{display:block;margin:1rem auto}figure{margin:1.5rem 0}figcaption,.caption{color:#53645d;font-size:.9rem}.callout{padding:.6rem 1.2rem;border-left:4px solid #42877a;background:#eef6f2;margin:1.4rem 0}.callout-title{font-weight:700;margin:.2rem 0}.warning,.caution,.important{border-color:#b77b34;background:#fff6e8}.stderr,.error{border-left:3px solid #b84141}.rich-html{display:block;width:100%;min-height:280px;border:0}.math.block{overflow:auto}.task-list-item{list-style:none}.task-list-item-checkbox{margin:0 .5rem 0 -1.5rem}dt{font-weight:600}dd{margin:0 0 .6rem 1.5rem}.columns,.layout-row{display:flex;gap:1.5rem}.column{flex:1 1 0;min-width:0}.layout-cell{min-width:0}.layout-grid{display:grid;gap:1rem}.panel-tabset{border:1px solid #ccd4d0;border-radius:6px;padding:0 1rem;margin:1.4rem 0}.tab-title{font-weight:700;border-bottom:1px solid #ccd4d0;padding:.5rem 0}.column-page,.column-page-inset{margin:0 -8%}.column-body-outset{margin:0 -4%}.column-screen,.column-screen-inset{width:100vw;margin-left:calc(50% - 50vw)}@media(min-width:1300px){.column-margin,.margin-caption{float:right;clear:right;width:240px;margin-right:-280px;font-size:.85rem}}@media(max-width:700px){.columns,.layout-row{flex-direction:column}.column{flex:none!important}.layout-cell{width:auto!important}}.provenance{color:#61736a;font-size:.85rem;border-top:1px solid #ccd4d0;padding-top:1rem;margin-top:3rem}.source-block{scroll-margin-top:2rem}details>summary{cursor:pointer}@media print{body{background:white}main{margin:0;max-width:none}pre{white-space:pre-wrap}.rich-html{min-height:350px}}"""
+_CSS = """body{font:17px/1.65 system-ui,sans-serif;color:#253139;margin:0;background:#fafaf8}main{max-width:900px;margin:4rem auto;padding:0 2rem 5rem}h1,h2,h3{line-height:1.2;color:#153b38}h1{font-size:2.7rem}h2{margin-top:2.5rem}a{color:#146e67}pre{overflow:auto;padding:1rem;background:#eef1ef;border-radius:6px;font:14px/1.5 ui-monospace,monospace}code{font-family:ui-monospace,monospace}table{border-collapse:collapse;width:100%;margin:1.5rem 0}th,td{padding:.6rem;text-align:left;border-bottom:1px solid #ccd4d0}th{background:#edf1ef}img{max-width:100%;height:auto}.output-image{display:block;margin:1rem auto}figure{margin:1.5rem 0}figcaption,.caption{color:#53645d;font-size:.9rem}.callout{padding:.6rem 1.2rem;border-left:4px solid #42877a;background:#eef6f2;margin:1.4rem 0}.callout-title{font-weight:700;margin:.2rem 0}.warning,.caution,.important{border-color:#b77b34;background:#fff6e8}.stderr,.error{border-left:3px solid #b84141}.rich-html{display:block;width:100%;min-height:280px;border:0}.viewer{display:block;width:100%;height:480px;border:1px solid #ccd4d0;border-radius:6px}.math.block{overflow:auto}.task-list-item{list-style:none}.task-list-item-checkbox{margin:0 .5rem 0 -1.5rem}dt{font-weight:600}dd{margin:0 0 .6rem 1.5rem}.columns,.layout-row{display:flex;gap:1.5rem}.column{flex:1 1 0;min-width:0}.layout-cell{min-width:0}.layout-grid{display:grid;gap:1rem}.panel-tabset{border:1px solid #ccd4d0;border-radius:6px;padding:0 1rem;margin:1.4rem 0}.tab-title{font-weight:700;border-bottom:1px solid #ccd4d0;padding:.5rem 0}.column-page,.column-page-inset{margin:0 -8%}.column-body-outset{margin:0 -4%}.column-screen,.column-screen-inset{width:100vw;margin-left:calc(50% - 50vw)}@media(min-width:1300px){.column-margin,.margin-caption{float:right;clear:right;width:240px;margin-right:-280px;font-size:.85rem}}@media(max-width:700px){.columns,.layout-row{flex-direction:column}.column{flex:none!important}.layout-cell{width:auto!important}}.provenance{color:#61736a;font-size:.85rem;border-top:1px solid #ccd4d0;padding-top:1rem;margin-top:3rem}.source-block{scroll-margin-top:2rem}details>summary{cursor:pointer}@media print{body{background:white}main{margin:0;max-width:none}pre{white-space:pre-wrap}.rich-html{min-height:350px}}"""
 
 
 _CALLOUT = re.compile(r"callout-(?:note|tip|warning|important|caution)")

@@ -82,6 +82,8 @@ class BrowserAccess:
                 or path.startswith(("/p/", "/assets/"))
             )
             login = path == "/ui-api/login" and method == "POST"
+            # Viewer files authorize themselves with a signed, report-scoped token.
+            viewer = method in {"GET", "HEAD"} and path.startswith("/ui-api/viewers/")
             read = (method in {"GET", "HEAD"} and path.startswith(("/v1/", "/ui-api/"))) or (
                 method == "POST" and path in READ_POSTS | {"/ui-api/logout"}
             )
@@ -109,6 +111,7 @@ class BrowserAccess:
             if (
                 shell
                 or login
+                or viewer
                 or ((read or comment or tag_edit or removal) and self.sessions.valid(request))
             ) and (b"authorization" not in dict(scope["headers"])):
                 scope = {
@@ -627,8 +630,40 @@ def install(app, repository, token, *, no_auth=False):
             },
         )
 
+    from itsdangerous import BadSignature, URLSafeTimedSerializer
+
+    viewers = URLSafeTimedSerializer(token, salt="cairn-viewer-v1")
+
+    @app.get("/ui-api/viewer-tokens/{artifact_id}")
+    def viewer_token(artifact_id: str, request: Request):
+        sessions.require(request)
+        return {"url": f"/ui-api/viewers/{viewers.dumps(artifact_id)}/"}
+
+    @app.get("/ui-api/viewers/{signed}/{path:path}")
+    def viewer_file(signed: str, path: str, request: Request):
+        try:
+            artifact_id = viewers.loads(signed, max_age=SESSION_SECONDS)
+        except BadSignature:
+            raise Unauthorized("Viewer link expired; reload the report") from None
+        origin = f"{request.url.scheme}://{request.url.netloc}"
+        policy = (
+            "sandbox allow-scripts; default-src 'none'; "
+            f"script-src {origin} 'unsafe-inline' 'wasm-unsafe-eval' https: blob:; "
+            f"style-src {origin} 'unsafe-inline' https:; img-src {origin} https: data: blob:; "
+            f"font-src {origin} https: data:; media-src {origin} https: data: blob:; "
+            f"connect-src {origin} https: data: blob:; worker-src {origin} blob:; "
+            "frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; "
+            "frame-ancestors 'self'"
+        )
+        return serve_report_file(
+            artifact_id, path, request, policy=policy, headers={"Access-Control-Allow-Origin": "*"}
+        )
+
     @app.get("/ui-api/reports/{artifact_id}/{path:path}")
     def report_file(artifact_id: str, path: str, request: Request):
+        return serve_report_file(artifact_id, path, request)
+
+    def serve_report_file(artifact_id, path, request, *, policy=None, headers=None):
         descriptor = repository.resolve(artifact_id)
         if descriptor.get("state") != "finished" or descriptor["id"] != artifact_id:
             raise NotFound("Report previews require an exact finished artifact ID")
@@ -705,7 +740,9 @@ def install(app, repository, token, *, no_auth=False):
             media_type=media,
             headers={
                 **cache_headers,
-                "Content-Security-Policy": "sandbox allow-same-origin; default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; frame-src 'self'; media-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'",
+                "Content-Security-Policy": policy
+                or "sandbox allow-same-origin; default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; frame-src 'self'; media-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'",
+                **(headers or {}),
             },
             background=BackgroundTask(manager.__exit__, None, None, None),
         )
