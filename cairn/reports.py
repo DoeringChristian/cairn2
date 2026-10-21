@@ -58,6 +58,7 @@ _ATTRIBUTES = re.compile(
     r"\{((?:\s*(?:[#.][^\s{}\"'=]+|[\w-]+=(?:\"[^\"]*\"|'[^']*'|[^\s{}\"']+)))+)\s*\}"
 )
 _ATTRIBUTE = re.compile(r"([#.])([^\s{}\"'=]+)|([\w-]+)=(?:\"([^\"]*)\"|'([^']*)'|([^\s{}\"']+))")
+_INLINE = re.compile(r"\{python\}\s+(.+)", re.DOTALL)
 _ALLOWED = {"id", "class", "width", "height", "title"}
 _REFERENCE = re.compile(r"(?<![\w\\])@((?:fig|tbl|eq|sec)-[\w-]+(?:\.[\w-]+)*)")
 _KINDS = {"fig": "Figure", "tbl": "Table", "eq": "Equation", "sec": "Section"}
@@ -955,6 +956,13 @@ def _prepare_markdown(text, segments, md, sources, mapping, directory):
                 after.content = child.content[position:]
                 children.append(after)
             token.children = children
+    for segment in segments:
+        segment["inline"] = [
+            match.group(1)
+            for token in segment.get("tokens", [])
+            for child in token.children or []
+            if child.type == "code_inline" and (match := _INLINE.fullmatch(child.content))
+        ]
     md.options["cairn_labels"] = labels
     return labels, env
 
@@ -1092,6 +1100,18 @@ def _render(segments, notebook, labels, mapping, md, directory, title, env):
         attributes = f'data-source-path="{html.escape(source["path"], quote=True)}" data-line-start="{source["line_start"]}" data-line-end="{source["line_end"]}"'
         if segment["kind"] == "markdown":
             block["text"] = segment["text"]
+            if "inline_cell" in segment:
+                values = iter(
+                    next(
+                        output["data"]["application/vnd.cairn.inline+json"]
+                        for output in notebook.cells[segment["inline_cell"]].outputs
+                        if "application/vnd.cairn.inline+json" in output.get("data", {})
+                    )
+                )
+                for token in segment["tokens"]:
+                    for child in token.children or []:
+                        if child.type == "code_inline" and _INLINE.fullmatch(child.content):
+                            child.type, child.tag, child.content = "text", "", next(values)
             if segment.get("caption"):
                 block["caption"] = True
 
@@ -1319,6 +1339,15 @@ def build(
                         segment["text"], metadata={"cairn_source": segment["source"]}
                     )
                 )
+                if segment["inline"] and execution.get("eval", True):
+                    segment["inline_cell"] = len(notebook.cells)
+                    notebook.cells.append(
+                        nbformat.v4.new_code_cell(
+                            "_display({'application/vnd.cairn.inline+json': [str(eval(_source)) "
+                            f"for _source in {segment['inline']!r}]}}, raw=True)",
+                            metadata={"tags": ["cairn-inline", "remove-cell"]},
+                        )
+                    )
             if segment["kind"] != "code":
                 continue
             options = {**execution, **segment["options"]}
@@ -1406,8 +1435,9 @@ def build(
                     if emitted.get("output_type") == "error":
                         summary = emitted.get("ename", "Error") + ": " + emitted.get("evalue", "")
         for segment in segments:
-            if segment["kind"] == "code" and notebook is not None:
-                cell = notebook.cells[segment.get("cell_index", 0)]
+            index = segment.get("cell_index", segment.get("inline_cell"))
+            if index is not None and notebook is not None:
+                cell = notebook.cells[index]
                 if any(output.get("output_type") == "error" for output in cell.get("outputs", [])):
                     source_location = segment["source"]
                     break

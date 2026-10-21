@@ -279,6 +279,33 @@ for _ in range(2): display(SVG(open("box.svg").read()))
         reports.build(source)
 
 
+def test_inline_python_sees_earlier_cells_and_reports_failures(tmp_path):
+    source = tmp_path / "inline.qmd"
+    source.write_text("""Before: `{python} 1 + 1`.
+
+```{python}
+loss = 0.123456
+```
+
+The loss is `{python} f"{loss:.3f}"` <b>, literal `x`.
+
+## Twice `{python} loss * 2`
+""")
+    result = reports.build(source, tmp_path / "build")
+    page = (result.path / "index.html").read_text()
+    assert "Before: 2." in page and "The loss is 0.123 &lt;b&gt;, literal <code>x</code>." in page
+    assert "<h2>Twice 0.246912</h2>" in page
+    document = json.loads((result.path / "document.json").read_text())
+    texts = [
+        c["content"] for b in document["blocks"] for n in b.get("nodes", []) for c in n["children"]
+    ]
+    assert "0.123" in texts and not any("{python}" in text for text in texts)
+    source.write_text("Fails: `{python} missing_name`\n")
+    with pytest.raises(reports.ReportBuildError, match="NameError") as failure:
+        reports.build(source, tmp_path / "failed")
+    assert failure.value.details["source"]["line_start"] == 1
+
+
 def test_includes_resources_images_static_html_and_source_locations(tmp_path):
     (tmp_path / "parts").mkdir()
     (tmp_path / "data.txt").write_text("captured data")
