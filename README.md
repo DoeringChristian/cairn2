@@ -447,22 +447,30 @@ cairn --repo ./results report copy reports/analysis@latest ./editable-analysis
 `report new` defaults to `NewReport.qmd`. `report build --publish` combines the
 build and publication steps. Outputs must use a new or empty directory.
 
-A report can declare artifacts and access pinned readers:
+A report reads artifacts like a run does, and every artifact it reads becomes
+an input in its lineage:
 
 ````markdown
 ---
 title: Baseline analysis
-cairn:
-  inputs:
-    baseline: runs/baseline@latest
 ---
 
 ## Results {#sec-results}
 
 ```{python}
-print(inputs["baseline"].read())
+import cairn
+
+baseline = cairn.use("runs/baseline@latest")
+print(baseline.read())
 ```
 ````
+
+`cairn.use(ref)` and the supplied `client.resolve(ref)` resolve a reference once
+per build, so `@latest` gives the same version throughout a build. The manifest
+lists each reference with the exact version it resolved to. A rebuild runs the
+code again and resolves again; write `@vN` or an ID to always read one version.
+Front-matter `cairn.inputs` (`baseline: runs/baseline@latest`) resolves several
+inputs together before any cell executes and exposes them as `inputs["baseline"]`.
 
 A report can be configured with Hydra. The front matter `config` is the primary
 config, `cairn.config_path` optionally names a folder of config groups, and the
@@ -498,7 +506,7 @@ numbered subfolders of `--output`; with `--publish` each becomes a version.
 Hydra's runtime (the `hydra:` node, output directories, logging, `${hydra:...}`)
 and sweeper plugins are not used.
 
-All declared inputs resolve together before any cell executes. The builder
+The builder
 captures source/includes and declared local resources, starts a fresh Python
 kernel, and emits HTML, native document JSON, an executed notebook, assets,
 source mappings, and a manifest with exact dependency IDs and package versions.
@@ -518,18 +526,17 @@ This is a QMD subset, not full Quarto. It does not implement bibliography/citati
 processing, arbitrary Quarto extensions, other execution languages, or JavaScript
 widgets. Markdown raw HTML is disabled; rich HTML output is placed in an iframe
 without scripts or external resource access. External image URLs and source paths
-escaping the report directory are rejected. The supplied `client` is a read-only report reader: it accepts only declared
-inputs and maps moving references to their pinned IDs. Independently opened
-clients retain their normal behavior. Report Python is trusted local code, not
+escaping the report directory are rejected. The supplied `client` is a read-only
+report reader scoped to the report's project; reading a live artifact fails.
+Independently opened clients retain their normal behavior and are not recorded,
+and inside a run started by a cell, `cairn.use` records to that run. Report Python is trusted local code, not
 a sandbox; external I/O is outside this reproducibility policy.
 
 Failed builds keep their notebook and diagnostics and cannot be published.
 Publication uses an ordinary `report/bundle` artifact value. Export preserves the
-complete bundle; rebuilding its captured source uses the verified bundle's
-exact input IDs. Copy creates editable source with exact references and a
-`cairn-lock.json` that retains old reference spellings used inside code. Removing
-that lock and changing declarations permits a deliberate refresh. Neither path
-requires server-side execution or editing.
+complete bundle, and copy extracts its editable source unchanged. Rebuilding
+either resolves inputs again. Neither path requires server-side execution or
+editing.
 
 ## Transfer and maintain a repository
 

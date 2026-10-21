@@ -262,59 +262,22 @@ def _pin_inputs(client, metadata: dict) -> list[dict]:
     return pinned
 
 
-def _pin_report_inputs(client, metadata, source, sources):
-    lock = None
-    if (source.parent / "cairn-lock.json").exists():
-        lock = json.loads(sources.capture("cairn-lock.json").read_text("utf-8"))
-    elif source.parent.name == "sources" and (source.parent.parent / "manifest.json").is_file():
-        bundle, _ = _validated_bundle(source.parent.parent)
-        if bundle["source"] != "sources/" + source.name:
-            raise ValidationError("Source does not match its enclosing report bundle")
-        lock = {"format": "cairn/report-lock", "inputs": bundle.get("inputs", [])}
-        _write_json(sources.destination / "cairn-lock.json", lock)
-        sources.captured.add("cairn-lock.json")
-    if lock is None:
-        return _pin_inputs(client, metadata)
-    if not isinstance(lock, dict) or lock.get("format") != "cairn/report-lock":
-        raise ValidationError("Unsupported cairn-lock.json format")
-    if not isinstance(lock.get("inputs"), list):
-        raise ValidationError("Report locks must contain an input list")
-    locked = {}
-    for previous in lock["inputs"]:
-        if not isinstance(previous, dict) or any(
-            not isinstance(previous.get(key), str) for key in ("name", "requested", "artifact_id")
-        ):
-            raise ValidationError("Invalid report lock input")
-        aliases = previous.get("aliases", [])
-        if not isinstance(aliases, list) or any(not isinstance(alias, str) for alias in aliases):
-            raise ValidationError("Report lock aliases must be artifact reference strings")
-        locked[previous["name"]] = previous
-    declarations = metadata.get("cairn", {}).get("inputs", {})
-    if not isinstance(declarations, dict):
-        return _pin_inputs(client, metadata)
-    effective = json.loads(json.dumps(metadata))
-    references = effective.setdefault("cairn", {}).setdefault("inputs", {})
-    active = {}
-    for name, reference in declarations.items():
-        previous = locked.get(name)
-        if previous and reference in [
-            previous["requested"],
-            previous["artifact_id"],
-            *previous.get("aliases", []),
-        ]:
-            references[name] = previous["artifact_id"]
-            active[name] = previous
-    pinned = _pin_inputs(client, effective)
-    for pin in pinned:
-        previous = active.get(pin["name"])
-        if previous:
-            if previous["artifact_id"] != pin["artifact_id"]:
-                raise ValidationError("Report locks must contain exact immutable version IDs")
-            pin["requested"] = declarations[pin["name"]]
-            pin["aliases"] = sorted(
-                {previous["requested"], *previous.get("aliases", [])} - {pin["requested"]}
-            )
-    return pinned
+def _record_inputs(directory: Path, manifest: dict, pins: list) -> None:
+    """Add the artifacts cells read to the declared inputs and the report's lineage."""
+    record = directory / "inputs.jsonl"
+    used = (
+        [json.loads(line) for line in record.read_text("utf-8").splitlines()]
+        if record.exists()
+        else []
+    )
+    record.unlink(missing_ok=True)
+    manifest["inputs"].extend(used)
+    seen = {item["artifact_id"] for item in manifest["dependencies"]}
+    for item in used:
+        if item["artifact_id"] not in seen:
+            seen.add(item["artifact_id"])
+            manifest["dependencies"].append({k: item[k] for k in ("artifact_id", "role")})
+    _write_json(directory / "inputs.json", [*pins, *used])
 
 
 def _compose(metadata: dict, settings: dict, overrides: list, sources) -> dict | None:
@@ -382,29 +345,35 @@ def sweep(overrides) -> list[list[str]]:
     return [list(combination) for combination in itertools.product(*axes)]
 
 
-class _PinnedBackend:
-    """Read operations scoped to one report's repository and declared inputs."""
+class _RecordingBackend:
+    """Read operations scoped to one report's project; each reference resolves once."""
 
-    def __init__(self, backend, project, pins):
-        self._backend, self._project = backend, project
-        self._allowed = {}
+    def __init__(self, backend, project, pins, record=None):
+        self._backend, self._project, self._record = backend, project, record
+        self._resolved = {}
         for pin in pins:
-            for ref in (pin["requested"], pin["artifact_id"], *pin.get("aliases", [])):
-                previous = self._allowed.setdefault(ref, pin["artifact_id"])
-                if previous != pin["artifact_id"]:
-                    raise ValidationError("Report input aliases identify different versions")
+            self._resolved[pin["requested"]] = self._resolved[pin["artifact_id"]] = pin[
+                "artifact_id"
+            ]
 
-    def _reference(self, ref, project):
+    def _reference(self, ref, project, role="input"):
         if project != self._project:
-            raise ValidationError("Report reader is scoped to its declared project")
-        if ref not in self._allowed:
-            raise ValidationError(
-                "Report inputs must be declared in cairn.inputs; undeclared reference: " + str(ref)
-            )
-        return self._allowed[ref]
+            raise ValidationError("Report reader is scoped to its project")
+        if ref not in self._resolved:
+            descriptor = self._backend.resolve(ref, project=project)
+            if descriptor["state"] != "finished":
+                raise ValidationError(
+                    f"Report input {ref!r} is live; finish the artifact before building"
+                )
+            self._resolved[ref] = descriptor["id"]
+            if self._record:
+                with open(self._record, "a", encoding="utf-8") as file:
+                    entry = {"requested": ref, "artifact_id": descriptor["id"], "role": role}
+                    file.write(json.dumps(entry) + "\n")
+        return self._resolved[ref]
 
-    def resolve(self, ref, *, project="default"):
-        return self._backend.resolve(self._reference(ref, project), project=project)
+    def resolve(self, ref, *, project="default", role="input"):
+        return self._backend.resolve(self._reference(ref, project, role), project=project)
 
     def resolve_many(self, refs, *, project="default"):
         return self._backend.resolve_many(
@@ -418,40 +387,43 @@ class _PinnedBackend:
         return self._backend.open_blob(digest)
 
 
-class PinnedInputs:
-    """A read-only report client; explicit clients remain ordinary independent clients.
+class ReportInputs:
+    """A read-only report client recording every artifact the report reads.
 
-    This is reproducibility policy for the supplied reader, not a Python sandbox.
-    Blob reads support values returned by the pinned readers; raw storage access
-    and arbitrary external I/O are outside the policy.
+    Each reference resolves once per build, so @latest gives one version
+    throughout. Explicit clients remain ordinary independent clients. This is
+    reproducibility policy for the supplied reader, not a Python sandbox.
     """
 
-    def __init__(self, client, pins):
+    def __init__(self, client, pins, record=None):
         self.project = client.project
-        self.backend = _PinnedBackend(client.backend, self.project, pins)
+        self.backend = _RecordingBackend(client.backend, self.project, pins, record)
 
     def resolve(self, ref):
+        return self.use(ref)
+
+    def use(self, ref, *, role="input"):
         from .sdk import Reader
 
         if isinstance(ref, Reader):
             ref = ref.id
-        descriptor = self.backend.resolve(ref, project=self.project)
-        if descriptor["state"] != "finished":
-            raise ValidationError("Report inputs must be finished artifacts")
-        return Reader(self, descriptor)
+        return Reader(self, self.backend.resolve(ref, project=self.project, role=role))
 
 
 _BOOTSTRAP = """# Cairn supplies connection details transiently, outside this notebook.
 import json as _json, os as _os
+import cairn.sdk as _sdk
 from cairn.sdk import Client as _Client
-from cairn.reports import PinnedInputs as _PinnedInputs
+from cairn.reports import ReportInputs as _ReportInputs
 _pins = _json.loads(_os.environ.pop("CAIRN_REPORT_PINS"))
 _endpoint = _os.environ.pop("CAIRN_REPORT_ENDPOINT", "")
 _token = _os.environ.pop("CAIRN_REPORT_TOKEN", "") or None
 _project = _os.environ.pop("CAIRN_REPORT_PROJECT", "default")
 _config = _os.environ.pop("CAIRN_REPORT_CONFIG", "")
+_record = _os.environ.pop("CAIRN_REPORT_RECORD")
 _source_client = _Client(_endpoint, project=_project, token=_token) if _endpoint else None
-client = _PinnedInputs(_source_client, _pins) if _source_client else None
+client = _ReportInputs(_source_client, _pins, _record) if _source_client else None
+_sdk._report = client
 inputs = {pin["name"]: client.resolve(pin["artifact_id"]) for pin in _pins}
 if _config:
     from omegaconf import OmegaConf as _OmegaConf
@@ -941,7 +913,7 @@ def build(
         "document": "document.json",
         "document_version": 2,
         "notebook": "executed.ipynb",
-        "input_policy": "declared-pinned-only",
+        "input_policy": "recorded",
     }
     notebook, executor, segments = None, None, []
     try:
@@ -962,7 +934,7 @@ def build(
         config = _compose(metadata, settings, overrides, sources)
         if config is not None:
             manifest.update(config=config, overrides=list(overrides))
-        pins = _pin_report_inputs(client, metadata, source, sources)
+        pins = _pin_inputs(client, metadata)
         manifest["inputs"] = [{k: v for k, v in pin.items() if k != "descriptor"} for pin in pins]
         manifest["dependencies"] = [
             {"artifact_id": p["artifact_id"], "role": "report-input:" + p["name"]} for p in pins
@@ -1020,6 +992,7 @@ def build(
         environment["CAIRN_REPORT_ENDPOINT"] = endpoint
         environment["CAIRN_REPORT_PROJECT"] = client.project if client is not None else "default"
         environment["CAIRN_REPORT_CONFIG"] = json.dumps(config) if config is not None else ""
+        environment["CAIRN_REPORT_RECORD"] = str(directory / "inputs.jsonl")
         environment["CAIRN_REPORT_TOKEN"] = (client.token or "") if client is not None else ""
         manifest["environment"] = {
             "python": platform.python_version(),
@@ -1053,6 +1026,7 @@ def build(
                 "{connection_file}",
             ]
         executor.execute(env=environment)
+        _record_inputs(directory, manifest, pins)
         for emitted in notebook.cells[0].outputs:
             captured = emitted.get("data", {}).get("application/vnd.cairn.environment+json")
             if captured:
@@ -1290,8 +1264,7 @@ def export(ref, destination, *, client) -> Path:
 
 
 def copy(ref, destination, *, client) -> Path:
-    """Copy captured report sources with all input references rewritten to exact IDs."""
-    _, yaml, *_ = _dependencies()
+    """Copy captured report sources for editing; a rebuild resolves its inputs again."""
     destination = Path(destination).absolute()
     if destination.exists() and (not destination.is_dir() or any(destination.iterdir())):
         raise ValidationError(f"Report copy destination must be new or empty: {destination}")
@@ -1299,27 +1272,7 @@ def copy(ref, destination, *, client) -> Path:
         exported = export(ref, Path(temporary) / "bundle", client=client)
         manifest = json.loads((exported / "manifest.json").read_text("utf-8"))
         shutil.copytree(exported / "sources", destination, dirs_exist_ok=True)
-        source = _inside(destination, manifest["source"].removeprefix("sources/"))
-        metadata, body, _ = _frontmatter(source.read_text("utf-8"), yaml)
-        metadata.setdefault("cairn", {})["inputs"] = {
-            pin["name"]: pin["artifact_id"] for pin in manifest.get("inputs", [])
-        }
-        source.write_text(
-            "---\n"
-            + yaml.safe_dump(metadata, sort_keys=False, allow_unicode=True)
-            + "---\n"
-            + body,
-            "utf-8",
-        )
-        _write_json(
-            destination / "cairn-lock.json",
-            {
-                "format": "cairn/report-lock",
-                "inputs": manifest.get("inputs", []),
-                "publication": json.loads((exported / "publication.json").read_text("utf-8")),
-            },
-        )
-    return source
+    return _inside(destination, manifest["source"].removeprefix("sources/"))
 
 
 def new(destination="NewReport.qmd", *, title="New report") -> Path:
@@ -1331,12 +1284,12 @@ def new(destination="NewReport.qmd", *, title="New report") -> Path:
     if path.exists():
         raise ValidationError(f"Report source already exists: {path}")
     path.write_text(
-        "---\ntitle: " + json.dumps(title) + "\ncairn:\n  inputs: {}\n  resources: []\n---\n\n"
+        "---\ntitle: " + json.dumps(title) + "\ncairn:\n  resources: []\n---\n\n"
         "## Results {#sec-results}\n\n"
-        "Declare artifact references in `cairn.inputs`, then read them with\n"
-        '`inputs["name"].read()` or `inputs["name"].records()`.\n\n'
+        'Read artifacts with `cairn.use("runs/name@latest")`, then `.read()` or\n'
+        "`.records()`.\n\n"
         '```{python}\nprint("A report built locally with Cairn")\n```\n\n'
-        "::: {.callout-note}\nInputs are pinned before any Python cell executes.\n:::\n",
+        "::: {.callout-note}\nThe manifest records the exact version of every artifact read.\n:::\n",
         "utf-8",
     )
     return path

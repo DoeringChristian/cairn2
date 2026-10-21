@@ -6,10 +6,9 @@ cairn:
 
 ## A reproducible calculation {#sec-calculation}
 
-This source executes in a fresh Python kernel. Input artifacts can be declared
-in `cairn.inputs` and read through `inputs["name"].read()` or `.records()`.
-A reference such as `runs/training@latest` names the `training` artifact in the
-`runs` namespace; every declared input is pinned before execution.
+This source executes in a fresh Python kernel. Cells read artifacts with
+`cairn.use("runs/training@latest")`, which names the `training` artifact in the
+`runs` namespace; the manifest records the exact version each reference resolved to.
 
 ```{python}
 #| label: tbl-squares

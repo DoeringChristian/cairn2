@@ -214,7 +214,7 @@ def parser() -> argparse.ArgumentParser:
     new.add_argument("--title", default="New report")
     new.set_defaults(action="report-new")
     build = reports.add_parser(
-        "build", help="Pin inputs, execute a fresh Python kernel, and create a portable bundle"
+        "build", help="Execute a fresh Python kernel, record inputs, and create a portable bundle"
     )
     build.add_argument("source")
     build.add_argument("overrides", nargs="*", help="Hydra overrides of the front-matter config")
@@ -236,7 +236,7 @@ def parser() -> argparse.ArgumentParser:
     for operation in ("copy", "export"):
         sub = reports.add_parser(
             operation,
-            help="Copy source with exact input IDs"
+            help="Copy editable report source"
             if operation == "copy"
             else "Export all portable report files",
         )

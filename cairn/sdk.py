@@ -624,6 +624,7 @@ class Reader:
 
 
 _default = contextvars.ContextVar("cairn_default_artifact", default=None)
+_report = None
 
 
 def init(
@@ -803,6 +804,8 @@ def remove(ref, *, repo=None, project=None):
 
 
 def use(ref, *, role="input"):
+    if _report is not None and _default.get() is None:
+        return _report.use(ref, role=role)
     return _current().use(ref, role=role)
 
 

@@ -57,6 +57,7 @@ def client(request, tmp_path):
 
 def test_inputs_pinned_before_execution_publish_export_and_copy(client, tmp_path, monkeypatch):
     original = seed(client.backend)
+    other = seed(client.backend, 3, name="other")
     source = tmp_path / "analysis.qmd"
     source.write_text("""---
 title: A pinned analysis
@@ -71,15 +72,17 @@ A footnote can cross a Python cell.[^note]
 ```{python}
 #| label: tbl-scores
 #| tbl-cap: Frozen scores
+import cairn
 from IPython.display import Markdown, display
-assert inputs["baseline"].read()["score"] == 7
-assert client.resolve("runs/baseline@latest").read()["score"] == 7
-assert inputs["baseline"].records()[0]["data"]["score"] == 7
+assert client.resolve("runs/baseline@latest").id == inputs["baseline"].id
+assert inputs["baseline"].records()[0]["data"] == inputs["baseline"].read()
+assert cairn.use("runs/other@latest").read()["score"] == 3
+assert client.use("runs/other@latest", role="other").id == cairn.use("runs/other@latest").id
 # Explicit independent clients keep their ordinary semantics in the kernel.
 from cairn.sdk import Client
 with Client(_endpoint, project=_project, token=_source_client.token) as independent:
     assert independent.resolve("runs/baseline@latest").read()["score"] == 99
-print("frozen score: 7")
+print("frozen score:", inputs["baseline"].read()["score"])
 display(Markdown("| item | score |\\n| - | - |\\n| baseline | 7 |"))
 ```
 
@@ -100,7 +103,17 @@ See @eq-square.
 
     monkeypatch.setattr(reports, "_pin_inputs", move_head_after_pinning)
     result = reports.build(source, tmp_path / "build", client=client, timeout=30)
-    assert result.manifest["inputs"][0]["artifact_id"] == original["id"]
+    assert [item["artifact_id"] for item in result.manifest["inputs"]] == [
+        original["id"],
+        other["id"],
+    ]
+    assert result.manifest["inputs"][1] == {
+        "requested": "runs/other@latest",
+        "artifact_id": other["id"],
+        "role": "input",
+    }
+    assert not (result.path / "inputs.jsonl").exists()
+    monkeypatch.undo()
     assert client.backend.resolve("runs/baseline@latest")["id"] != original["id"]
     page = (result.path / "index.html").read_text()
     assert "frozen score: 7" in page
@@ -112,7 +125,10 @@ See @eq-square.
     version = publication
     assert version["namespace"] == "reports"
     assert client.resolve("reports/analysis/summary@latest").descriptor["id"] == version["id"]
-    assert {d["artifact_id"] for d in version["manifest"]["dependencies"]} == {original["id"]}
+    assert {d["artifact_id"] for d in version["manifest"]["dependencies"]} == {
+        original["id"],
+        other["id"],
+    }
     assert (
         reports.publish(result.path, client=client, name="analysis/summary")["id"] == version["id"]
     )
@@ -121,15 +137,13 @@ See @eq-square.
     exported_replay = reports.build(
         exported / "sources/analysis.qmd", tmp_path / "export-replay", client=client, timeout=30
     )
-    assert exported_replay.manifest["inputs"][0]["artifact_id"] == original["id"]
+    latest = client.backend.resolve("runs/baseline@latest")["id"]
+    assert exported_replay.manifest["inputs"][0]["artifact_id"] == latest
     copied = reports.copy(version["id"], tmp_path / "copied", client=client)
-    copied_source = copied.read_text()
-    assert original["id"] in copied_source
-    assert "baseline: runs/baseline@latest" not in copied_source
-    assert (copied.parent / "cairn-lock.json").is_file()
+    assert copied.read_text() == source.read_text()
     replay = reports.build(copied, tmp_path / "replay", client=client, timeout=30)
-    assert replay.manifest["inputs"][0]["artifact_id"] == original["id"]
-    assert "frozen score: 7" in (replay.path / "index.html").read_text()
+    assert replay.manifest["inputs"][0]["artifact_id"] == latest
+    assert "frozen score: 99" in (replay.path / "index.html").read_text()
     for path in result.path.rglob("*"):
         if path.is_file():
             assert b"report-test-secret-must-not-be-captured" not in path.read_bytes()
@@ -193,12 +207,12 @@ Sources and local resources are captured.
     client.backend.close()
 
 
-def test_failure_diagnostics_and_undeclared_input_policy(tmp_path):
+def test_failure_diagnostics(tmp_path):
     client = Client(tmp_path / "repo")
     seed(client.backend)
     source = tmp_path / "bad.qmd"
     source.write_text(
-        '# Failure\n\n```{python}\nprint("before failure")\nclient.resolve("runs/baseline@latest")\n```\n'
+        '# Failure\n\n```{python}\nprint("before failure")\nclient.resolve("runs/missing@latest")\n```\n'
     )
     with pytest.raises(reports.ReportBuildError) as failure:
         reports.build(source, tmp_path / "failed", client=client, timeout=30)
@@ -206,7 +220,7 @@ def test_failure_diagnostics_and_undeclared_input_policy(tmp_path):
     manifest = json.loads((directory / "manifest.json").read_text())
     assert manifest["status"] == "failed"
     assert manifest["error"]["source"]["line_start"] == 3
-    assert "undeclared reference" in (directory / "diagnostics.txt").read_text()
+    assert "NotFound" in (directory / "diagnostics.txt").read_text()
     assert "before failure" in (directory / "executed.ipynb").read_text()
     with pytest.raises(ValidationError, match="Only complete"):
         reports.publish(directory, client=client)
@@ -303,40 +317,35 @@ print(cfg.label, cfg.model.lr)
     client.backend.close()
 
 
-def test_pinned_reader_scope_and_read_operations(client, tmp_path):
+def test_report_reader_resolves_once_records_reads_and_keeps_scope(client, tmp_path):
     original = seed(client.backend)
-    pins = [
-        {
-            "requested": "runs/baseline@latest",
-            "artifact_id": original["id"],
-            "aliases": ["old-name"],
-        }
-    ]
-    reader = reports.PinnedInputs(client, pins)
+    record = tmp_path / "inputs.jsonl"
+    pins = [{"requested": "runs/baseline@latest", "artifact_id": original["id"]}]
+    reader = reports.ReportInputs(client, pins, str(record))
     latest = seed(client.backend, 99)
-    assert reader.resolve("old-name").read() == {"score": 7}
-    assert reader.resolve("runs/baseline@latest").records()[0]["data"] == {"score": 7}
-    assert reader.backend.resolve_many(["old-name", original["id"]])[0]["id"] == original["id"]
+    assert reader.resolve("runs/baseline@latest").read() == {"score": 7}
+    assert reader.backend.resolve_many([original["id"]])[0]["id"] == original["id"]
     assert reader.backend.query("runs/baseline@latest")["items"][0]["data"] == {"score": 7}
-    for operation in (
-        lambda: reader.resolve("runs/undeclared@latest"),
-        lambda: reader.backend.resolve_many(["runs/undeclared@latest"]),
-        lambda: reader.backend.query(latest["id"]),
-    ):
-        with pytest.raises(ValidationError, match="undeclared reference"):
-            operation()
-    with pytest.raises(ValidationError, match="declared project"):
+    assert not record.exists()
+    assert reader.use(latest["id"], role="ablation").read() == {"score": 99}
+    other = seed(client.backend, 5, name="other")
+    assert reader.backend.query("runs/other@latest")["items"][0]["data"] == {"score": 5}
+    seed(client.backend, 6, name="other")
+    assert reader.resolve("runs/other@latest").id == other["id"]
+    assert [json.loads(line) for line in record.read_text().splitlines()] == [
+        {"requested": latest["id"], "artifact_id": latest["id"], "role": "ablation"},
+        {"requested": "runs/other@latest", "artifact_id": other["id"], "role": "input"},
+    ]
+    opened = client.backend.start("default", "runs", "open")
+    with pytest.raises(ValidationError, match="finish the artifact"):
+        reader.resolve(opened["artifact"]["id"])
+    with pytest.raises(ValidationError, match="scoped to its project"):
         reader.backend.resolve(original["id"], project="other")
     assert not hasattr(reader, "start")
     assert not hasattr(reader.backend, "append_batch")
-    assert client.resolve("runs/baseline@latest").id == latest["id"]
     with Client(tmp_path / "independent") as independent:
         separate = seed(independent.backend, 123)
         assert independent.resolve("runs/baseline@latest").id == separate["id"]
-    with pytest.raises(ValidationError, match="different versions"):
-        reports.PinnedInputs(
-            client, [*pins, {"requested": "old-name", "artifact_id": latest["id"]}]
-        )
 
 
 def test_native_v2_externalizes_all_mime_payloads_without_mutating_notebook(tmp_path):

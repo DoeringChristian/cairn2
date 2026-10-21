@@ -150,9 +150,11 @@ after finish); explicit clients take precedence. Without a context, publish
 uses ordinary discovery, while build retains its explicit-client requirement
 for declared inputs.
 
-Reports execute QMD locally, pin declared finished artifact IDs, capture source,
-outputs and package information, then upload an ordinary report artifact. The
-supplied report reader scopes reads to those declared inputs; independent Python
+Reports execute QMD locally, record the exact finished artifact IDs they read
+(declared `cairn.inputs`, `cairn.use` and the supplied reader, each reference
+resolved once per build), capture source, outputs and package information, then
+upload an ordinary report artifact. Rebuilds resolve references again. The
+supplied report reader is scoped to the report's project; independent Python
 clients remain independent. Reports are not a Python security sandbox. A
 front-matter `config` is composed with Hydra and build `overrides`; cells see it
 as `cfg`, and the resolved config is the manifest's and artifact metadata's `config`.
