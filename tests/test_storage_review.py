@@ -480,22 +480,23 @@ def test_review_upload_is_invisible_until_object_commit(tmp_path):
     payload = b"reserved content"
     sha = hashlib.sha256(payload).hexdigest()
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             pending = pool.submit(repository.put_blob, payload)
             try:
                 assert entered.wait(timeout=5)
                 assert repository.has_blobs([sha]) == {sha: False}
-                with pytest.raises(model.Pending):
-                    repository.put_blob(payload)
+                waiting = pool.submit(repository.put_blob, payload)
                 revision, writer = start(repository)
                 batch = entries(
                     [{"value": envelope(blobs=[{"digest": sha, "size": len(payload)}])}]
                 )
                 with pytest.raises(model.IntegrityError):
                     repository.append_batch(revision, writer, batch)
+                assert not waiting.done()
             finally:
                 release.set()
             assert pending.result(timeout=5) == {"digest": sha, "size": len(payload)}
+            assert waiting.result(timeout=5) == {"digest": sha, "size": len(payload)}
         assert repository.has_blobs([sha]) == {sha: True}
         assert repository.append_batch(revision, writer, batch)["acknowledged"] == 1
     finally:
