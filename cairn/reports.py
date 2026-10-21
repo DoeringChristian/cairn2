@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from .model import ValidationError, canonical, now, safe_path
 
@@ -60,7 +60,10 @@ _ATTRIBUTES = re.compile(
 _ATTRIBUTE = re.compile(r"([#.])([^\s{}\"'=]+)|([\w-]+)=(?:\"([^\"]*)\"|'([^']*)'|([^\s{}\"']+))")
 _INLINE = re.compile(r"\{python\}\s+(.+)", re.DOTALL)
 _ALLOWED = {"id", "class", "width", "height", "title"}
-_REFERENCE = re.compile(r"(?<![\w\\])@((?:fig|tbl|eq|sec)-[\w-]+(?:\.[\w-]+)*)")
+_REFERENCE = re.compile(
+    r"(?<![\w\\])@(?:([\w.-]+(?:/[\w.-]+)+(?:@[\w.-]+)?)#)?((?:fig|tbl|eq|sec)-[\w-]+(?:\.[\w-]+)*)"
+)
+_EMBED = re.compile(r"\{\{<\s*embed\s+([\w.-]+(?:/[\w.-]+)+(?:@[\w.-]+)?)#([\w.-]+)\s*>\}\}")
 _KINDS = {"fig": "Figure", "tbl": "Table", "eq": "Equation", "sec": "Section"}
 
 
@@ -289,10 +292,10 @@ def _pin_inputs(client, metadata: dict) -> list[dict]:
     return pinned
 
 
-def _record_inputs(directory: Path, manifest: dict, pins: list) -> None:
-    """Add the artifacts cells read to the declared inputs and the report's lineage."""
+def _record_inputs(directory: Path, manifest: dict, pins: list, referenced: list) -> None:
+    """Add the reports the text references and the artifacts cells read to the lineage."""
     record = directory / "inputs.jsonl"
-    used = (
+    used = referenced + (
         [json.loads(line) for line in record.read_text("utf-8").splitlines()]
         if record.exists()
         else []
@@ -370,6 +373,63 @@ def sweep(overrides) -> list[list[str]]:
         for item in parsed
     ]
     return [list(combination) for combination in itertools.product(*axes)]
+
+
+class _References:
+    """Other reports referenced or embedded by the text, resolved once per build."""
+
+    def __init__(self, client):
+        self.client, self.reports, self.used = client, {}, []
+
+    def get(self, ref, role):
+        if self.client is None:
+            raise ValidationError("Cross-document references require a Cairn repository")
+        if ref not in self.reports:
+            descriptor = self.client.backend.resolve(ref, project=self.client.project)
+            if descriptor.get("state") != "finished":
+                raise ValidationError(f"Referenced report {ref!r} is live; finish it first")
+            _, value = _report_descriptor(descriptor["id"], self.client)
+            blobs = {blob["name"]: blob["digest"] for blob in value["blobs"]}
+            with self.client.backend.open_blob(blobs["document.json"]) as stream:
+                labels = json.load(stream).get("labels", {})
+            project = quote(self.client.project, safe="")
+            self.reports[ref] = {
+                "id": descriptor["id"],
+                "title": value["data"]["manifest"]["title"],
+                "labels": labels,
+                "blobs": blobs,
+                "url": f"/p/{project}/a/{descriptor['id']}",
+            }
+            self.used.append({"requested": ref, "artifact_id": descriptor["id"], "role": role})
+        return self.reports[ref]
+
+    def label(self, ref, name, role="reference"):
+        report = self.get(ref, role)
+        if name not in report["labels"]:
+            raise ValidationError(f"Unknown cross reference: @{ref}#{name}")
+        return report, report["labels"][name]["text"]
+
+    def cell(self, ref, name, yaml):
+        """The executed cell labelled name in another report, to show its outputs here."""
+        import nbformat
+
+        report, text = self.label(ref, name, "embed")
+        with self.client.backend.open_blob(report["blobs"]["executed.ipynb"]) as stream:
+            notebook = nbformat.reads(stream.read().decode("utf-8"), as_version=4)
+        for cell in notebook.cells:
+            if cell.cell_type != "code" or "cairn-bootstrap" in cell.metadata.get("tags", []):
+                continue
+            options = _cell_options(cell.source, yaml)
+            if cell.metadata.get("cairn_label", options.get("label")) == name:
+                caption = {k: options[k] for k in ("fig-cap", "tbl-cap") if k in options}
+                return {
+                    "cell": cell,
+                    "text": cell.source,
+                    "line_map": [],
+                    "options": {"echo": False, "output": True, **caption},
+                    "caption_prefix": f"{text} in {report['title']}:",
+                }
+        raise ValidationError(f"Cannot embed @{ref}#{name}: it is not a Python cell")
 
 
 class _RecordingBackend:
@@ -650,7 +710,8 @@ def _segments(text: str, mapping: list, md, yaml) -> list[dict]:
             }
         )
 
-    for token in md.parse(_qmd_math_labels(text)):
+    tokens = md.parse(_qmd_math_labels(text))
+    for index, token in enumerate(tokens):
         parent = stack[-1] if stack else None
         if token.type.startswith("container_") and token.level == len(stack) - (token.nesting < 0):
             if token.nesting == 1:
@@ -687,6 +748,22 @@ def _segments(text: str, mapping: list, md, yaml) -> list[dict]:
                     continue
             elif _splits(parent["attributes"]):
                 position = markdown(token.map[0])
+        if token.type == "paragraph_open" and token.level == len(stack):
+            embed = _EMBED.fullmatch(tokens[index + 1].content.strip())
+            if embed:
+                start, end = token.map
+                position = markdown(start)
+                segments.append(
+                    {
+                        "kind": "embed",
+                        "reference": embed.group(1),
+                        "label": embed.group(2),
+                        "offset": start,
+                        "source": _source_range(mapping, start, end),
+                    }
+                )
+                position = end
+                continue
         if token.type != "fence" or not token.info.strip().startswith("{python"):
             continue
         if not re.fullmatch(r"\{python(?:\s+([\w.-]+))?\}", token.info.strip()):
@@ -757,7 +834,7 @@ def _native_output(output: dict, directory: Path) -> dict:
     return result
 
 
-def _prepare_markdown(text, segments, md, sources, mapping, directory):
+def _prepare_markdown(text, segments, md, sources, mapping, directory, references):
     from markdown_it.token import Token
 
     # Parse the full document once so definitions, references, and footnotes
@@ -835,6 +912,8 @@ def _prepare_markdown(text, segments, md, sources, mapping, directory):
             continue
         if segment["kind"] == "close":
             stack.pop()
+            continue
+        if segment["kind"] == "embed":
             continue
         if segment["kind"] == "code":
             options = segment["options"]
@@ -943,13 +1022,21 @@ def _prepare_markdown(text, segments, md, sources, mapping, directory):
                     continue
                 position = 0
                 for match in _REFERENCE.finditer(child.content):
-                    name = match.group(1)
-                    if name not in labels:
-                        raise ValidationError(f"Unknown report cross reference: @{name}")
+                    reference, name = match.groups()
                     before = Token("text", "", 0)
                     before.content = child.content[position : match.start()]
                     link = Token("html_inline", "", 0)
-                    link.content = f'<a class="crossref" href="#{html.escape(name)}">{labels[name]["text"]}</a>'
+                    if reference:
+                        report, text = references.label(reference, name)
+                        link.content = (
+                            f'<a class="crossref" href="{html.escape(report["url"], quote=True)}#'
+                            f'{html.escape(name)}">{html.escape(text)} in '
+                            f"<em>{html.escape(report['title'])}</em></a>"
+                        )
+                    elif name not in labels:
+                        raise ValidationError(f"Unknown report cross reference: @{name}")
+                    else:
+                        link.content = f'<a class="crossref" href="#{html.escape(name)}">{labels[name]["text"]}</a>'
                     children.extend([before, link])
                     position = match.end()
                 after = Token("text", "", 0)
@@ -1088,7 +1175,8 @@ def _render(segments, notebook, labels, mapping, md, directory, title, env):
     blocks, items = [], []
     for number, segment in enumerate(segments, 1):
         source = segment["source"]
-        block = {"id": f"block-{number}", "kind": segment["kind"], "source": source}
+        kind = "code" if segment["kind"] == "embed" else segment["kind"]
+        block = {"id": f"block-{number}", "kind": kind, "source": source}
         if segment["kind"] in {"open", "close"}:
             if segment["kind"] == "open":
                 block["attributes"] = segment["attributes"]
@@ -1137,7 +1225,9 @@ def _render(segments, notebook, labels, mapping, md, directory, title, env):
             content = md.renderer.render(segment["tokens"], md.options, env)
         else:
             options = segment["options"]
-            cell = notebook.cells[segment["cell_index"]]
+            cell = segment.get("cell") or notebook.cells[segment["cell_index"]]
+            if "cell" in segment:
+                block["embed"] = {"reference": segment["reference"], "label": segment["label"]}
             block.update(
                 {
                     "code": segment["text"],
@@ -1315,7 +1405,13 @@ def build(
         _write_json(directory / "source-map.json", mapping)
         md = _markdown_engine(deps)
         segments = _segments(text, mapping, md, yaml)
-        labels, markdown_env = _prepare_markdown(text, segments, md, sources, mapping, directory)
+        references = _References(client)
+        labels, markdown_env = _prepare_markdown(
+            text, segments, md, sources, mapping, directory, references
+        )
+        for segment in segments:
+            if segment["kind"] == "embed":
+                segment.update(references.cell(segment["reference"], segment["label"], yaml))
         execution = metadata.get("execute", {})
         if not isinstance(execution, dict) or execution.keys() - {"echo", "eval"}:
             raise ValidationError("Supported front-matter execute options are echo and eval")
@@ -1353,6 +1449,8 @@ def build(
             options = {**execution, **segment["options"]}
             segment["options"] = options
             cell_metadata = {"cairn_source": segment["source"]}
+            if "label" in options:
+                cell_metadata["cairn_label"] = options["label"]
             if not options.get("eval", True):
                 cell_metadata["tags"] = ["skip-execution"]
             segment["cell_index"] = len(notebook.cells)
@@ -1408,7 +1506,7 @@ def build(
                 "{connection_file}",
             ]
         executor.execute(env=environment)
-        _record_inputs(directory, manifest, pins)
+        _record_inputs(directory, manifest, pins, references.used)
         for emitted in notebook.cells[0].outputs:
             captured = emitted.get("data", {}).get("application/vnd.cairn.environment+json")
             if captured:

@@ -306,6 +306,55 @@ The loss is `{python} f"{loss:.3f}"` <b>, literal `x`.
     assert failure.value.details["source"]["line_start"] == 1
 
 
+def test_cross_document_references_and_embeds_record_the_other_report(tmp_path):
+    client = Client(tmp_path / "repo")
+    (tmp_path / "box.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"/>'
+    )
+    (tmp_path / "baseline.qmd").write_text("""---
+title: Baseline study
+---
+![A box](box.svg){#fig-box}
+
+```{python}
+#| label: fig-loss
+#| fig-cap: Loss curve
+print("loss output")
+```
+""")
+    baseline = reports.publish(
+        reports.build(tmp_path / "baseline.qmd", client=client).path, client=client, name="baseline"
+    )
+    source = tmp_path / "follow.qmd"
+    source.write_text("""See @reports/baseline#fig-loss and @reports/baseline@v1#fig-box.
+
+{{< embed reports/baseline#fig-loss >}}
+""")
+    result = reports.build(source, tmp_path / "build", client=client)
+    page = (result.path / "index.html").read_text()
+    link = f'href="/p/default/a/{baseline["id"]}#fig-loss">Figure 2 in <em>Baseline study</em></a>'
+    assert link in page and "Figure 1 in <em>Baseline study</em>" in page
+    assert "loss output" in page and "Figure 2 in Baseline study: Loss curve" in page
+    assert "print(" not in page
+    assert [(item["requested"], item["role"]) for item in result.manifest["inputs"]] == [
+        ("reports/baseline", "reference"),
+        ("reports/baseline@v1", "reference"),
+    ]
+    assert result.manifest["dependencies"] == [{"artifact_id": baseline["id"], "role": "reference"}]
+    document = json.loads((result.path / "document.json").read_text())
+    embedded = next(block for block in document["blocks"] if "embed" in block)
+    assert embedded["kind"] == "code" and embedded["caption_prefix"].startswith("Figure 2 in")
+    for text, error in (
+        ("See @reports/baseline#fig-missing.", "Unknown cross reference"),
+        ("{{< embed reports/baseline#fig-box >}}", "not a Python cell"),
+        ("See @reports/missing#fig-box.", "Unknown artifact name"),
+    ):
+        source.write_text(text + "\n")
+        with pytest.raises((reports.ReportBuildError, ValidationError), match=error):
+            reports.build(source, client=client)
+    client.backend.close()
+
+
 def test_includes_resources_images_static_html_and_source_locations(tmp_path):
     (tmp_path / "parts").mkdir()
     (tmp_path / "data.txt").write_text("captured data")
