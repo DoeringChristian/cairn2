@@ -51,6 +51,7 @@ UTC ISO strings; errors have a stable code, message and details.
 | `resolve(ref, *, project='default')` | Artifact descriptor, live or finished. |
 | `resolve_many(refs, *, project='default')` | Descriptors in input order, from one read transaction. |
 | `list_artifacts(*, project=None, namespace=None, where=None, state=None, limit=100, cursor=None)` | `{items, next_cursor}`; each item is an artifact, not a name-group object. |
+| `find(pattern, *, project='default', where=None, order=None, limit=100, cursor=None)` | `{items, next_cursor}`: descriptors of the finished artifacts a reference pattern names, filtered and ordered in SQL. Without `order`, results are sorted by namespace, then name with runs of digits compared as numbers, then version. |
 | `annotate(artifact_id, patch, *, expected_etag=None, target='artifact', request_id=None)` | Atomic JSON Merge Patch with optional concurrency check; `target='name'` patches the properties of every version of the artifact's name. Returns the artifact descriptor. |
 | `annotation_layers(artifact_id)` | `{name, artifact, annotations, annotations_etag}`: the name-level and exact properties and their projection. |
 | `versions(ref, *, project='default')` | Finished artifacts sharing the referenced name, ordered by numeric label. |
@@ -115,7 +116,7 @@ exact retry intent. The 8 MiB final manifest bound is a defensive check.
 
 Routes are named REST resources: `POST /v1/artifacts`, artifact-scoped writers,
 entries, finalization, aliases, annotations and comments; `PUT /v1/comments/{id}`
-and `PUT /v1/comments/{id}/resolution`; `POST /v1/resolutions`,
+and `PUT /v1/comments/{id}/resolution`; `POST /v1/resolutions`, `POST /v1/searches`,
 `POST /v1/records/query`, `GET /v1/history?ref=...&project=...`,
 `DELETE /v1/artifacts/{id}`, and `POST /v1/maintenance/gc`.
 Blob uploads/downloads stream bytes. There are no revision, snapshot or separate
@@ -131,15 +132,24 @@ writes into server results.
 and captures. Unless `capture_output=False`, they also store the process's stdout and
 stderr as `console/NNNNNN.log` file captures until the run finishes or closes.
 Capture names under `provenance/` and `console/` are reserved for Cairn. `finish()` returns the finished descriptor; `.id` stays unchanged.
-`Client.resolve()` returns a `Reader` only for a finished artifact. `use()` records
-a dependency on that exact ID. No revision ID or snapshot API is exposed.
+On a run, artifact or report, `find(pattern, where=, order=, limit=)` returns
+`Reader`s for finished artifacts and records each with role `input`;
+`use(ref, role=)` returns one and records it with the role. Each artifact and
+role is recorded once per run; recording after finish raises Conflict. The top-level
+`cairn.find` and `cairn.use` require a run or report. `Client.get(ref)` and
+`Client.find(...)` read without recording. Patterns are references with
+shell-style wildcards: `*` matches within one level of the name and `**` across
+levels; without a selector they match each name's `latest`. Names and aliases
+cannot contain `*`. `Reader.query` pages raw entries with a cursor. No revision
+ID or snapshot API is exposed.
 
 `cairn.artifact(namespace, name, *, repo=None, project=None, token=None,
 outbox=None)` starts an independently owned artifact handle. Unspecified
 repo/project inherit the context-local artifact or run, falling back to
 normal repo and project discovery (`CAIRN_PROJECT`, `.cairn.toml`). Its context manager temporarily
 installs it as the default, restores the previous handle on exit, and finishes
-on normal exit or records failure on exceptional exit unless already finished.
+on normal exit or records failure on exceptional exit unless already finished;
+the same holds for `cairn.init()` contexts and `cairn.run`.
 The Python `add()` method replaces `capture()` without an alias; the persisted
 `capture` entry kind is unchanged. `cairn.init()` remains the run entry point.
 `cairn.run(...)` takes `init()`'s arguments and decorates a function: each call runs
@@ -151,11 +161,11 @@ uses ordinary discovery, while build retains its explicit-client requirement
 for declared inputs.
 
 Reports execute QMD locally, record the exact finished artifact IDs they read
-(declared `cairn.inputs`, `cairn.use` and the supplied reader, each reference
-resolved once per build), capture source, outputs and package information, then
-upload an ordinary report artifact. Rebuilds resolve references again. The
-supplied report reader is scoped to the report's project; independent Python
-clients remain independent. Reports are not a Python security sandbox. A
+(declared `cairn.inputs`, and `cairn.find` and `cairn.use` with the
+rules above, each reference resolved once per build), capture source, outputs and
+package information, then upload an ordinary report artifact. Rebuilds resolve
+references and searches again. `cairn.Client()` in a cell opens the build's
+repository; independent Python clients are not recorded. Reports are not a Python security sandbox. A
 front-matter `config` is composed with Hydra and build `overrides`; cells see it
 as `cfg`, and the resolved config is the manifest's and artifact metadata's `config`.
 
@@ -194,7 +204,8 @@ Comments always anchor to an exact finished artifact and carry its `number`,
 `artifact_deleted`, `author`, `revision`, `resolved_at` and `resolution`. They are
 not part of the projected `annotations` and do not count toward its limits.
 
-Discovery predicates use explicit roots `/metadata/...` and `/annotations/...`.
+Discovery predicates use explicit roots `/metadata/...` and `/annotations/...`;
+`find` also accepts `/value/...`.
 `contains` tests scalar array membership with JSON type semantics (booleans differ
 from numbers; numerically equal integers/floats match). It works on arbitrary
 array fields and on record queries. It is not substring or object containment.
@@ -207,7 +218,8 @@ the Python client. Cursors bind project, namespace, state and predicate.
 HTTP annotation edits use `PATCH /v1/artifacts/{id}/annotations` with
 `{patch, expected_etag, target, request_id}`; `GET` on the same path returns the
 layers. `GET /v1/artifacts/{id}/comments` accepts `scope` and `include_resolved`.
-`/v1/capabilities` lists the `annotations` feature; clients check it before using
+`/v1/capabilities` lists the `search` feature, which `find` requires, and the
+`annotations` feature; clients check it before using
 name targets, layers, comment authors, scopes, edits or resolution. Discovery passes
 JSON `where` and optional `state` to `GET /v1/artifacts`. Python exposes
 `Client.annotate`, `Client.find`, `Client.comments`, `Client.resolve_comment` and

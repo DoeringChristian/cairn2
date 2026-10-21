@@ -150,13 +150,13 @@ def test_published_run_provenance_preserves_start_time_bytes(source_tree, tmp_pa
         (root / "train.py").write_text("rate = 999\n")
         run.log({"loss": 1})
         publication = run.finish(timeout=10)
-        reader = client.resolve(publication["id"])
-        metadata = reader.descriptor["manifest"]["metadata"]
+        reader = client.get(publication["id"])
+        metadata = reader.metadata
         assert metadata["provenance"]["git"]["head"] == commit
         assert metadata["config"] == {"rate": 0.2}
         archive = reader.download("provenance/source.tar.gz", to=tmp_path / "saved")
         assert unpack(archive.read_bytes())["train.py"] == b"rate = 0.2\n"
-        record = reader.records()[0]["data"]
+        record = next(reader.records())
         assert record["loss"] == 1
         assert isinstance(record["_wall_time"], float)
         if remote:

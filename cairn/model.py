@@ -111,8 +111,8 @@ def digest(value):
 def validate_name(value):
     if not isinstance(value, str) or not value or len(value) > 255:
         raise ValidationError("Names must contain 1–255 characters")
-    if any(ord(c) < 32 for c in value) or "@" in value:
-        raise ValidationError("Names cannot contain control characters or @")
+    if any(ord(c) < 32 for c in value) or "@" in value or "*" in value:
+        raise ValidationError("Names cannot contain control characters, @ or *")
     return value
 
 

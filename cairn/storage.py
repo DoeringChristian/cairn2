@@ -217,6 +217,16 @@ sa.Index("cairn_incoming_artifacts", artifact_refs.c.artifact_id)
 sa.Index("cairn_incoming_blobs", blob_refs.c.digest)
 
 
+def _natural(left, right):
+    """Compare names with runs of digits as numbers, so seed2 sorts before seed10."""
+
+    def key(text):
+        parts = re.split(r"(\d+)", text)
+        return [int(part) if odd % 2 else part.casefold() for odd, part in enumerate(parts)], text
+
+    return (key(left) > key(right)) - (key(left) < key(right))
+
+
 def _row(result):
     value = result.mappings().first()
     return dict(value) if value is not None else None
@@ -311,6 +321,7 @@ class Repository:
                 connection.execute("PRAGMA journal_mode=WAL")
                 connection.execute("PRAGMA synchronous=FULL")
                 connection.execute("PRAGMA foreign_keys=ON")
+                connection.create_collation("cairn_natural", _natural)
 
         with self._transaction(write=True) as conn:
             if self.dialect == "postgresql":
@@ -337,6 +348,19 @@ class Repository:
             elif any(name.startswith("cairn_") for name in existing):
                 raise IntegrityError("Repository tables exist without schema metadata")
             schema.create_all(conn)
+            self.natural = True
+            if self.dialect == "postgresql":
+                try:
+                    with conn.begin_nested():
+                        conn.execute(
+                            sa.text(
+                                "CREATE COLLATION IF NOT EXISTS cairn_natural "
+                                "(provider = icu, locale = 'und-u-kn-true')"
+                            )
+                        )
+                except sa.exc.DBAPIError:
+                    # Without ICU, names sort by code point instead.
+                    self.natural = False
             if upgrade:
                 self._upgrade(conn)
             if not conn.execute(sa.select(meta.c.key).limit(1)).first():
@@ -1140,6 +1164,111 @@ class Repository:
             items = self._descriptors(conn, rows[:limit])
         next_cursor = (
             queries.encode_cursor({"query": fingerprint, "after": items[-1]["id"]})
+            if len(rows) > limit
+            else None
+        )
+        return {"items": items, "next_cursor": next_cursor}
+
+    def _pattern(self, conn, pattern, project):
+        """Conditions naming the finished artifacts a reference pattern matches."""
+        if not isinstance(pattern, str) or not pattern:
+            raise ValidationError("Expected a nonempty reference pattern")
+        conditions = [
+            artifacts.c.project == project,
+            artifacts.c.state == "finished",
+            artifacts.c.deleted_at.is_(None),
+        ]
+        spelling, separator, selector = pattern.rpartition("@")
+        if not separator:
+            spelling, selector = pattern, "latest"
+        if "/" not in spelling and "*" not in spelling:
+            try:
+                return [*conditions, artifacts.c.id == self._resolve(conn, pattern, project)["id"]]
+            except (NotFound, NotPublished):
+                return [sa.false()]
+        # * stays within one path segment and ** crosses them, as in shell globs.
+        expression = "".join(
+            ".*" if part == "**" else "[^/]*" if part == "*" else re.escape(part)
+            for part in re.split(r"(\*\*|\*)", spelling)
+        )
+        spelled = artifacts.c.namespace + "/" + artifacts.c.name
+        conditions.append(spelled.regexp_match(f"^{expression}$"))
+        namespace = spelling.split("/", 1)[0]
+        if "/" in spelling and "*" not in namespace:
+            conditions.append(artifacts.c.namespace == namespace)
+        same_name = [names.c[key] == artifacts.c[key] for key in NAME_KEYS]
+        if selector == "latest":
+            head = sa.select(names.c.head).where(*same_name).correlate(artifacts).scalar_subquery()
+            conditions.append(artifacts.c.id == head)
+        elif selector == "live":
+            raise ValidationError("A search returns finished artifacts; @live never matches")
+        elif re.fullmatch(r"v[1-9][0-9]*", selector):
+            conditions.append(artifacts.c.number == int(selector[1:]))
+        elif selector != "*":
+            aliased = (
+                sa.select(aliases.c.artifact_id)
+                .where(*(aliases.c[key] == artifacts.c[key] for key in NAME_KEYS))
+                .where(aliases.c.alias == selector)
+                .correlate(artifacts)
+            )
+            conditions.append(artifacts.c.id.in_(aliased))
+        return conditions
+
+    def find(self, pattern, *, project="default", where=None, order=None, limit=100, cursor=None):
+        """The finished artifacts a pattern names, filtered and sorted in SQL.
+
+        The pattern addresses artifacts by name, like a reference.
+        """
+        self._limit(limit)
+        if order is not None and not isinstance(order, str):
+            raise ValidationError("order must be a field path, optionally prefixed with -")
+        descending = order is not None and order.startswith("-")
+        path = order[1:] if descending else order
+        columns = {
+            "value": artifacts.c.manifest,
+            "metadata": artifacts.c.metadata,
+            "annotations": artifacts.c.annotations,
+        }
+        dialect = self.engine.dialect.name
+        filtered = queries.discovery_predicate(
+            where,
+            artifacts.c.metadata,
+            artifacts.c.annotations,
+            artifacts.c.id,
+            dialect,
+            annotation_members,
+            manifest=artifacts.c.manifest,
+        )
+        sorting = (
+            [*queries.sort_keys(path, columns, dialect, descending=descending), artifacts.c.id]
+            if path is not None
+            else [
+                artifacts.c.namespace,
+                artifacts.c.name.collate("cairn_natural") if self.natural else artifacts.c.name,
+                artifacts.c.number,
+            ]
+        )
+        fingerprint = digest([pattern, project, where, order])
+        offset = 0
+        if cursor:
+            position = queries.decode_cursor(cursor)
+            if position.get("query") != fingerprint or type(position.get("offset")) is not int:
+                raise ValidationError("Cursor belongs to another search")
+            offset = position["offset"]
+        with self._transaction() as conn:
+            matching = self._pattern(conn, pattern, project)
+            rows = list(
+                conn.execute(
+                    sa.select(artifacts)
+                    .where(*matching, filtered)
+                    .order_by(*sorting)
+                    .offset(offset)
+                    .limit(limit + 1)
+                ).mappings()
+            )
+            items = self._descriptors(conn, rows[:limit])
+        next_cursor = (
+            queries.encode_cursor({"query": fingerprint, "offset": offset + limit})
             if len(rows) > limit
             else None
         )

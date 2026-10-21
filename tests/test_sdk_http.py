@@ -57,17 +57,15 @@ def test_remote_journal_recovery_lost_ack_and_immutable_file(tmp_path, monkeypat
                 handles = recovered.recover()
                 assert [handle.writer_id for handle in handles] == [writer_id]
                 publication = handles[0].finish(value={"complete": True}, timeout=5)
-                reader = recovered.resolve(publication["id"])
-                assert reader.read() == {"complete": True}
-                records = reader.records()
-                assert [record["data"]["sample"] for record in records] == list(range(50))
-                assert all(
-                    logged_after <= row["data"]["_wall_time"] <= logged_before for row in records
-                )
+                reader = recovered.get(publication["id"])
+                assert reader.value == {"complete": True}
+                records = list(reader.records())
+                assert [record["sample"] for record in records] == list(range(50))
+                assert all(logged_after <= row["_wall_time"] <= logged_before for row in records)
                 assert reader.download("captured.txt", to=tmp_path / "restored").read_text() == (
                     "captured before disconnection"
                 )
-                assert reader.descriptor["manifest"]["metadata"]["config"] == {"seed": 7}
+                assert reader.config == {"seed": 7}
                 assert recovered.delivery.pending() == 0
                 assert lost
     finally:
@@ -92,9 +90,9 @@ def test_remote_multiwriter_pending_and_conflict(tmp_path):
             worker.log({"producer": 2})
             worker.close(timeout=5)
             publication = main.finish(value={"answer": 42}, timeout=5)
-            reader = first.resolve(publication["id"])
-            assert {row["data"]["producer"] for row in reader.records()} == {1, 2}
-            assert reader.read() == {"answer": 42}
+            reader = first.get(publication["id"])
+            assert {row["producer"] for row in reader.records()} == {1, 2}
+            assert reader.value == {"answer": 42}
     finally:
         repository.close()
 
@@ -147,7 +145,7 @@ def test_owned_pending_context_can_retry_after_resource_cleanup(tmp_path):
         assert artifact.client._closed
         assert not artifact.client.delivery._thread.is_alive()
         assert not client._closed
-        assert len(client.resolve(publication["id"]).records()) == 2
+        assert len(list(client.get(publication["id"]).records())) == 2
 
 
 def test_owned_completed_file_finish_retry_uses_no_connection(tmp_path):
@@ -198,9 +196,9 @@ def test_remote_reads_never_open_journal_or_resume_pending_delivery(
             patch.setattr("cairn.sdk.Delivery", forbidden_delivery)
             with Client(url, token="test-token", **options) as client:
                 assert client.delivery is None
-                reader = client.resolve(version)
-                assert reader.read() == {"answer": 42}
-                assert reader.records() == []
+                reader = client.get(version)
+                assert reader.value == {"answer": 42}
+                assert list(reader.records()) == []
                 assert client.flush() == {"pending": 0}
                 assert client.delivery is None
         if shared_pending:
@@ -243,7 +241,7 @@ def test_capacity_rejected_finish_can_be_corrected(tmp_path, remote, field):
         assert client.backend.resolve(artifact.id)["intent"] is None
         assert artifact._finish_args is None
         publication = artifact.finish(value={"corrected": True}, timeout=5)
-        assert client.resolve(publication["id"]).read() == {"corrected": True}
+        assert client.get(publication["id"]).value == {"corrected": True}
 
 
 @pytest.mark.parametrize("remote", [False, True])
@@ -308,7 +306,7 @@ def test_top_level_artifact_inherits_remote_run_and_restores_it(tmp_path):
                 == dataset.id
             )
             with Client(url, project="study", token="test-token") as client:
-                assert client.resolve(run.id).console() == "remote output\n"
+                assert client.get(run.id).console() == "remote output\n"
 
         contextvars.Context().run(scenario)
 

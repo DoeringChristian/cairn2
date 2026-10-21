@@ -92,6 +92,15 @@ class Resolve(StrictBody):
     project: str = "default"
 
 
+class Search(StrictBody):
+    pattern: str
+    project: str = "default"
+    where: dict[str, Any] | None = None
+    order: str | None = None
+    limit: int = Field(default=100, ge=1)
+    cursor: str | None = None
+
+
 class Alias(RequestID):
     alias: str
     expected_id: str | None = None
@@ -294,7 +303,14 @@ def create_app(
             "max_json_bytes": max_json_bytes,
             "max_blob_bytes": max_blob_bytes,
             "authentication": "none" if no_auth else "bearer",
-            "features": ["writers", "aliases", "comments", "annotations", "streaming_blobs"],
+            "features": [
+                "writers",
+                "aliases",
+                "comments",
+                "annotations",
+                "streaming_blobs",
+                "search",
+            ],
         }
 
     @app.post("/v1/artifacts")
@@ -324,6 +340,10 @@ def create_app(
     @app.post("/v1/resolutions")
     def resolve(body: Resolve):
         return repository.resolve_many(**body.model_dump())
+
+    @app.post("/v1/searches")
+    def search(body: Search):
+        return repository.find(**body.model_dump())
 
     @app.get("/v1/artifacts")
     def artifacts(

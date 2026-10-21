@@ -10,6 +10,7 @@ import os
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
@@ -151,42 +152,49 @@ class Client:
     def __repr__(self):
         return f"<Client repo={self.repo!r} project={self.project!r}>"
 
-    def resolve(self, ref):
-        if isinstance(ref, (Artifact, Reader)):
-            ref = ref.id
+    def get(self, ref):
+        """A reader for one finished artifact; an explicit client never records reads."""
+        ref = _identifier(ref)
         descriptor = self.backend.resolve(ref, project=self.project)
         if descriptor["state"] != "finished":
             raise NotPublished("Readers require a finished, immutable artifact")
         return Reader(self, descriptor)
 
-    def find(self, *, namespace=None, where=None, state=None, limit=None):
-        """Iterate descriptors using /metadata and /annotations JSON predicates.
+    def find(self, pattern, *, where=None, order=None, limit=None):
+        """Readers for the finished artifacts a reference pattern names.
 
-        Discovery includes live and finished artifacts unless state is specified.
+        `*` matches within one level of a name and `**` across levels; without a
+        selector each name's latest version matches. where and order run in the
+        repository's database.
         """
+        return self._find(pattern, where=where, order=order, limit=limit)
+
+    def _find(self, pattern, *, where=None, order=None, limit=None, owner=None):
         if limit is not None and (type(limit) is not int or limit < 0):
             raise ValidationError("Artifact limit must be a nonnegative integer")
-        cursor, count = None, 0
-        while limit is None or count < limit:
+        readers, cursor = [], None
+        while limit is None or len(readers) < limit:
             if self._closed:
                 raise Conflict("Client is closed")
-            page = self.backend.list_artifacts(
+            page = self.backend.find(
+                pattern,
                 project=self.project,
-                namespace=namespace,
                 where=where,
-                state=state,
-                limit=1000 if limit is None else min(1000, limit - count),
+                order=order,
+                limit=1000 if limit is None else min(1000, limit - len(readers)),
                 cursor=cursor,
             )
-            yield from page["items"]
-            count += len(page["items"])
+            readers += [Reader(self, item) for item in page["items"]]
             cursor = page["next_cursor"]
             if cursor is None:
                 break
+        if owner is not None:
+            for reader in readers:
+                owner._depend(reader.id, "input", pattern)
+        return readers
 
     def remove(self, ref):
-        if isinstance(ref, (Artifact, Reader)):
-            ref = ref.id
+        ref = _identifier(ref)
         return self.backend.delete(self.backend.resolve(ref, project=self.project)["id"])
 
     def gc(self, *, apply=False, grace_seconds=3600):
@@ -199,8 +207,7 @@ class Client:
         """
         if self._closed:
             raise Conflict("Client is closed")
-        if isinstance(ref, (Artifact, Reader)):
-            ref = ref.id
+        ref = _identifier(ref)
         artifact = self.backend.resolve(ref, project=self.project)
         return self.backend.annotate(
             artifact["id"],
@@ -212,8 +219,7 @@ class Client:
 
     def comments(self, ref, *, scope="name", include_resolved=False):
         """Comments on every version of the name, or with scope="artifact" on this one."""
-        if isinstance(ref, (Artifact, Reader)):
-            ref = ref.id
+        ref = _identifier(ref)
         artifact = self.backend.resolve(ref, project=self.project)
         return self.backend.comments(artifact["id"], scope=scope, include_resolved=include_resolved)
 
@@ -266,6 +272,7 @@ class Artifact:
         self._lock = threading.RLock()
         self._owns_client = False
         self._console = None
+        self._dependencies = set()
 
     def __repr__(self):
         ref = f"{self.namespace}/{self.name}"
@@ -358,10 +365,27 @@ class Artifact:
     def annotate(self, patch, *, expected_etag=None, target="artifact"):
         return self.client.annotate(self.id, patch, expected_etag=expected_etag, target=target)
 
+    def find(self, pattern, *, where=None, order=None, limit=None):
+        """Readers for a pattern, each recorded as this artifact's input."""
+        return self.client._find(pattern, where=where, order=order, limit=limit, owner=self)
+
     def use(self, ref, *, role="input"):
-        reader = self.client.resolve(ref)
-        self._append("dependency", {"artifact_id": reader.id, "role": role})
+        """A reader recorded as this artifact's input."""
+        reader = self.client.get(ref)
+        self._depend(reader.id, role)
         return reader
+
+    def _depend(self, artifact_id, role, requested=None):
+        with self._lock:
+            if (artifact_id, role) in self._dependencies:
+                return
+            if self.result is not None or self._closed:
+                raise Conflict(
+                    f"{self.namespace}/{self.name} has finished and can no longer record what it "
+                    "reads; read inside a run, or without recording through cairn.Client()"
+                )
+            self._append("dependency", {"artifact_id": artifact_id, "role": role})
+            self._dependencies.add((artifact_id, role))
 
     def flush(self, *, timeout=None):
         if self.client.delivery:
@@ -460,9 +484,9 @@ class Artifact:
 
     def __exit__(self, exc_type, exc, traceback):
         try:
-            if exc_type is None:
+            if self.result is None and exc_type is None:
                 self.finish()
-            else:
+            elif self.result is None:
                 self.finish(
                     outcome="failed",
                     metadata={"exception": {"type": exc_type.__name__, "message": str(exc)}},
@@ -486,6 +510,10 @@ class Artifact:
                 )
 
 
+def _identifier(ref):
+    return ref.id if isinstance(ref, (Artifact, Reader)) else ref
+
+
 def _describe_blob(source):
     """Check a completed finish retry without reopening a repository connection."""
     digest, size = hashlib.sha256(), 0
@@ -497,74 +525,92 @@ def _describe_blob(source):
 
 
 class Reader:
+    """A finished artifact; files and records are fetched when asked for."""
+
     def __init__(self, client, descriptor):
         self.client = client
-        self._descriptor = copy.deepcopy(descriptor)
         self.id = descriptor["id"]
+        self.project = descriptor["project"]
+        self.namespace = descriptor["namespace"]
+        self.name = descriptor["name"]
+        self.version = descriptor["number"]
+        self.outcome = descriptor["manifest"]["outcome"]
+        self.created_at = datetime.fromisoformat(descriptor["created_at"])
+        self.finished_at = datetime.fromisoformat(descriptor["finished_at"])
+        self.annotations = copy.deepcopy(descriptor["annotations"])
+        self._descriptor = copy.deepcopy(descriptor)
 
     def __repr__(self):
-        info = self._descriptor
-        ref = f"{info['namespace']}/{info['name']}@v{info['number']}"
-        return f"<Reader {ref} id={self.id[:12]} project={info['project']!r}>"
+        return f"<Reader {self} id={self.id[:12]} project={self.project!r}>"
+
+    def __str__(self):
+        return f"{self.namespace}/{self.name}@v{self.version}"
 
     @property
-    def version(self):
-        return self._descriptor["number"]
+    def _manifest(self):
+        return self._descriptor["manifest"]
 
     @property
-    def descriptor(self):
-        return copy.deepcopy(self._descriptor)
+    def value(self):
+        return decode(copy.deepcopy(self._manifest["value"]), self.client.backend)
 
-    def annotate(self, patch, *, expected_etag=None, target="artifact"):
-        self._descriptor = self.client.annotate(
-            self.id, patch, expected_etag=expected_etag, target=target
-        )
-        return self.descriptor
+    @property
+    def metadata(self):
+        return copy.deepcopy(self._manifest["metadata"])
 
-    def read(self):
-        return decode(copy.deepcopy(self._descriptor["manifest"]["value"]), self.client.backend)
+    @property
+    def config(self):
+        return copy.deepcopy(self._manifest["metadata"].get("config"))
 
-    def query(self, *, where=None, fields=None, limit=100, cursor=None, kind="record"):
-        return self.client.backend.query(
-            self.id,
-            project=self.client.project,
-            where=where,
-            fields=fields,
-            limit=limit,
-            cursor=cursor,
-            kind=kind,
-        )
-
-    def records(self, *, where=None, fields=None, limit=None, kind="record"):
-        if limit is not None and limit < 0:
-            raise ValidationError("Record limit must be nonnegative")
-        result = []
-        cursor = None
-        while limit is None or len(result) < limit:
-            page = self.query(
-                where=where,
-                fields=fields,
-                kind=kind,
-                cursor=cursor,
-                limit=1000 if limit is None else min(1000, limit - len(result)),
-            )
-            for record in page["items"]:
-                record = dict(record)
-                record["data"] = decode(record["data"], self.client.backend)
-                result.append(record)
-            cursor = page["next_cursor"]
-            if cursor is None:
-                break
-        return result
+    @property
+    def dependencies(self):
+        """The artifact's own inputs, as readers."""
+        ids = [item["artifact_id"] for item in self._manifest["dependencies"]]
+        if not ids:
+            return []
+        return [
+            Reader(self.client, descriptor)
+            for descriptor in self.client.backend.resolve_many(ids, project=self.project)
+        ]
 
     @property
     def files(self):
-        captures = self._descriptor["manifest"].get("captures", {})
+        captures = self._manifest.get("captures", {})
         return [name for name in captures if name.split("/", 1)[0] not in SECTIONS]
 
     @property
     def provenance(self):
         return self._section("provenance")
+
+    def annotate(self, patch, *, expected_etag=None, target="artifact"):
+        descriptor = self.client.annotate(
+            self.id, patch, expected_etag=expected_etag, target=target
+        )
+        self.annotations = copy.deepcopy(descriptor["annotations"])
+        self._descriptor = copy.deepcopy(descriptor)
+        return descriptor
+
+    def records(self, *, where=None, fields=None, kind="record", limit=None):
+        """Logged records, fetched page by page; each item is what was logged."""
+        if limit is not None and (type(limit) is not int or limit < 0):
+            raise ValidationError("Record limit must be a nonnegative integer")
+        cursor, count = None, 0
+        while limit is None or count < limit:
+            page = self.client.backend.query(
+                self.id,
+                project=self.project,
+                where=where,
+                fields=fields,
+                kind=kind,
+                cursor=cursor,
+                limit=1000 if limit is None else min(1000, limit - count),
+            )
+            for record in page["items"]:
+                yield decode(record["data"], self.client.backend)
+            count += len(page["items"])
+            cursor = page["next_cursor"]
+            if cursor is None:
+                break
 
     def console(self):
         """The run's stdout and stderr as one text, in the order Cairn received it."""
@@ -573,18 +619,18 @@ class Reader:
         )
 
     def _section(self, section):
-        captures = self._descriptor["manifest"].get("captures", {})
+        captures = self._manifest.get("captures", {})
         return [name for name in captures if name.split("/", 1)[0] == section]
 
     def file(self, name):
-        captures = self._descriptor["manifest"].get("captures", {})
+        captures = self._manifest.get("captures", {})
         if name not in captures:
             raise NotFound(f"No added file or folder named {name!r}")
         return decode(captures[name], self.client.backend)
 
     def download(self, name=None, *, to=None):
         root = Path(to) if to is not None else cache_root() / "artifacts" / self.id
-        manifest = self._descriptor["manifest"]
+        manifest = self._manifest
         if name is None:
             added, value = self.files, manifest.get("value")
         elif name in manifest.get("captures", {}):
@@ -621,6 +667,17 @@ class Reader:
         for path, blob in files.items():
             save_blob(self.client.backend, blob, root, path)
         return root if name is None else root / safe_path(name)
+
+    def query(self, *, where=None, fields=None, limit=100, cursor=None, kind="record"):
+        return self.client.backend.query(
+            self.id,
+            project=self.project,
+            where=where,
+            fields=fields,
+            limit=limit,
+            cursor=cursor,
+            kind=kind,
+        )
 
 
 _default = contextvars.ContextVar("cairn_default_artifact", default=None)
@@ -741,9 +798,7 @@ class _ContextArtifact(Artifact):
 
     def __exit__(self, exc_type, exc, traceback):
         try:
-            # Explicit finish(value=...) is allowed inside this convenience scope.
-            if self.result is None:
-                super().__exit__(exc_type, exc, traceback)
+            super().__exit__(exc_type, exc, traceback)
         finally:
             try:
                 self.client.close()
@@ -803,10 +858,24 @@ def remove(ref, *, repo=None, project=None):
         return client.remove(ref)
 
 
+def _reading():
+    """The run, artifact or report that records what is read."""
+    target = _default.get() or _report
+    if target is None:
+        raise ValidationError(
+            "Call cairn.init() first, or read without recording with cairn.Client()"
+        )
+    return target
+
+
+def find(pattern, *, where=None, order=None, limit=None):
+    """Readers for a reference pattern, each recorded as an input of the current run."""
+    return _reading().find(pattern, where=where, order=order, limit=limit)
+
+
 def use(ref, *, role="input"):
-    if _report is not None and _default.get() is None:
-        return _report.use(ref, role=role)
-    return _current().use(ref, role=role)
+    """A reader recorded as an input of the current run or report."""
+    return _reading().use(ref, role=role)
 
 
 def finish(**kwargs):

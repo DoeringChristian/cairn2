@@ -576,69 +576,57 @@ class _References:
         raise ValidationError(f"Cannot embed @{ref}#{name}: it is not a Python cell")
 
 
-class _RecordingBackend:
-    """Read operations scoped to one report's project; each reference resolves once."""
+class ReportInputs:
+    """What one report build reads: references resolve once, found and used artifacts are recorded.
 
-    def __init__(self, backend, project, pins, record=None):
-        self._backend, self._project, self._record = backend, project, record
+    Each reference resolves once per build, so @latest gives one version
+    throughout. Explicit clients remain ordinary independent clients. This is
+    reproducibility policy for cairn.find and cairn.use, not a Python sandbox.
+    """
+
+    def __init__(self, client, pins, record=None):
+        self.client, self.project, self._record = client, client.project, record
         self._resolved = {}
         for pin in pins:
             self._resolved[pin["requested"]] = self._resolved[pin["artifact_id"]] = pin[
                 "artifact_id"
             ]
+        self._recorded = {pin["artifact_id"] for pin in pins}
+        self._descriptors = {}
 
-    def _reference(self, ref, project, role="input"):
-        if project != self._project:
-            raise ValidationError("Report reader is scoped to its project")
-        if ref not in self._resolved:
-            descriptor = self._backend.resolve(ref, project=project)
-            if descriptor["state"] != "finished":
-                raise ValidationError(
-                    f"Report input {ref!r} is live; finish the artifact before building"
-                )
-            self._resolved[ref] = descriptor["id"]
-            if self._record:
-                with open(self._record, "a", encoding="utf-8") as file:
-                    entry = {"requested": ref, "artifact_id": descriptor["id"], "role": role}
-                    file.write(json.dumps(entry) + "\n")
-        return self._resolved[ref]
+    def _depend(self, artifact_id, role, requested):
+        if artifact_id in self._recorded:
+            return
+        self._recorded.add(artifact_id)
+        if self._record:
+            with open(self._record, "a", encoding="utf-8") as file:
+                entry = {"requested": requested, "artifact_id": artifact_id, "role": role}
+                file.write(json.dumps(entry) + "\n")
 
-    def resolve(self, ref, *, project="default", role="input"):
-        return self._backend.resolve(self._reference(ref, project, role), project=project)
-
-    def resolve_many(self, refs, *, project="default"):
-        return self._backend.resolve_many(
-            [self._reference(ref, project) for ref in refs], project=project
-        )
-
-    def query(self, ref, *, project="default", **options):
-        return self._backend.query(self._reference(ref, project), project=project, **options)
-
-    def open_blob(self, digest):
-        return self._backend.open_blob(digest)
-
-
-class ReportInputs:
-    """A read-only report client recording every artifact the report reads.
-
-    Each reference resolves once per build, so @latest gives one version
-    throughout. Explicit clients remain ordinary independent clients. This is
-    reproducibility policy for the supplied reader, not a Python sandbox.
-    """
-
-    def __init__(self, client, pins, record=None):
-        self.project = client.project
-        self.backend = _RecordingBackend(client.backend, self.project, pins, record)
-
-    def resolve(self, ref):
-        return self.use(ref)
+    def find(self, pattern, *, where=None, order=None, limit=None):
+        return self.client._find(pattern, where=where, order=order, limit=limit, owner=self)
 
     def use(self, ref, *, role="input"):
-        from .sdk import Reader
+        reader = self._reader(ref)
+        self._depend(reader.id, role, ref if isinstance(ref, str) else reader.id)
+        return reader
 
-        if isinstance(ref, Reader):
-            ref = ref.id
-        return Reader(self, self.backend.resolve(ref, project=self.project, role=role))
+    def _reader(self, ref):
+        from .sdk import Reader, _identifier
+
+        ref = _identifier(ref)
+        descriptor = self._descriptors.get(self._resolved.get(ref))
+        if descriptor is None:
+            descriptor = self.client.backend.resolve(
+                self._resolved.get(ref, ref), project=self.project
+            )
+        if descriptor["state"] != "finished":
+            raise ValidationError(
+                f"Report input {ref!r} is live; finish the artifact before building"
+            )
+        self._resolved[ref] = self._resolved[descriptor["id"]] = descriptor["id"]
+        self._descriptors[descriptor["id"]] = descriptor
+        return Reader(self.client, descriptor)
 
 
 _BOOTSTRAP = """# Cairn supplies connection details transiently, outside this notebook.
@@ -653,9 +641,10 @@ _project = _os.environ.pop("CAIRN_REPORT_PROJECT", "default")
 _config = _os.environ.pop("CAIRN_REPORT_CONFIG", "")
 _record = _os.environ.pop("CAIRN_REPORT_RECORD")
 _source_client = _Client(_endpoint, project=_project, token=_token) if _endpoint else None
-client = _ReportInputs(_source_client, _pins, _record) if _source_client else None
-_sdk._report = client
-inputs = {pin["name"]: client.resolve(pin["artifact_id"]) for pin in _pins}
+_sdk._report = _ReportInputs(_source_client, _pins, _record) if _source_client else None
+inputs = {pin["name"]: _sdk._report._reader(pin["artifact_id"]) for pin in _pins}
+if _endpoint:
+    _os.environ.update(CAIRN_REPO=_endpoint, CAIRN_PROJECT=_project)
 if _config:
     from omegaconf import OmegaConf as _OmegaConf
     cfg = _OmegaConf.create(_json.loads(_config))
@@ -1971,8 +1960,8 @@ def new(destination="NewReport.qmd", *, title="New report") -> Path:
     path.write_text(
         "---\ntitle: " + json.dumps(title) + "\ncairn:\n  resources: []\n---\n\n"
         "## Results {#sec-results}\n\n"
-        'Read artifacts with `cairn.use("runs/name@latest")`, then `.read()` or\n'
-        "`.records()`.\n\n"
+        'Read artifacts with `cairn.use("runs/name")` or `cairn.find("runs/*")`, then\n'
+        "`.value` or `.records()`.\n\n"
         '```{python}\nprint("A report built locally with Cairn")\n```\n\n'
         "::: {.callout-note}\nThe manifest records the exact version of every artifact read.\n:::\n",
         "utf-8",

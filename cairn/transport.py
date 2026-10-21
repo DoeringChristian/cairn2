@@ -20,6 +20,7 @@ from .contract import (
     JSONValue,
     QueryPage,
     Receipt,
+    SearchPage,
     StartResult,
     WriterDescriptor,
 )
@@ -226,6 +227,23 @@ class HTTPRepository:
             if value is not None
         }
         return self._request("GET", "v1/artifacts", params=params)
+
+    def find(
+        self, pattern, *, project="default", where=None, order=None, limit=100, cursor=None
+    ) -> SearchPage:
+        self._require("search")
+        return self._request(
+            "POST",
+            "v1/searches",
+            json={
+                "pattern": pattern,
+                "project": project,
+                "where": where,
+                "order": order,
+                "limit": limit,
+                "cursor": cursor,
+            },
+        )
 
     def versions(self, ref, *, project="default") -> list[ArtifactDescriptor]:
         return self._request("GET", "v1/history", params={"ref": ref, "project": project})

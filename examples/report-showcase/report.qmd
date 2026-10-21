@@ -68,7 +68,7 @@ import csv
 import json
 from pathlib import Path
 from IPython.display import display, HTML, Markdown
-result = inputs["baseline"].read()
+result = inputs["baseline"].value
 display({"application/json": result}, raw=True)
 ```
 
@@ -106,11 +106,11 @@ These values are synthetic demonstration data, not experimental findings.
 #| fig-cap: Scalar loss from the pinned experiment.
 #| echo: false
 import matplotlib.pyplot as plt
-records = inputs["baseline"].records()
+records = list(inputs["baseline"].records())
 figure, axis = plt.subplots(figsize=(7, 3.3))
 figure.patch.set_facecolor("#fffef9")
 axis.set_facecolor("#fffef9")
-axis.plot([row["data"]["step"] for row in records], [row["data"]["loss"] for row in records], color="#176b5b", linewidth=2)
+axis.plot([row["step"] for row in records], [row["loss"] for row in records], color="#176b5b", linewidth=2)
 axis.set(xlabel="Step", ylabel="Loss", title="A steady convergence")
 axis.spines[["top", "right"]].set_visible(False)
 figure.tight_layout()

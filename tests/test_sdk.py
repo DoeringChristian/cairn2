@@ -42,17 +42,16 @@ def test_default_init_config_and_arbitrary_records(tmp_path, monkeypatch):
         result = cairn.finish(value={"best": 0.5})
         assert run.client._closed
         with Client(tmp_path / "repo") as reader_client:
-            reader = reader_client.resolve(result["id"])
-            manifest = reader.descriptor["manifest"]
-            assert manifest["metadata"]["config"]["optimizer"]["rate"] == 0.01
-            assert manifest["metadata"]["environment"]["python"]
-            assert manifest["metadata"]["status_note"] == "done"
-            records = reader.records()
-            assert all(record["data"]["_wall_time"] == 1720000000.125 for record in records)
-            assert "step" not in records[0]["data"]
-            assert records[1]["data"]["step"] == 2
-            assert records[2]["data"]["table"].load() == [{"a": 1}]
-            assert reader.read() == {"best": 0.5}
+            reader = reader_client.get(result["id"])
+            assert reader.config["optimizer"]["rate"] == 0.01
+            assert reader.metadata["environment"]["python"]
+            assert reader.metadata["status_note"] == "done"
+            records = list(reader.records())
+            assert all(record["_wall_time"] == 1720000000.125 for record in records)
+            assert "step" not in records[0]
+            assert records[1]["step"] == 2
+            assert records[2]["table"].load() == [{"a": 1}]
+            assert reader.value == {"best": 0.5}
         with pytest.raises(ValidationError):
             contextvars.Context().run(cairn.log, {"outside": "context"})
     finally:
@@ -64,12 +63,12 @@ def test_namespace_does_not_choose_run_convenience_behavior(client):
     assert plain.namespace == "runs"
     generic = plain.finish(value={"answer": 42})
     assert generic["manifest"]["metadata"] == {}
-    assert client.resolve("runs/plain@latest").read() == {"answer": 42}
+    assert client.get("runs/plain@latest").value == {"answer": 42}
 
     run = client.run("training", config={"seed": 7})
     assert run.namespace == "runs"
     run.finish()
-    metadata = client.resolve("runs/training@latest").descriptor["manifest"]["metadata"]
+    metadata = client.get("runs/training@latest").metadata
     assert metadata["config"] == {"seed": 7}
     assert metadata["environment"]["python"]
 
@@ -81,19 +80,17 @@ def test_finish_preserves_identity_and_pins_metadata_records_and_value(client):
     artifact.log({"sample": "before"})
     assert client.backend.resolve(identity)["state"] == "live"
     with pytest.raises(NotPublished):
-        client.resolve(identity)
+        client.get(identity)
     artifact.update({"description": "later"})
     artifact.log({"sample": "after"})
     result = artifact.finish(value={"summary": "final"})
-    reader = client.resolve(identity)
+    reader = client.get(identity)
     assert reader.id == result["id"] == identity
-    assert reader.descriptor["state"] == "finished"
-    assert reader.read() == {"summary": "final"}
-    assert reader.descriptor["manifest"]["metadata"]["description"] == "later"
-    assert len(reader.records()) == 2
-    descriptor = reader.descriptor
-    descriptor["manifest"]["value"] = "mutated copy"
-    assert reader.read() == {"summary": "final"}
+    assert reader.value == {"summary": "final"}
+    assert reader.metadata["description"] == "later"
+    assert len(list(reader.records())) == 2
+    reader.value["summary"] = "mutated copy"
+    assert reader.value == {"summary": "final"}
     with pytest.raises(Conflict):
         artifact.log({"sample": "too late"})
 
@@ -105,8 +102,8 @@ def test_capture_consumption_download_and_generic_kind(client, tmp_path):
     artifact.add(source)
     source.write_text("mutated")
     publication = artifact.finish(value=File(b"weights", name="weights.bin"))
-    reader = client.resolve(publication["id"])
-    assert reader.read().load() == b"weights"
+    reader = client.get(publication["id"])
+    assert reader.value.load() == b"weights"
     assert reader.download(to=tmp_path / "saved") == tmp_path / "saved"
     assert (tmp_path / "saved/weights.bin").read_bytes() == b"weights"
     assert (tmp_path / "saved/input.txt").read_text() == "original"
@@ -121,7 +118,7 @@ def test_capture_consumption_download_and_generic_kind(client, tmp_path):
     folder.add(tmp_path / "data")
     folder.finish()
     root = tmp_path / "cache/artifacts" / folder.id
-    assert client.resolve(folder).download("data") == root / "data"
+    assert client.get(folder).download("data") == root / "data"
     assert (root / "data/sub/b.txt").read_text() == "nested"
     downstream = client.run("consumer")
     consumed = downstream.use(reader, role="model")
@@ -144,7 +141,7 @@ def test_multiwriter_drain_and_exact_finalization_intent(client):
         first.finish(value={"score": 2})
     result = first.finish(value={"score": 1})
     assert first.finish(value={"score": 1}) == result
-    assert len(client.resolve(result["id"]).records()) == 2
+    assert len(list(client.get(result["id"]).records())) == 2
 
 
 def test_same_name_creates_distinct_artifacts_and_version_labels(client):
@@ -155,10 +152,10 @@ def test_same_name_creates_distinct_artifacts_and_version_labels(client):
     two = second.finish(value={"value": 2})
     assert one["id"] == first.id
     assert two["id"] == second.id
-    assert client.resolve("model/concurrent@v1").id == first.id
-    assert client.resolve("model/concurrent@v2").id == second.id
-    assert client.resolve("model/concurrent@latest").id == second.id
-    assert client.resolve(first.id).read() == {"value": 1}
+    assert client.get("model/concurrent@v1").id == first.id
+    assert client.get("model/concurrent@v2").id == second.id
+    assert client.get("model/concurrent@latest").id == second.id
+    assert client.get(first.id).value == {"value": 1}
 
 
 def test_context_failure_records_outcome_and_preserves_original_exception(client):
@@ -166,10 +163,9 @@ def test_context_failure_records_outcome_and_preserves_original_exception(client
     with pytest.raises(RuntimeError, match="original"), artifact:
         artifact.log({"progress": "before failure"})
         raise RuntimeError("original")
-    reader = client.resolve("runs/failing")
-    manifest = reader.descriptor["manifest"]
-    assert manifest["outcome"] == "failed"
-    assert manifest["metadata"]["exception"]["type"] == "RuntimeError"
+    reader = client.get("runs/failing")
+    assert reader.outcome == "failed"
+    assert reader.metadata["exception"]["type"] == "RuntimeError"
 
 
 def test_validation_keeps_writer_open_and_reads_do_not_invent_step(client):
@@ -180,7 +176,7 @@ def test_validation_keeps_writer_open_and_reads_do_not_invent_step(client):
         artifact.finish(outcome="invalid")
     artifact.log({"x": 1})
     result = artifact.finish()
-    assert client.resolve(result["id"]).records()[0]["data"]["x"] == 1
+    assert next(client.get(result["id"]).records())["x"] == 1
 
 
 def test_log_preserves_explicit_wall_time_and_does_not_mutate_input(client, monkeypatch):
@@ -191,13 +187,15 @@ def test_log_preserves_explicit_wall_time_and_does_not_mutate_input(client, monk
     artifact.log(loss=0.1, _wall_time=1700000000.5)
     artifact.log({"loss": 0.05, "_wall_time": 0})
     artifact.finish()
-    records = client.resolve(artifact.id).records()
+    records = list(client.get(artifact.id).records())
     assert data == {"loss": 0.2}
-    assert [row["data"]["_wall_time"] for row in records] == [1720000000.125, 1700000000.5, 0]
-    filtered = client.resolve(artifact.id).records(
-        where={"path": "/_wall_time", "op": "gt", "value": 1710000000}
+    assert [row["_wall_time"] for row in records] == [1720000000.125, 1700000000.5, 0]
+    filtered = list(
+        client.get(artifact.id).records(
+            where={"path": "/_wall_time", "op": "gt", "value": 1710000000}
+        )
     )
-    assert len(filtered) == 1 and filtered[0]["data"]["loss"] == 0.2
+    assert len(filtered) == 1 and filtered[0]["loss"] == 0.2
 
 
 def test_artifact_context_add_restores_run_and_can_finish_value(tmp_path):
@@ -215,15 +213,15 @@ def test_artifact_context_add_restores_run_and_can_finish_value(tmp_path):
         cairn.log(loss=0.1)
         cairn.finish(value=3)
         with Client(tmp_path / "repo", project="study") as reader:
-            assert reader.resolve(nested.id).read() == 2
-            result = reader.resolve(dataset.id)
+            assert reader.get(nested.id).value == 2
+            result = reader.get(dataset.id)
             assert (
                 repr(result) == f"<Reader datasets/samples@v1 id={dataset.id[:12]} project='study'>"
             )
             assert result.version == 1
-            assert result.descriptor["manifest"]["captures"]["samples"]
-            assert len(result.records()) == 1
-            assert reader.resolve(run.id).records()[0]["data"]["loss"] == 0.1
+            assert result.files == ["samples"]
+            assert len(list(result.records())) == 1
+            assert next(reader.get(run.id).records())["loss"] == 0.1
         assert not hasattr(cairn, "capture")
         assert not hasattr(dataset, "capture")
 
@@ -243,8 +241,8 @@ def test_artifact_failure_restores_context_and_standalone_discovery(tmp_path, mo
             cairn.log(restored=True)
         assert parent.client._closed and child.client._closed
         with Client(tmp_path / "repo", project="study") as reader:
-            assert reader.resolve(child.id).descriptor["manifest"]["outcome"] == "failed"
-            assert reader.resolve(parent.id).records()[0]["data"]["restored"] is True
+            assert reader.get(child.id).outcome == "failed"
+            assert next(reader.get(parent.id).records())["restored"] is True
         with pytest.raises(ValidationError):
             cairn.log(outside=True)
 
@@ -262,9 +260,9 @@ def test_implicit_reports_after_finish(tmp_path):
         result = build(source, tmp_path / "report")
         published = publish(result.path, name="example")
         with Client(tmp_path / "repo", project="study") as reader:
-            report = reader.resolve(published["id"])
-            assert report.descriptor["project"] == "study"
-            assert report.descriptor["manifest"]["dependencies"][0]["artifact_id"] == run.id
+            report = reader.get(published["id"])
+            assert report.project == "study"
+            assert report.dependencies[0].id == run.id
 
     contextvars.Context().run(scenario)
 
@@ -278,21 +276,21 @@ def test_remove_falls_back_and_gc_purges_only_unreferenced(client):
     consumer.use(first)
     consumer.finish()
     assert client.remove("runs/train@latest")["id"] == second.id
-    assert client.resolve("runs/train@latest").id == first.id
+    assert client.get("runs/train@latest").id == first.id
     assert client.remove(first)["retained_by"] == [consumer.id]
-    assert client.resolve(first.id).version == 1
+    assert client.get(first.id).version == 1
     with pytest.raises(NotPublished):
-        client.resolve("runs/train@latest")
+        client.get("runs/train@latest")
     assert client.gc(grace_seconds=0)["artifacts"] == [second.id]
     assert client.gc(grace_seconds=3600)["artifacts"] == []
     assert client.gc(apply=True, grace_seconds=0)["artifacts"] == [second.id]
     with pytest.raises(NotFound):
-        client.resolve(second.id)
+        client.get(second.id)
     client.remove(consumer)
     purged = client.gc(apply=True, grace_seconds=0)["artifacts"]
     assert sorted(purged) == sorted([first.id, consumer.id])
     with pytest.raises(NotFound):
-        client.resolve(first.id)
+        client.get(first.id)
 
 
 def test_provenance_files_are_reserved_and_listed_separately(tmp_path, monkeypatch):
@@ -303,7 +301,7 @@ def test_provenance_files_are_reserved_and_listed_separately(tmp_path, monkeypat
             run.add(b"x", name="provenance/fake.txt")
         run.add(b"notes", name="notes.txt")
         run.finish()
-        reader = client.resolve(run)
+        reader = client.get(run)
         assert reader.files == ["notes.txt"]
         assert reader.provenance
         assert all(name.startswith("provenance/") for name in reader.provenance)
@@ -329,7 +327,7 @@ def test_runs_store_console_output_and_keep_the_terminal(tmp_path):
     printed = ["from python", "from the descriptor", "from a subprocess"]
     assert (result.stdout.splitlines(), result.stderr) == (printed, "to stderr\n")
     with Client(tmp_path / "repo", project="study") as client:
-        reader = client.resolve("runs/printing")
+        reader = client.get("runs/printing")
         assert sorted(reader.console().splitlines()) == sorted([*printed, "to stderr"])
         assert reader.files == [] and reader.download("console").is_dir()
 
@@ -346,8 +344,8 @@ def test_console_capture_is_optional_bounded_and_held_by_one_run(tmp_path, monke
             loud.add(b"x", name="console/000002.log")
         for run in (loud, quiet, nested):
             run.finish()
-        assert client.resolve(loud).console() == "01234567\n[cairn: console output truncated]\n"
-        assert client.resolve(quiet).console() == ""
+        assert client.get(loud).console() == "01234567\n[cairn: console output truncated]\n"
+        assert client.get(quiet).console() == ""
         with Client(tmp_path / "repo", project="study") as other:
             assert other.run("abandoned", provenance=False)._console is not None
         assert client.run("later", provenance=False)._console is not None
@@ -388,13 +386,13 @@ def test_run_decorator_starts_one_run_per_call_and_restores_context(tmp_path, mo
     contextvars.Context().run(scenario)
     assert train.__name__ == "train"
     with Client(project="study") as reader:
-        runs = [reader.resolve(f"runs/train@v{number}") for number in (1, 2, 3)]
-        assert [run.records()[0]["data"]["rate"] for run in runs] == [1, 2, 3]
-        outcomes = [run.descriptor["manifest"]["outcome"] for run in runs]
+        runs = [reader.get(f"runs/train@v{number}") for number in (1, 2, 3)]
+        assert [next(run.records())["rate"] for run in runs] == [1, 2, 3]
+        outcomes = [run.outcome for run in runs]
         assert outcomes == ["completed", "completed", "failed"]
     with Client() as reader:
-        (bare_run,) = reader.find(namespace="runs")
-        assert reader.resolve(bare_run["id"]).descriptor["manifest"]["metadata"]["bare"] is True
+        (bare_run,) = reader.find("runs/*")
+        assert bare_run.metadata["bare"] is True
 
 
 def test_run_decorator_records_dictconfig_argument(tmp_path, monkeypatch):
@@ -421,7 +419,7 @@ def test_run_decorator_records_dictconfig_argument(tmp_path, monkeypatch):
 
     assert main(DictConfig(rate=0.1)) == 0.1 and explicit(DictConfig(rate=0.2)) == 0.2
     with Client(tmp_path / "repo", project="study") as reader:
-        config = reader.resolve("runs/hydra@latest").descriptor["manifest"]["metadata"]["config"]
+        config = reader.get("runs/hydra@latest").config
         assert config == {"rate": 0.1}
-        explicit_run = reader.resolve("runs/explicit@latest")
-        assert explicit_run.descriptor["manifest"]["metadata"]["config"] == {"fixed": 1}
+        explicit_run = reader.get("runs/explicit@latest")
+        assert explicit_run.config == {"fixed": 1}

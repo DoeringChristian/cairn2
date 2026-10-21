@@ -84,6 +84,11 @@ class ArtifactPage(TypedDict):
     next_cursor: str | None
 
 
+class SearchPage(TypedDict):
+    items: list[ArtifactDescriptor]
+    next_cursor: str | None
+
+
 class BlobDescriptor(TypedDict):
     digest: str
     size: int
@@ -144,6 +149,17 @@ class RepositoryProtocol(Protocol):
         limit: int = 100,
         cursor: str | None = None,
     ) -> ArtifactPage: ...
+
+    def find(
+        self,
+        pattern: str,
+        *,
+        project: str = "default",
+        where: JSONValue = None,
+        order: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> SearchPage: ...
 
     def annotate(
         self,

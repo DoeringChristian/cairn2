@@ -15,6 +15,10 @@ further slashes, as in `models/training/checkpoint@latest`.
 This repository contains the Python API, storage implementation, authenticated
 HTTP API, CLI, and a client-side executable report builder. Report execution happens on the client, not on the server.
 
+[`examples/`](examples/) has small projects: a Hydra training sweep submitted
+with Slurm, PBS, submitit or HyperQueue, a Make/Snakemake pipeline, a minimal report and a
+report tour.
+
 ## Install
 
 Python 3.11 or newer is required. From this checkout:
@@ -54,8 +58,8 @@ print(run.id, run.version)
 ```
 
 `cairn.init()` installs a context-local default handle and returns that same
-explicit handle. `log`, `track`, `add`, `update`, `use`, `flush`,
-and `finish` also exist on the handle. Use explicit clients when working with
+explicit handle. `log`, `track`, `add`, `update`, `get`, `find`, `use`,
+`flush`, and `finish` also exist on the handle. Use explicit clients when working with
 several repositories or runs:
 
 ```python
@@ -65,7 +69,7 @@ with Client("./results") as client:
     with client.run("comparison", config={"learning_rate": 0.02}) as run:
         baseline = run.use("runs/baseline@latest", role="baseline")
         run.log(step=0, loss=0.25)
-        run.update({"baseline_loss": baseline.read()["final_loss"]})
+        run.update({"baseline_loss": baseline.value["final_loss"]})
     print(run.id, run.version)
 ```
 
@@ -155,7 +159,57 @@ one live artifact and its first writer. Metadata follows as ordinary ordered
 `metadata` entries. There is no separate experiment configuration column or
 run-specific storage table.
 
-## Read values and records
+## Find and read artifacts
+
+Whatever a run or report finds or uses becomes its input, so a downstream run can
+discover everything it depended on. Searches run in the repository's database, so
+only their results travel.
+
+```python
+import cairn
+
+with cairn.init("summary"):
+    runs = cairn.find("runs/fit/*")                                    # latest of each name
+    best = cairn.find("runs/fit/*", order="/value/loss", limit=1)[0]  # ranked in the database
+    data = cairn.use("datasets/points", role="training-data")
+    print(best.name, best.version, best.value["loss"])
+    for record in best.records(fields=["/step", "/loss"]):
+        print(record)
+```
+
+| Call | Returns | Recorded as inputs |
+| --- | --- | --- |
+| `cairn.find(pattern, where=None, order=None, limit=None)` | A list of readers | Every artifact it returns |
+| `cairn.use(ref, role="input")` | One reader | That artifact, with the role |
+
+References accept `namespace/name@latest`, `namespace/name@vN`,
+`namespace/name@alias`, a full artifact ID, or an unambiguous hexadecimal ID
+prefix of at least eight characters; omitting the selector means `latest`. A
+pattern is a reference with shell-style wildcards: `*` matches within one level
+of the name and `**` across levels. `runs/fit/*` is the latest version of every
+name one level below `runs/fit/`, `runs/fit/**` of every name below it,
+`runs/fit/*@*` every version, `runs/fit/*@best` each name's `best` alias and
+`*/baseline` every namespace's latest `baseline`. Names cannot contain `*`.
+Searches return finished artifacts only, sorted by name, with numbers in names
+compared as numbers (`seed2` before `seed10`), unless `order` names a field:
+`"/value/loss"` ascending, `"-/value/loss"` descending. `where` takes the
+predicates described under [Annotate and find artifacts](#annotate-and-find-artifacts);
+paths start with `/value`, `/metadata` or `/annotations`.
+
+A reader has `id`, `project`, `namespace`, `name`, `version`, `outcome`,
+`created_at`, `finished_at`, `annotations`, `value`, `config`, `metadata`,
+`dependencies`, `files`, `file(name)`, `download()`, `console()` and
+`records(where=None, fields=None)`, which streams the logged data page by page;
+`str(reader)` is `runs/fit/cubic@v2`. Files and records are fetched only when
+asked for.
+
+Whatever `find` returns is recorded, because whatever the code learns from it can
+shape the result; artifacts a `where` or `order` only compared in the database
+are not. Like `cairn.log`, `cairn.find` and `cairn.use` belong to
+the current run, artifact or report and raise without one; a run's own
+`run.find` and `run.use` record to that run. A finished run can no longer record
+and raises `Conflict`. To read without recording, use a `Client`, with
+`client.get(ref)` and `client.find(pattern, ...)`:
 
 ```python
 from cairn import Client, Table
@@ -163,17 +217,12 @@ from cairn import Client, Table
 with Client("./results") as client:
     dataset = client.start("datasets", "small-sample")
     dataset.finish(value=Table([{"x": 1, "y": 2}, {"x": 2, "y": 4}]))
-    rows = client.resolve("datasets/small-sample@latest").read().load()
-
-    baseline = client.resolve("runs/baseline@latest")
-    records = baseline.records(where={"path": "/loss", "op": "lt", "value": 0.5})
-    print(rows, [record["data"] for record in records])
+    rows = client.get("datasets/small-sample").value.load()
+    baseline = client.get("runs/baseline")
+    print(rows, list(baseline.records(where={"path": "/loss", "op": "lt", "value": 0.5})))
 ```
 
-Readers pin the resolved finished artifact ID. References accept
-`namespace/name@latest`, `namespace/name@vN`, `namespace/name@alias`, a full
-artifact ID, or an unambiguous hexadecimal ID prefix of at least eight characters.
-Omitting the selector means `latest`. Direct IDs are stable before and after
+Readers pin the exact finished artifact. Direct IDs are stable before and after
 finish. Live inspection/querying uses the backend; SDK readers and report inputs
 require finished artifacts. There is no revision or snapshot API. Starting again
 under the same name creates a new artifact ID; finishing assigns the next label.
@@ -218,11 +267,11 @@ with Client("./results", project="study") as client:
         "review": "approved",
         "title": "Main baseline",
     })
-    for match in client.find(namespace="runs", where={"and": [
+    for match in client.find("runs/*", where={"and": [
         {"path": "/annotations/tags", "op": "contains", "value": "paper"},
         {"path": "/metadata/config/learning_rate", "op": "lt", "value": 0.01},
     ]}):
-        print(match["id"], match["annotations"])
+        print(match, match.annotations)
     client.annotate(artifact["id"], {"review": "published", "title": None},
                     expected_etag=artifact["annotations_etag"])
 ```
@@ -243,9 +292,9 @@ client.annotate("reports/direction", {"tags": ["paper"]}, target="name")
 client.backend.annotation_layers(artifact["id"])  # {"name": ..., "artifact": ..., ...}
 ```
 
-`find()` yields artifact descriptors and fetches pages automatically; `limit` caps
-the total results. Without `state`, live and finished artifacts are included.
-Predicate paths start with `/metadata` or `/annotations`. `contains` means exact
+`find()` returns readers and fetches pages automatically; `limit` caps the total
+results. Predicate paths start with `/value`, `/metadata` or `/annotations`;
+`client.backend.list_artifacts` below also lists live artifacts. `contains` means exact
 scalar array membership, not substring matching. Other operators match record
 queries. All filters execute in SQL before pagination. SQLite has a generic indexed
 lookup for annotation array members; PostgreSQL uses a GIN annotation containment
@@ -460,14 +509,15 @@ title: Baseline analysis
 ```{python}
 import cairn
 
-baseline = cairn.use("runs/baseline@latest")
-print(baseline.read())
+baseline = cairn.use("runs/baseline")
+print(baseline.value)
 ```
 ````
 
-`cairn.use(ref)` and the supplied `client.resolve(ref)` resolve a reference once
-per build, so `@latest` gives the same version throughout a build. The manifest
-lists each reference with the exact version it resolved to. A rebuild runs the
+`cairn.find` and `cairn.use` read the repository the report is built
+from and record inputs as in a run. A reference resolves once per build, so
+`@latest` gives the same version throughout a build. The manifest lists every
+artifact the report read with the reference or pattern that found it. A rebuild runs the
 code again and resolves again; write `@vN` or an ID to always read one version.
 Front-matter `cairn.inputs` (`baseline: runs/baseline@latest`) resolves several
 inputs together before any cell executes and exposes them as `inputs["baseline"]`.
@@ -548,16 +598,15 @@ The implemented QMD/Markdown subset covers:
   that report.
 
 `cairn.resources` lists additional relative files/directories. Includes use
-`{{< include relative.qmd >}}`. See [the example](examples/report.qmd).
+`{{< include relative.qmd >}}`. See [the example](examples/minimal-report/report.qmd).
 
 This is a QMD subset, not full Quarto. It does not implement CSL styles,
 arbitrary Quarto extensions, other shortcodes, other execution languages, or
 Markdown raw HTML. Rich HTML output of cells is placed in an iframe without
 scripts or external resource access. External image URLs and source paths
-escaping the report directory are rejected. The supplied `client` is a read-only
-report reader scoped to the report's project; reading a live artifact fails.
-Independently opened clients retain their normal behavior and are not recorded,
-and inside a run started by a cell, `cairn.use` records to that run. Report Python is trusted local code, not
+escaping the report directory are rejected. Reading a live artifact fails.
+`cairn.Client()` opens the repository the report is built from; explicit clients
+are not recorded, and inside a run started by a cell, reads record to that run. Report Python is trusted local code, not
 a sandbox; external I/O is outside this reproducibility policy.
 
 Failed builds keep their notebook and diagnostics and cannot be published.

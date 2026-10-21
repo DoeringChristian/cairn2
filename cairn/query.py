@@ -247,8 +247,25 @@ def member_keys(value):
     return result
 
 
-def discovery_predicate(where, metadata, annotations, artifact_id, dialect, members):
-    """Compile discovery filters in SQL over explicit metadata/annotations roots."""
+def _pointer(tokens):
+    return "".join("/" + token.replace("~", "~0").replace("/", "~1") for token in tokens)
+
+
+def _root(path, manifest):
+    """Split a discovery path into its root and the pointer below it."""
+    tokens = parts(path)
+    roots = {"metadata", "annotations"} | ({"value"} if manifest is not None else set())
+    if not tokens or tokens[0] not in roots:
+        raise ValidationError(
+            "Paths must start with /value, /metadata or /annotations"
+            if manifest is not None
+            else "Discovery paths must start with /metadata or /annotations"
+        )
+    return tokens[0], _pointer(tokens[1:])
+
+
+def discovery_predicate(where, metadata, annotations, artifact_id, dialect, members, manifest=None):
+    """Compile discovery filters in SQL over explicit value/metadata/annotations roots."""
     if where is None:
         return sa.true()
     _validate_predicate(where)
@@ -257,11 +274,10 @@ def discovery_predicate(where, metadata, annotations, artifact_id, dialect, memb
         for operator, combine in (("and", sa.and_), ("or", sa.or_)):
             if operator in node:
                 return combine(*(compile_node(child) for child in node[operator]))
-        tokens = parts(node["path"])
-        if not tokens or tokens[0] not in {"metadata", "annotations"}:
-            raise ValidationError("Discovery paths must start with /metadata or /annotations")
-        namespace, tokens = tokens[0], tokens[1:]
-        pointer = "".join("/" + token.replace("~", "~0").replace("/", "~1") for token in tokens)
+        namespace, pointer = _root(node["path"], manifest)
+        tokens = parts(pointer)
+        if namespace == "value":
+            return _compile_predicate({**node, "path": "/value" + pointer}, manifest, dialect)
         column = metadata if namespace == "metadata" else annotations
         if namespace == "annotations" and node["op"] == "contains":
             if dialect == "sqlite":
@@ -311,6 +327,23 @@ def _compile_predicate(where, column, dialect):
             else sa.false()
         )
     return _comparison(field, operation, value, dialect)
+
+
+def sort_keys(path, columns, dialect, *, descending=False):
+    """Order by a field: numbers, then strings, then anything else; missing fields last."""
+    namespace, pointer = _root(path, columns["value"])
+    column, pointer = (
+        (columns["value"], "/value" + pointer)
+        if namespace == "value"
+        else (columns[namespace], pointer)
+    )
+    kind, text, number = _field(column, pointer, dialect)
+    rank = sa.case((kind == "number", 0), (kind == "string", 1), else_=2)
+    keys = [
+        sa.case((kind == "number", number)),
+        sa.case((kind == "string", text.collate("C" if dialect == "postgresql" else "BINARY"))),
+    ]
+    return [rank, *(key.desc() if descending else key.asc() for key in keys)]
 
 
 def predicate(where, column, dialect):

@@ -75,15 +75,15 @@ A footnote can cross a Python cell.[^note]
 #| tbl-cap: Frozen scores
 import cairn
 from IPython.display import Markdown, display
-assert client.resolve("runs/baseline@latest").id == inputs["baseline"].id
-assert inputs["baseline"].records()[0]["data"] == inputs["baseline"].read()
-assert cairn.use("runs/other@latest").read()["score"] == 3
-assert client.use("runs/other@latest", role="other").id == cairn.use("runs/other@latest").id
+assert cairn.use("runs/baseline@latest").id == inputs["baseline"].id
+assert next(inputs["baseline"].records()) == inputs["baseline"].value
+assert cairn.use("runs/other@latest").value["score"] == 3
+assert cairn.use("runs/other@latest", role="other").id == cairn.use("runs/other@latest").id
 # Explicit independent clients keep their ordinary semantics in the kernel.
 from cairn.sdk import Client
 with Client(_endpoint, project=_project, token=_source_client.token) as independent:
-    assert independent.resolve("runs/baseline@latest").read()["score"] == 99
-print("frozen score:", inputs["baseline"].read()["score"])
+    assert independent.get("runs/baseline@latest").value["score"] == 99
+print("frozen score:", inputs["baseline"].value["score"])
 display(Markdown("| item | score |\\n| - | - |\\n| baseline | 7 |"))
 ```
 
@@ -125,7 +125,7 @@ See @eq-square.
     publication = reports.publish(result.path, client=client, name="analysis/summary")
     version = publication
     assert version["namespace"] == "reports"
-    assert client.resolve("reports/analysis/summary@latest").descriptor["id"] == version["id"]
+    assert client.get("reports/analysis/summary@latest").id == version["id"]
     assert {d["artifact_id"] for d in version["manifest"]["dependencies"]} == {
         original["id"],
         other["id"],
@@ -463,7 +463,7 @@ def test_failure_diagnostics(tmp_path):
     seed(client.backend)
     source = tmp_path / "bad.qmd"
     source.write_text(
-        '# Failure\n\n```{python}\nprint("before failure")\nclient.resolve("runs/missing@latest")\n```\n'
+        '# Failure\n\n```{python}\nprint("before failure")\nimport cairn\ncairn.use("runs/missing@latest")\n```\n'
     )
     with pytest.raises(reports.ReportBuildError) as failure:
         reports.build(source, tmp_path / "failed", client=client, timeout=30)
@@ -574,29 +574,24 @@ def test_report_reader_resolves_once_records_reads_and_keeps_scope(client, tmp_p
     pins = [{"requested": "runs/baseline@latest", "artifact_id": original["id"]}]
     reader = reports.ReportInputs(client, pins, str(record))
     latest = seed(client.backend, 99)
-    assert reader.resolve("runs/baseline@latest").read() == {"score": 7}
-    assert reader.backend.resolve_many([original["id"]])[0]["id"] == original["id"]
-    assert reader.backend.query("runs/baseline@latest")["items"][0]["data"] == {"score": 7}
+    assert reader.use("runs/baseline@latest").value == {"score": 7}
     assert not record.exists()
-    assert reader.use(latest["id"], role="ablation").read() == {"score": 99}
+    assert reader.use(latest["id"], role="ablation").value == {"score": 99}
     other = seed(client.backend, 5, name="other")
-    assert reader.backend.query("runs/other@latest")["items"][0]["data"] == {"score": 5}
+    assert next(reader.use("runs/other@latest").records()) == {"score": 5}
     seed(client.backend, 6, name="other")
-    assert reader.resolve("runs/other@latest").id == other["id"]
+    assert reader.use("runs/other@latest").id == other["id"]
     assert [json.loads(line) for line in record.read_text().splitlines()] == [
         {"requested": latest["id"], "artifact_id": latest["id"], "role": "ablation"},
         {"requested": "runs/other@latest", "artifact_id": other["id"], "role": "input"},
     ]
     opened = client.backend.start("default", "runs", "open")
     with pytest.raises(ValidationError, match="finish the artifact"):
-        reader.resolve(opened["artifact"]["id"])
-    with pytest.raises(ValidationError, match="scoped to its project"):
-        reader.backend.resolve(original["id"], project="other")
+        reader.use(opened["artifact"]["id"])
     assert not hasattr(reader, "start")
-    assert not hasattr(reader.backend, "append_batch")
     with Client(tmp_path / "independent") as independent:
         separate = seed(independent.backend, 123)
-        assert independent.resolve("runs/baseline@latest").id == separate["id"]
+        assert independent.get("runs/baseline@latest").id == separate["id"]
 
 
 def test_native_v2_externalizes_all_mime_payloads_without_mutating_notebook(tmp_path):
