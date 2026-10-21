@@ -137,7 +137,8 @@ On a run, artifact or report, `find(pattern, where=, order=, limit=)` returns
 `use(ref, role=)` returns one and records it with the role. Each artifact and
 role is recorded once per run; recording after finish raises Conflict. The top-level
 `cairn.find` and `cairn.use` require a run or report. `Client.get(ref)` and
-`Client.find(...)` read without recording. Patterns are references with
+`Client.find(...)` read without recording. `Reader.dependencies` lists an
+artifact's inputs and `Reader.inputs(role=...)` those recorded with one role. Patterns are references with
 shell-style wildcards: `*` matches within one level of the name and `**` across
 levels; without a selector they match each name's `latest`. Names and aliases
 cannot contain `*`. `Reader.query` pages raw entries with a cursor. No revision

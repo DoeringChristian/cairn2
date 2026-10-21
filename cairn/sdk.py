@@ -565,7 +565,16 @@ class Reader:
     @property
     def dependencies(self):
         """The artifact's own inputs, as readers."""
-        ids = [item["artifact_id"] for item in self._manifest["dependencies"]]
+        return self._readers(item["artifact_id"] for item in self._manifest["dependencies"])
+
+    def inputs(self, *, role):
+        """The artifact's inputs recorded with this role, as readers."""
+        return self._readers(
+            item["artifact_id"] for item in self._manifest["dependencies"] if item["role"] == role
+        )
+
+    def _readers(self, ids):
+        ids = list(dict.fromkeys(ids))
         if not ids:
             return []
         return [

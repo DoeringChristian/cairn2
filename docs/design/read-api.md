@@ -75,7 +75,7 @@ returned; nothing matching gives an empty list. The database evaluates all of it
 
 A reader is one finished artifact: `id`, `project`, `namespace`, `name`,
 `version`, `outcome`, `created_at`, `finished_at`, `annotations`, `value`,
-`config`, `metadata`, `dependencies`, `files`, `file(name)`, `download()`,
+`config`, `metadata`, `dependencies`, `inputs(role=...)`, `files`, `file(name)`, `download()`,
 `console()`, `records(where=None, fields=None)` and `str(reader)`
 (`runs/fit/cubic@v2`). Files are fetched into the disk cache and records page by
 page, only when asked for. `reader.annotate(patch)` edits the annotations.

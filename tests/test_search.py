@@ -153,6 +153,9 @@ def test_runs_record_what_they_find_and_use(client):
         {"artifact_id": dataset, "role": "training-data"},
     ]
     run.finish()
+    summary = client.get(run.id)
+    assert [item.id for item in summary.inputs(role="training-data")] == [dataset]
+    assert len(summary.dependencies) == 3
     assert found[0].value == {"loss": 0.1}
     with pytest.raises(Conflict, match="can no longer record what it reads"):
         run.find("runs/fit/*@v1")

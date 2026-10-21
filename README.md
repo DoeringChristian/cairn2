@@ -198,7 +198,8 @@ paths start with `/value`, `/metadata` or `/annotations`.
 
 A reader has `id`, `project`, `namespace`, `name`, `version`, `outcome`,
 `created_at`, `finished_at`, `annotations`, `value`, `config`, `metadata`,
-`dependencies`, `files`, `file(name)`, `download()`, `console()` and
+`dependencies`, `inputs(role=...)` (the dependencies recorded with that role),
+`files`, `file(name)`, `download()`, `console()` and
 `records(where=None, fields=None)`, which streams the logged data page by page;
 `str(reader)` is `runs/fit/cubic@v2`. Files and records are fetched only when
 asked for.
