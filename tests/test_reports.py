@@ -1,4 +1,5 @@
 import json
+import re
 import socket
 import threading
 import time
@@ -190,6 +191,94 @@ Term
     assert image["attributes"]["width"] == "50%" and "id" not in image["attributes"]
 
 
+def test_fenced_divs_hold_cells_columns_tabs_figures_and_margins(tmp_path):
+    (tmp_path / "box.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"/>'
+    )
+    source = tmp_path / "layout.qmd"
+    source.write_text("""::: {.columns}
+::: {.column width="40%"}
+Left text.
+:::
+::: {.column}
+```{python}
+print("right cell")
+```
+:::
+:::
+
+::: {.panel-tabset}
+## Alpha
+```{python}
+print("alpha output")
+```
+
+## Beta
+Second tab.
+:::
+
+::: {#fig-pair layout="[[2,1]]"}
+![Left box](box.svg){#fig-left}
+
+![Right box](box.svg)
+
+Two boxes.
+:::
+
+See @fig-pair and @fig-left.
+
+::: {.callout-tip title="Tip"}
+```{python}
+print("in callout")
+```
+:::
+
+```{python}
+#| layout-ncol: 2
+#| fig-subcap: [first, second]
+#| column: margin
+from IPython.display import SVG, display
+print("text first")
+for _ in range(2): display(SVG(open("box.svg").read()))
+```
+""")
+    result = reports.build(source, tmp_path / "build", timeout=30)
+    page = re.sub(
+        r' data-source-path="[^"]*" data-line-start="\d+" data-line-end="\d+"',
+        "",
+        (result.path / "index.html").read_text(),
+    )
+    assert re.search(r'<div class="column" style="flex:0 0 40%"><section [^>]*><p>Left text', page)
+    assert re.search(
+        r'<div class="column"><section [^>]*><pre class="code">.*right cell', page, re.DOTALL
+    )
+    assert re.search(
+        r'<div class="tab"><p class="tab-title">Alpha</p><section .*alpha output', page, re.DOTALL
+    )
+    assert '<p class="tab-title">Beta</p>' in page and "## Beta" not in page
+    assert 'style="width:66.6667%"' in page and 'style="width:33.3333%"' in page
+    assert "<figcaption>(a) Left box</figcaption>" in page
+    assert "<figcaption>(b) Right box</figcaption>" in page
+    assert re.search(r'<figcaption class="source-block" id="block-\d+">Figure 1: Two boxes', page)
+    assert 'href="#fig-left">Figure 1(a)</a>' in page
+    assert re.search(
+        r'<aside class="callout tip"><p class="callout-title">Tip</p><section .*in callout',
+        page,
+        re.DOTALL,
+    )
+    assert '<section class="source-block column-margin"' in page
+    assert "<figcaption>(a) first</figcaption>" in page and "(b) second" in page
+    document = json.loads((result.path / "document.json").read_text())
+    kinds = [block["kind"] for block in document["blocks"]]
+    assert kinds.count("open") == kinds.count("close") == 8
+    figure = next(b for b in document["blocks"] if b.get("attributes", {}).get("id") == "fig-pair")
+    assert figure["grid"] == [[66.6667, 33.3333]]
+    assert any(block.get("caption") for block in document["blocks"])
+    with pytest.raises(reports.ReportBuildError, match="column must be one of"):
+        source.write_text("```{python}\n#| column: side\n```\n")
+        reports.build(source)
+
+
 def test_includes_resources_images_static_html_and_source_locations(tmp_path):
     (tmp_path / "parts").mkdir()
     (tmp_path / "data.txt").write_text("captured data")
@@ -232,8 +321,8 @@ Sources and local resources are captured.
     assert (result.path / "sources/data.txt").read_text() == "captured data"
     assert len(list((result.path / "assets").glob("*.svg"))) == 2
     document = json.loads((result.path / "document.json").read_text())
-    assert document["version"] == 2
-    assert result.manifest["document_version"] == 2
+    assert document["version"] == 3
+    assert result.manifest["document_version"] == 3
     code = next(block for block in document["blocks"] if block["kind"] == "code")
     assert code["source"] == {"path": "parts/results.qmd", "line_start": 5, "line_end": 12}
     assert len(code["outputs"]) == 3

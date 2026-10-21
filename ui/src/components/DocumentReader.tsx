@@ -20,7 +20,8 @@ type Source={path:string;line_start:number;line_end:number};
 type Node={source?:Source;type:string;tag:string;nesting:number;content:string;attributes?:Record<string,string>;attrs?:Record<string,string>|[string,string][]|null;children?:Node[];info?:string;meta?:Record<string,number>;hidden?:boolean};
 type Asset={asset:string;mime:string;encoding:"binary"|"utf-8"|"json"};
 type Output={ui_payload?:{path:string;mime:string};output_type:string;name?:string;text?:string|string[]|Asset;ename?:string;evalue?:string;data?:Record<string,unknown>};
-type Block={id:string;kind:string;source:Source;text?:string;nodes?:Node[];code?:string;label?:string;options?:{echo?:boolean;output?:boolean;'fig-cap'?:string;'tbl-cap'?:string};outputs?:Output[]};
+type Block={id:string;kind:string;source:Source;text?:string;nodes?:Node[];code?:string;label?:string;options?:{echo?:boolean;output?:boolean;'fig-cap'?:string;'tbl-cap'?:string;'fig-subcap'?:string[];'layout-ncol'?:number;column?:string;'cap-location'?:string};outputs?:Output[];attributes?:Record<string,unknown>;grid?:number[][];caption?:boolean;caption_prefix?:string};
+type Tree={block:Block;index:number;children:Tree[]};
 type Document={format:string;version:number;title:string;blocks:Block[];labels:Record<string,{text:string}>};
 const md=new MarkdownIt({html:false,linkify:false}).use(footnote);
 const tags=new Set(['p','h1','h2','h3','h4','h5','h6','table','thead','tbody','tr','th','td','ul','ol','li','blockquote','strong','em','s','code','pre','a','figure','figcaption','span','div','aside','sup','sub','dl','dt','dd']);
@@ -79,6 +80,29 @@ function nodesToReact(nodes:Node[],base:string,source:Source,blobs:BlobRef[],lab
     }return out;
   }return children();
 }
+/** Nest blocks between the open and close markers of fenced divs. */
+function tree(blocks:Block[]):Tree[] {
+  const root:Tree[]=[],stack=[root];
+  blocks.forEach((block,index)=>{if(block.kind==='close'){if(stack.length>1)stack.pop();return;}const node={block,index,children:[]};stack[stack.length-1].push(node);if(block.kind==='open')stack.push(node.children);});
+  return root;
+}
+const callout=/^callout-(note|tip|warning|important|caution)$/;
+/** A fenced div: callout, tabset, columns, a figure with its layout grid and caption, or a plain div. */
+function Container({node,render}: {node:Tree;render:(node:Tree)=>ReactNode}) {
+  const attrs=node.block.attributes||{},classes=(attrs.class as string[]|undefined)||[],id=String(attrs.id||''),[tab,setTab]=useState(0);
+  const parts=node.children.filter(child=>!child.block.caption),captions=node.children.filter(child=>child.block.caption);
+  let body:ReactNode=parts.map(render);
+  if(node.block.grid){let at=0;body=node.block.grid.map((row,r)=><div key={r} className="native-layout-row">{row.map((width,c)=>{const cell=parts[at++];return cell&&<div key={c} className="native-layout-cell" style={{width:`${width}%`}}>{render(cell)}</div>;})}</div>);}
+  const kind=classes.map(name=>callout.exec(name)?.[1]).find(Boolean);
+  if(kind)return <aside className={`admonition ${kind}`}><p className="admonition-title">{String(attrs.title||kind[0].toUpperCase()+kind.slice(1))}</p>{body}</aside>;
+  if(classes.includes('panel-tabset')){
+    const tabs=parts.filter(part=>(part.block.attributes?.class as string[]|undefined)?.includes('tab')),current=tabs[Math.min(tab,tabs.length-1)];
+    return <div className="native-tabset"><div className="native-tabs" role="tablist">{tabs.map((part,i)=><button key={part.block.id} type="button" role="tab" aria-selected={part===current} onClick={()=>setTab(i)}>{String(part.block.attributes?.title||'')}</button>)}</div>{current&&<div role="tabpanel">{current.children.map(render)}</div>}</div>;
+  }
+  const style=classes.includes('column')&&length(String(attrs.width||''))?{flex:`0 0 ${length(String(attrs.width))}`}:undefined;
+  const className=classes.filter(name=>/^[\w-]+$/.test(name)).map(name=>name==='columns'||name==='column'?`native-${name}`:name).join(' ')||undefined;
+  return createElement(/^(fig|tbl)-/.test(id)?'figure':'div',{id:/^(sec|fig|tbl|eq)-[\w.-]+$/.test(id)?id:undefined,className,style},body,captions.map(render));
+}
 function AssetOutput({asset,output,mime,...props}: {asset:Asset;output:Output;mime?:string;base:string;source:Source;blobs:BlobRef[];labels:Document['labels'];htmlUrl:string}) {
   const host=useRef<HTMLDivElement>(null),[payload,setPayload]=useState<unknown>(),[error,setError]=useState<Error>();
   const src=resource(props.base,asset.asset,props.source,props.blobs);
@@ -93,7 +117,7 @@ function AssetOutput({asset,output,mime,...props}: {asset:Asset;output:Output;mi
   return <div ref={host} className="native-asset-output" data-output-mime={mime||"text/plain"}>{error?<ErrorNote error={error}/>:payload===undefined?<Loading what="Loading output"/>:<OutputView {...props} output={mime?{...output,data:{[mime]:payload}}:{...output,text:String(payload)}}/>}</div>;
 }
 function OutputView({output,base,source,blobs,labels,htmlUrl,formatVersion=1}: {formatVersion?:number;output:Output;base:string;source:Source;blobs:BlobRef[];labels:Document['labels'];htmlUrl:string}) {
-  if(formatVersion===2) {
+  if(formatVersion>=2) {
     const data=output.data||{};
     const mime=['application/vnd.plotly.v1+json','video/mp4','video/webm','audio/wav','audio/mpeg','audio/ogg','image/svg+xml','image/png','image/jpeg','text/html','text/markdown','application/json','text/plain'].find(mime=>data[mime]);
     const asset=(output.output_type==='stream'?output.text:mime?data[mime]:undefined) as Asset|undefined;
@@ -131,19 +155,31 @@ function OutputView({output,base,source,blobs,labels,htmlUrl,formatVersion=1}: {
 export const DocumentReader = memo(function DocumentReader({version,blobs,project,documentVersion=1}: {version:string;blobs:BlobRef[];project:string;documentVersion?:number}) {
   const container=useRef<HTMLElement>(null);
   const base=`/ui-api/reports/${encodeURIComponent(version)}/`;
-  const {data,error,loading}=useResource<Document>(base+(documentVersion===2?'document.json':'preview.json'),0,true,true);
-  const renderedBlocks=useMemo(()=>data?.format==='cairn/document'&&[1,2].includes(data.version)?data.blocks.map((block,blockIndex)=>{
-    const caption=block.options?.['fig-cap']||block.options?.['tbl-cap'];
-    return <div className="native-block" key={block.id} id={block.label||block.id} data-source-path={block.source.path} data-line-start={block.source.line_start} data-line-end={block.source.line_end}>
-      {block.kind==='markdown'?nodesToReact(block.nodes||[],base,block.source,blobs,data.labels):<>
-        {block.options?.echo!==false&&<details className="native-code"><summary>Code · {block.source.path}:{block.source.line_start}</summary><SyntaxCode code={block.code||''} language="python"/></details>}
-        {block.options?.output!==false&&block.outputs?.map((output,i)=><OutputView key={i} formatVersion={data.version} htmlUrl={`${base}html/${blockIndex}/${i}`} output={output} base={base} source={block.source} blobs={blobs} labels={data.labels}/>)}
-        {caption&&<p className="native-caption">{block.label&&data.labels[block.label]?`${data.labels[block.label].text}: `:''}{inlineText(caption,data.labels)}</p>}
-      </>}
-    </div>;
-  }):null,[data,base,blobs]);
+  const {data,error,loading}=useResource<Document>(base+(documentVersion>=2?'document.json':'preview.json'),0,true,true);
+  const renderedBlocks=useMemo(()=>{
+    if(data?.format!=='cairn/document'||![1,2,3].includes(data.version))return null;
+    const renderBlock=(block:Block,blockIndex:number)=>{
+      const caption=block.options?.['fig-cap']||block.options?.['tbl-cap'],subcaptions=block.options?.['fig-subcap']||[],columns=block.options?.['layout-ncol'];
+      let subcaption=0;
+      const outputs=block.outputs?.map((output,i)=>{
+        const view=<OutputView key={i} formatVersion={data.version} htmlUrl={`${base}html/${blockIndex}/${i}`} output={output} base={base} source={block.source} blobs={blobs} labels={data.labels}/>;
+        if(!['display_data','execute_result'].includes(output.output_type)||subcaption>=subcaptions.length)return view;
+        const n=subcaption++;return <figure key={i}>{view}<figcaption>({String.fromCharCode(97+n)}) {inlineText(subcaptions[n],data.labels)}</figcaption></figure>;
+      });
+      const prefix=block.caption_prefix?`${block.caption_prefix} `:block.label&&data.labels[block.label]?`${data.labels[block.label].text}: `:'';
+      return <div className={`native-block${block.options?.column?` column-${block.options.column}`:''}`} key={block.id} id={block.label||block.id} data-source-path={block.source.path} data-line-start={block.source.line_start} data-line-end={block.source.line_end}>
+        {block.kind==='markdown'?nodesToReact(block.nodes||[],base,block.source,blobs,data.labels):<>
+          {block.options?.echo!==false&&<details className="native-code"><summary>Code · {block.source.path}:{block.source.line_start}</summary><SyntaxCode code={block.code||''} language="python"/></details>}
+          {block.options?.output!==false&&(columns?<div className="native-layout-grid" style={{gridTemplateColumns:`repeat(${columns},minmax(0,1fr))`}}>{outputs?.map((view,i)=><div key={i}>{view}</div>)}</div>:outputs)}
+          {caption&&<p className={`native-caption${block.options?.['cap-location']==='margin'?' margin-caption':''}`}>{prefix}{inlineText(caption,data.labels)}</p>}
+        </>}
+      </div>;
+    };
+    const renderNode=(node:Tree):ReactNode=>node.block.kind==='open'?<Container key={node.block.id} node={node} render={renderNode}/>:renderBlock(node.block,node.index);
+    return tree(data.blocks).map(renderNode);
+  },[data,base,blobs]);
   if(loading&&!data)return <Loading what="Loading report"/>;if(error&&!data)return <ErrorNote error={error}/>;
-  if(!data||data.format!=='cairn/document'||![1,2].includes(data.version))return <Hint>This document format is not supported by this reader.</Hint>;
+  if(!data||data.format!=='cairn/document'||![1,2,3].includes(data.version))return <Hint>This document format is not supported by this reader.</Hint>;
   return <ReportArtifactContext.Provider value={version}><ReportCommentsProvider key={version} artifact={version}><div className="report-reader-layout"><ReportToc container={container} documentKey={data}/><article ref={container} className="native-document report-prose" aria-label={data.title}>{renderedBlocks}<SelectionCopy container={container} version={version}/></article><ReportComments container={container} artifact={version} project={project}/></div></ReportCommentsProvider></ReportArtifactContext.Provider>;
 }, (previous,next)=>previous.version===next.version&&previous.documentVersion===next.documentVersion&&previous.project===next.project&&
   (previous.blobs===next.blobs||JSON.stringify(previous.blobs)===JSON.stringify(next.blobs)));

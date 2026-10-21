@@ -224,13 +224,34 @@ def _cell_options(source: str, yaml) -> dict:
         raise ValidationError(f"Invalid Python cell options: {exc}") from exc
     if not isinstance(value, dict):
         raise ValidationError("Python cell options must be a mapping")
-    supported = {"label", "fig-cap", "tbl-cap", "echo", "eval", "output"}
+    supported = {
+        "label",
+        "fig-cap",
+        "tbl-cap",
+        "fig-subcap",
+        "echo",
+        "eval",
+        "output",
+        "layout-ncol",
+        "column",
+        "cap-location",
+    }
     unknown = value.keys() - supported
     if unknown:
         raise ValidationError(f"Unsupported cell options: {', '.join(sorted(unknown))}")
     for key in ("echo", "eval", "output"):
         if key in value and not isinstance(value[key], bool):
             raise ValidationError(f"Cell option {key} must be true or false")
+    if "layout-ncol" in value and (
+        type(value["layout-ncol"]) is not int or value["layout-ncol"] < 1
+    ):
+        raise ValidationError("Cell option layout-ncol must be a positive integer")
+    if "fig-subcap" in value and not isinstance(value["fig-subcap"], list):
+        raise ValidationError("Cell option fig-subcap must be a list of captions")
+    if value.get("column", "margin") not in _COLUMNS:
+        raise ValidationError(f"Cell option column must be one of {', '.join(sorted(_COLUMNS))}")
+    if value.get("cap-location", "bottom") not in {"top", "bottom", "margin"}:
+        raise ValidationError("Cell option cap-location must be top, bottom or margin")
     if "label" in value and not re.fullmatch(r"[\w.-]+", str(value["label"])):
         raise ValidationError("Cell labels must contain only letters, digits, _, . and -")
     return value
@@ -511,7 +532,20 @@ def _markdown_engine(deps):
         title = re.search(r'title="([^"]*)"', token.info)
         return f'<aside class="callout {kind}"><p class="callout-title">{html.escape(title.group(1) if title else kind.title())}</p>\n'
 
+    def div(renderer, tokens, index, options, env):
+        if tokens[index].nesting < 0:
+            return "</div>\n"
+        attributes = _div_attributes(tokens[index].info)
+        names = html.escape(" ".join(attributes["class"]), quote=True)
+        return f'<div class="{names}">\n'
+
     md.use(container_plugin, "callout", validate=validate, render=callout)
+    md.use(
+        container_plugin,
+        "div",
+        validate=lambda info, markup: bool(re.match(r"\s*\{", info)),
+        render=div,
+    )
     return md
 
 
@@ -530,24 +564,119 @@ def _qmd_math_labels(text):
     return "".join(lines)
 
 
+def _div_attributes(info: str) -> dict:
+    """Attributes of a fenced div: {#id .class key=value}, or a bare class name."""
+    info = info.strip()
+    if not info.startswith("{"):
+        return {"class": info.split()[:1]}
+    attributes = {"class": []}
+    for item in _ATTRIBUTE.finditer(info.strip("{} ")):
+        if item.group(1) == "#":
+            attributes["id"] = item.group(2)
+        elif item.group(1) == ".":
+            attributes["class"].append(item.group(2))
+        else:
+            attributes[item.group(3)] = next(v for v in item.group(4, 5, 6) if v is not None)
+    return attributes
+
+
+def _splits(attributes: dict) -> bool:
+    """Figure and layout divs hold one child per block, so each can be placed."""
+    return attributes.get("id", "").startswith(("fig-", "tbl-")) or any(
+        key in attributes for key in ("layout", "layout-ncol", "layout-nrow")
+    )
+
+
+def _grid(attributes: dict, count: int) -> list[list[float]]:
+    """Rows of cell widths in percent from layout, layout-ncol or layout-nrow."""
+    try:
+        if "layout" in attributes:
+            rows = json.loads(attributes["layout"])
+        elif "layout-nrow" in attributes:
+            rows = [[1] * -(-count // int(attributes["layout-nrow"]))]
+        else:
+            rows = [[1] * int(attributes["layout-ncol"])]
+        widths = [[100 * abs(w) / sum(abs(v) for v in row) for w in row] for row in rows]
+    except (ValueError, TypeError, ZeroDivisionError) as exc:
+        raise ValidationError(f"Invalid figure layout: {exc}") from exc
+    if not widths or not all(widths):
+        raise ValidationError("Figure layouts need at least one cell per row")
+    grid = []
+    while sum(map(len, grid)) < count:
+        grid.append([round(w, 4) for w in widths[len(grid) % len(widths)]])
+    return grid
+
+
 def _segments(text: str, mapping: list, md, yaml) -> list[dict]:
+    """Split the source into Markdown, Python cells and the fenced divs around them."""
     lines = text.splitlines(keepends=True)
-    segments, position = [], 0
+    segments, position, stack = [], 0, []
+
+    def markdown(end):
+        if "".join(lines[position:end]).strip():
+            segments.append(
+                {
+                    "kind": "markdown",
+                    "text": "".join(lines[position:end]),
+                    "offset": position,
+                    "source": _source_range(mapping, position, end),
+                }
+            )
+        return max(position, end)
+
+    def marker(kind, line, **fields):
+        segments.append(
+            {
+                "kind": kind,
+                "offset": line,
+                "source": _source_range(mapping, line, line + 1),
+                **fields,
+            }
+        )
+
     for token in md.parse(_qmd_math_labels(text)):
+        parent = stack[-1] if stack else None
+        if token.type.startswith("container_") and token.level == len(stack) - (token.nesting < 0):
+            if token.nesting == 1:
+                start, end = token.map
+                position = markdown(start)
+                attributes = _div_attributes(token.info)
+                marker("open", start, attributes=attributes)
+                position = start + 1
+                stack.append({"end": end, "attributes": attributes, "tab": None})
+                continue
+            closed = parent["end"] < len(lines) and re.fullmatch(
+                r"\s*:{3,}\s*", lines[parent["end"]]
+            )
+            position = markdown(parent["end"])
+            if parent["tab"]:
+                marker("close", parent["end"])
+            marker("close", parent["end"])
+            position = parent["end"] + (1 if closed else 0)
+            stack.pop()
+            continue
+        if parent and token.level == len(stack) and token.map and token.nesting >= 0:
+            if "panel-tabset" in parent["attributes"]["class"] and token.type == "heading_open":
+                parent["tab"] = parent["tab"] or token.tag
+                if token.tag == parent["tab"]:
+                    start, end = token.map
+                    position = markdown(start)
+                    if any(segment.get("tab") is parent for segment in segments):
+                        marker("close", start)
+                    title = re.sub(
+                        r"^\s*#+\s*|\s*\{[^{}]*\}\s*$|\s*#+\s*$", "", lines[start].strip()
+                    )
+                    marker("open", start, attributes={"class": ["tab"], "title": title}, tab=parent)
+                    position = end
+                    continue
+            elif _splits(parent["attributes"]):
+                position = markdown(token.map[0])
         if token.type != "fence" or not token.info.strip().startswith("{python"):
             continue
         if not re.fullmatch(r"\{python(?:\s+([\w.-]+))?\}", token.info.strip()):
             raise ValidationError(f"Unsupported Python fence header: {token.info}")
         start, end = token.map
-        if start > position:
-            segments.append(
-                {
-                    "kind": "markdown",
-                    "text": "".join(lines[position:start]),
-                    "offset": position,
-                    "source": _source_range(mapping, position, start),
-                }
-            )
+        position = markdown(start)
         options = _cell_options(token.content, yaml)
         header_label = re.fullmatch(r"\{python(?:\s+([\w.-]+))?\}", token.info.strip()).group(1)
         if header_label:
@@ -563,15 +692,9 @@ def _segments(text: str, mapping: list, md, yaml) -> list[dict]:
             }
         )
         position = end
-    if position < len(lines):
-        segments.append(
-            {
-                "kind": "markdown",
-                "text": "".join(lines[position:]),
-                "offset": position,
-                "source": _source_range(mapping, position, len(lines)),
-            }
-        )
+    position = markdown(len(lines))
+    for segment in segments:
+        segment.pop("tab", None)
     return segments
 
 
@@ -630,7 +753,11 @@ def _prepare_markdown(text, segments, md, sources, mapping, directory):
             segment["tokens"] = []
     current = None
     footer = False
+    depth = 0
     for token in tokens:
+        if token.type.startswith("container_") and token.level == depth - (token.nesting < 0):
+            depth += token.nesting
+            continue
         if token.type == "footnote_block_open":
             footer = True
             if not segments or segments[-1]["kind"] != "markdown":
@@ -651,21 +778,54 @@ def _prepare_markdown(text, segments, md, sources, mapping, directory):
             )
         if current is not None and current["kind"] == "markdown":
             current["tokens"].append(token)
-    labels, counters = {}, dict.fromkeys(_KINDS, 0)
+    labels, counters, letters, stack = {}, dict.fromkeys(_KINDS, 0), {}, []
+
+    def parent(name):
+        kind = name.split("-", 1)[0] + "-"
+        return next(
+            (
+                o["attributes"]["id"]
+                for o in reversed(stack)
+                if o["attributes"].get("id", "").startswith(kind)
+            ),
+            None,
+        )
+
+    def subfigure(name):
+        letters[name] = letters.get(name, 0) + 1
+        return f"({chr(96 + letters[name])})"
 
     def label(name, source):
+        """Number a label and return its caption prefix; subfigures are lettered."""
         prefix = name.split("-", 1)[0]
         if prefix not in _KINDS:
-            return
+            return None
         if name in labels:
             raise ValidationError(f"Duplicate report label: {name}")
+        if (outer := parent(name)) and prefix in {"fig", "tbl"}:
+            letter = subfigure(outer)
+            labels[name] = {"text": labels[outer]["text"] + letter, "source": source}
+            return letter
         counters[prefix] += 1
         labels[name] = {"text": f"{_KINDS[prefix]} {counters[prefix]}", "source": source}
+        return labels[name]["text"] + ":"
 
     for segment in segments:
+        if segment["kind"] == "open":
+            segment["caption_prefix"] = label(
+                segment["attributes"].get("id", ""), segment["source"]
+            )
+            stack.append(segment)
+            continue
+        if segment["kind"] == "close":
+            stack.pop()
+            continue
         if segment["kind"] == "code":
-            if name := segment["options"].get("label"):
-                label(name, segment["source"])
+            options = segment["options"]
+            if name := options.get("label"):
+                segment["caption_prefix"] = label(name, segment["source"])
+            elif (outer := parent("fig-")) and (options.get("fig-cap") or options.get("tbl-cap")):
+                segment["caption_prefix"] = subfigure(outer)
             continue
         tokens = segment["tokens"]
         for index, token in enumerate(tokens):
@@ -681,34 +841,36 @@ def _prepare_markdown(text, segments, md, sources, mapping, directory):
             if token.type != "inline":
                 continue
             match = _LABEL.search(token.content)
-            if match:
-                name = match.group(1)
-                label(name, source)
+            name = match.group(1) if match else ""
+            prefix = label(name, source) if name else None
+            if name:
                 if token.children and token.children[-1].type == "text":
                     token.children[-1].content = _LABEL.sub("", token.children[-1].content)
                 if index and tokens[index - 1].type in {"heading_open", "paragraph_open"}:
                     tokens[index - 1].attrSet("id", name)
                 if name.startswith("tbl-") and token.children and token.children[0].type == "text":
                     token.children[0].content = token.children[0].content.lstrip(": ")
-                    token.children[0].content = (
-                        labels[name]["text"] + ": " + token.children[0].content
-                    )
-                image_token = next(
-                    (child for child in token.children or [] if child.type == "image"), None
+                    token.children[0].content = prefix + " " + token.children[0].content
+            image_token = next(
+                (child for child in token.children or [] if child.type == "image"), None
+            )
+            outer = parent("fig-")
+            if (
+                image_token
+                and index
+                and tokens[index - 1].type == "paragraph_open"
+                and (name.startswith("fig-") or (outer and not name and image_token.content))
+            ):
+                prefix = prefix or subfigure(outer)
+                tokens[index - 1].tag = "figure"
+                image_token.attrs.pop("id", None)
+                if index + 1 < len(tokens) and tokens[index + 1].type == "paragraph_close":
+                    tokens[index + 1].tag = "figure"
+                caption = Token("html_inline", "", 0)
+                caption.content = (
+                    f"<figcaption>{prefix} {html.escape(image_token.content)}</figcaption>"
                 )
-                if (
-                    name.startswith("fig-")
-                    and image_token
-                    and index
-                    and tokens[index - 1].type == "paragraph_open"
-                ):
-                    tokens[index - 1].tag = "figure"
-                    image_token.attrs.pop("id", None)
-                    if index + 1 < len(tokens) and tokens[index + 1].type == "paragraph_close":
-                        tokens[index + 1].tag = "figure"
-                    caption = Token("html_inline", "", 0)
-                    caption.content = f"<figcaption>{labels[name]['text']}: {html.escape(image_token.content)}</figcaption>"
-                    token.children.append(caption)
+                token.children.append(caption)
             for child in token.children or []:
                 if child.type != "image":
                     continue
@@ -726,6 +888,31 @@ def _prepare_markdown(text, segments, md, sources, mapping, directory):
                     "src", _asset(directory, captured.read_bytes(), captured.suffix.lower())
                 )
                 child.attrSet("loading", "lazy")
+    for index, segment in enumerate(segments):
+        if segment["kind"] != "open":
+            continue
+        children, depth = [], 0
+        for child in segments[index + 1 :]:
+            if child["kind"] == "close" and depth == 0:
+                break
+            if depth == 0 and (child["kind"] != "markdown" or child["tokens"]):
+                children.append(child)
+            depth += {"open": 1, "close": -1}.get(child["kind"], 0)
+        last = children[-1] if len(children) > 1 else None
+        if (
+            segment["caption_prefix"]
+            and last
+            and last["kind"] == "markdown"
+            and [t.type for t in last["tokens"]] == ["paragraph_open", "inline", "paragraph_close"]
+        ):
+            last["caption"] = True
+            last["tokens"][0].tag = last["tokens"][2].tag = "figcaption"
+            prefix = Token("text", "", 0)
+            prefix.content = segment["caption_prefix"] + " "
+            last["tokens"][1].children.insert(0, prefix)
+        cells = [child for child in children if not child.get("caption")]
+        if any(key in segment["attributes"] for key in ("layout", "layout-ncol", "layout-nrow")):
+            segment["grid"] = _grid(segment["attributes"], len(cells))
     for segment in segments:
         for token in segment.get("tokens", []):
             if not token.children:
@@ -806,17 +993,89 @@ def _rich_output(output: dict, directory: Path, md) -> str:
     return '<pre class="output">' + html.escape(data.get("text/plain", "")) + "</pre>"
 
 
-_CSS = """body{font:17px/1.65 system-ui,sans-serif;color:#253139;margin:0;background:#fafaf8}main{max-width:900px;margin:4rem auto;padding:0 2rem 5rem}h1,h2,h3{line-height:1.2;color:#153b38}h1{font-size:2.7rem}h2{margin-top:2.5rem}a{color:#146e67}pre{overflow:auto;padding:1rem;background:#eef1ef;border-radius:6px;font:14px/1.5 ui-monospace,monospace}code{font-family:ui-monospace,monospace}table{border-collapse:collapse;width:100%;margin:1.5rem 0}th,td{padding:.6rem;text-align:left;border-bottom:1px solid #ccd4d0}th{background:#edf1ef}img{max-width:100%;height:auto}.output-image{display:block;margin:1rem auto}figure{margin:1.5rem 0}figcaption,.caption{color:#53645d;font-size:.9rem}.callout{padding:.6rem 1.2rem;border-left:4px solid #42877a;background:#eef6f2;margin:1.4rem 0}.callout-title{font-weight:700;margin:.2rem 0}.warning,.caution,.important{border-color:#b77b34;background:#fff6e8}.stderr,.error{border-left:3px solid #b84141}.rich-html{display:block;width:100%;min-height:280px;border:0}.math.block{overflow:auto}.task-list-item{list-style:none}.task-list-item-checkbox{margin:0 .5rem 0 -1.5rem}dt{font-weight:600}dd{margin:0 0 .6rem 1.5rem}.provenance{color:#61736a;font-size:.85rem;border-top:1px solid #ccd4d0;padding-top:1rem;margin-top:3rem}.source-block{scroll-margin-top:2rem}details>summary{cursor:pointer}@media print{body{background:white}main{margin:0;max-width:none}pre{white-space:pre-wrap}.rich-html{min-height:350px}}"""
+_CSS = """body{font:17px/1.65 system-ui,sans-serif;color:#253139;margin:0;background:#fafaf8}main{max-width:900px;margin:4rem auto;padding:0 2rem 5rem}h1,h2,h3{line-height:1.2;color:#153b38}h1{font-size:2.7rem}h2{margin-top:2.5rem}a{color:#146e67}pre{overflow:auto;padding:1rem;background:#eef1ef;border-radius:6px;font:14px/1.5 ui-monospace,monospace}code{font-family:ui-monospace,monospace}table{border-collapse:collapse;width:100%;margin:1.5rem 0}th,td{padding:.6rem;text-align:left;border-bottom:1px solid #ccd4d0}th{background:#edf1ef}img{max-width:100%;height:auto}.output-image{display:block;margin:1rem auto}figure{margin:1.5rem 0}figcaption,.caption{color:#53645d;font-size:.9rem}.callout{padding:.6rem 1.2rem;border-left:4px solid #42877a;background:#eef6f2;margin:1.4rem 0}.callout-title{font-weight:700;margin:.2rem 0}.warning,.caution,.important{border-color:#b77b34;background:#fff6e8}.stderr,.error{border-left:3px solid #b84141}.rich-html{display:block;width:100%;min-height:280px;border:0}.math.block{overflow:auto}.task-list-item{list-style:none}.task-list-item-checkbox{margin:0 .5rem 0 -1.5rem}dt{font-weight:600}dd{margin:0 0 .6rem 1.5rem}.columns,.layout-row{display:flex;gap:1.5rem}.column{flex:1 1 0;min-width:0}.layout-cell{min-width:0}.layout-grid{display:grid;gap:1rem}.panel-tabset{border:1px solid #ccd4d0;border-radius:6px;padding:0 1rem;margin:1.4rem 0}.tab-title{font-weight:700;border-bottom:1px solid #ccd4d0;padding:.5rem 0}.column-page,.column-page-inset{margin:0 -8%}.column-body-outset{margin:0 -4%}.column-screen,.column-screen-inset{width:100vw;margin-left:calc(50% - 50vw)}@media(min-width:1300px){.column-margin,.margin-caption{float:right;clear:right;width:240px;margin-right:-280px;font-size:.85rem}}@media(max-width:700px){.columns,.layout-row{flex-direction:column}.column{flex:none!important}.layout-cell{width:auto!important}}.provenance{color:#61736a;font-size:.85rem;border-top:1px solid #ccd4d0;padding-top:1rem;margin-top:3rem}.source-block{scroll-margin-top:2rem}details>summary{cursor:pointer}@media print{body{background:white}main{margin:0;max-width:none}pre{white-space:pre-wrap}.rich-html{min-height:350px}}"""
+
+
+_CALLOUT = re.compile(r"callout-(?:note|tip|warning|important|caution)")
+_LENGTH = re.compile(r"\d+(?:\.\d+)?(?:px|%|em|rem)?")
+_COLUMNS = {"margin", "page", "page-inset", "screen", "screen-inset", "body-outset"}
+
+
+def _container(segment, children) -> str:
+    """Static HTML of a fenced div around its rendered children."""
+    attributes = segment["attributes"]
+    classes = attributes["class"]
+    cells = [part for child, part in children if not child.get("caption")]
+    if grid := segment.get("grid"):
+        rows, position = [], 0
+        for row in grid:
+            row_cells = cells[position : position + len(row)]
+            position += len(row)
+            rows.append(
+                '<div class="layout-row">'
+                + "".join(
+                    f'<div class="layout-cell" style="width:{width}%">{cell}</div>'
+                    for width, cell in zip(row, row_cells, strict=False)
+                )
+                + "</div>"
+            )
+        cells = rows
+    body = "".join(cells) + "".join(part for child, part in children if child.get("caption"))
+    callout = next((c for c in classes if _CALLOUT.fullmatch(c)), None)
+    if callout:
+        kind = callout.removeprefix("callout-")
+        title = html.escape(attributes.get("title", kind.title()))
+        return f'<aside class="callout {kind}"><p class="callout-title">{title}</p>{body}</aside>'
+    if "tab" in classes:
+        title = html.escape(attributes.get("title", ""))
+        body = f'<p class="tab-title">{title}</p>{body}'
+    ident = attributes.get("id", "")
+    tag = "figure" if ident.startswith(("fig-", "tbl-")) else "div"
+    width = attributes.get("width", "")
+    style = f' style="flex:0 0 {width}"' if "column" in classes and _LENGTH.fullmatch(width) else ""
+    names = html.escape(" ".join(classes), quote=True)
+    return (
+        f"<{tag}"
+        + (f' id="{html.escape(ident, quote=True)}"' if ident else "")
+        + (f' class="{names}"' if names else "")
+        + f"{style}>{body}</{tag}>"
+    )
+
+
+def _tree(items):
+    """Nest (segment, html) pairs between open and close markers into containers."""
+    result, stack = [], []
+    for segment, part in items:
+        if segment["kind"] == "open":
+            stack.append((segment, result))
+            result = []
+        elif segment["kind"] == "close":
+            opened, outer = stack.pop()
+            outer.append((opened, _container(opened, result)))
+            result = outer
+        else:
+            result.append((segment, part))
+    return result
 
 
 def _render(segments, notebook, labels, mapping, md, directory, title, env):
-    blocks, rendered = [], []
+    blocks, items = [], []
     for number, segment in enumerate(segments, 1):
         source = segment["source"]
-        attributes = f'data-source-path="{html.escape(source["path"], quote=True)}" data-line-start="{source["line_start"]}" data-line-end="{source["line_end"]}"'
         block = {"id": f"block-{number}", "kind": segment["kind"], "source": source}
+        if segment["kind"] in {"open", "close"}:
+            if segment["kind"] == "open":
+                block["attributes"] = segment["attributes"]
+                if "grid" in segment:
+                    block["grid"] = segment["grid"]
+            blocks.append(block)
+            items.append((segment, ""))
+            continue
+        attributes = f'data-source-path="{html.escape(source["path"], quote=True)}" data-line-start="{source["line_start"]}" data-line-end="{source["line_end"]}"'
         if segment["kind"] == "markdown":
             block["text"] = segment["text"]
+            if segment.get("caption"):
+                block["caption"] = True
 
             def native_node(token, source=source):
                 # Keep resolved inline structure (assets, crossrefs and footnotes)
@@ -858,25 +1117,56 @@ def _render(segments, notebook, labels, mapping, md, directory, title, env):
                     + "</code></pre>"
                 )
             if options.get("output", True):
-                content += "".join(_rich_output(output, directory, md) for output in cell.outputs)
+                outputs = [_rich_output(output, directory, md) for output in cell.outputs]
+                subcaptions = enumerate(options.get("fig-subcap", []))
+                for index, output in enumerate(cell.outputs):
+                    if output.get("output_type") in {"display_data", "execute_result"} and (
+                        subcaption := next(subcaptions, None)
+                    ):
+                        outputs[index] = (
+                            f"<figure>{outputs[index]}<figcaption>({chr(97 + subcaption[0])}) "
+                            f"{md.renderInline(str(subcaption[1]))}</figcaption></figure>"
+                        )
+                if columns := options.get("layout-ncol"):
+                    outputs = [
+                        f'<div class="layout-grid" style="grid-template-columns:'
+                        f'repeat({columns},minmax(0,1fr))">'
+                        + "".join(f"<div>{part}</div>" for part in outputs)
+                        + "</div>"
+                    ]
+                content += "".join(outputs)
             label = options.get("label")
             caption = options.get("fig-cap") or options.get("tbl-cap")
+            prefix = segment.get("caption_prefix")
+            if prefix:
+                block["caption_prefix"] = prefix
+            margin = ' class="margin-caption"' if options.get("cap-location") == "margin" else ""
             if label:
                 block["label"] = label
                 content = f'<figure id="{html.escape(label, quote=True)}">{content}'
                 if caption:
-                    prefix = labels.get(label, {}).get("text", "")
-                    content += f"<figcaption>{html.escape(prefix + ': ' if prefix else '')}{md.renderInline(str(caption))}</figcaption>"
+                    content += f"<figcaption{margin}>{html.escape(prefix + ' ' if prefix else '')}{md.renderInline(str(caption))}</figcaption>"
                 content += "</figure>"
             elif caption:
-                content += f'<p class="caption">{md.renderInline(str(caption))}</p>'
-        rendered.append(
-            f'<section class="source-block" id="block-{number}" {attributes}>{content}</section>'
+                names = "caption margin-caption" if margin else "caption"
+                content += f'<p class="{names}">{html.escape(prefix + " " if prefix else "")}{md.renderInline(str(caption))}</p>'
+        column = (
+            f" column-{segment['options']['column']}"
+            if segment["kind"] == "code" and "column" in segment["options"]
+            else ""
         )
+        part = f'<section class="source-block{column}" id="block-{number}" {attributes}>{content}</section>'
+        if segment.get("caption"):
+            part = content.replace(
+                "<figcaption>",
+                f'<figcaption class="source-block" id="block-{number}" {attributes}>',
+                1,
+            )
+        items.append((segment, part))
         blocks.append(block)
     document = {
         "format": "cairn/document",
-        "version": 2,
+        "version": 3,
         "title": title,
         "blocks": blocks,
         "labels": labels,
@@ -887,7 +1177,7 @@ def _render(segments, notebook, labels, mapping, md, directory, title, env):
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{html.escape(title)}</title><style>{_CSS}</style></head><body><main>"
         f"<h1>{html.escape(title)}</h1>"
-        + "\n".join(rendered)
+        + "\n".join(part for _, part in _tree(items))
         + '<p class="provenance">Built locally with Cairn. <a href="manifest.json">Build manifest</a> · '
         '<a href="document.json">Native document</a> · <a href="executed.ipynb">Executed notebook</a></p>'
         "</main></body></html>"
@@ -955,7 +1245,7 @@ def build(
         "source": "sources/" + source.name,
         "html": "index.html",
         "document": "document.json",
-        "document_version": 2,
+        "document_version": 3,
         "notebook": "executed.ipynb",
         "input_policy": "recorded",
     }
@@ -1005,12 +1295,13 @@ def build(
             )
         )
         for segment in segments:
-            if segment["kind"] != "code":
+            if segment["kind"] == "markdown":
                 notebook.cells.append(
                     nbformat.v4.new_markdown_cell(
                         segment["text"], metadata={"cairn_source": segment["source"]}
                     )
                 )
+            if segment["kind"] != "code":
                 continue
             options = {**execution, **segment["options"]}
             segment["options"] = options
@@ -1177,9 +1468,12 @@ def _validated_bundle(directory: Path) -> tuple[dict, list]:
     }
     if not required.issubset(paths):
         raise ValidationError("Report bundle is missing required source or output files")
-    if manifest.get("document_version", 1) == 2:
+    if manifest.get("document_version", 1) in {2, 3}:
         document = json.loads((directory / "document.json").read_text("utf-8"))
-        if document.get("format") != "cairn/document" or document.get("version") != 2:
+        if (
+            document.get("format") != "cairn/document"
+            or document.get("version") != manifest["document_version"]
+        ):
             raise ValidationError("Report document version does not match its manifest")
         for block in document.get("blocks", []):
             for output in block.get("outputs", []):

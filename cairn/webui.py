@@ -587,7 +587,7 @@ def install(app, repository, token, *, no_auth=False):
         )
         if not document or block_index < 0 or output_index < 0:
             raise NotFound("HTML output not found")
-        if value.get("data", {}).get("document_version") == 2:
+        if value.get("data", {}).get("document_version") in {2, 3}:
             with repository.open_blob(document["digest"]) as stream:
                 data = json.load(stream)
         else:
@@ -596,7 +596,7 @@ def install(app, repository, token, *, no_auth=False):
             content = data["blocks"][block_index]["outputs"][output_index]["data"]["text/html"]
         except (KeyError, IndexError, TypeError):
             raise NotFound("HTML output not found") from None
-        if data.get("version") == 2:
+        if data.get("version") in {2, 3}:
             if (
                 not isinstance(content, dict)
                 or content.get("mime") != "text/html"
