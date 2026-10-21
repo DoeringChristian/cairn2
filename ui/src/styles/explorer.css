@@ -140,6 +140,7 @@ button, input { font-family: inherit; }
 .native-document .task-list-item-checkbox { margin:0 8px 0 -22px; }
 .native-document dt { font-weight:600; }
 .native-document dd { margin:0 0 10px 24px; }
+.native-document figcaption { margin:8px 0 0; color:var(--muted); font-size:13px; text-align:center; }
 .native-columns { display:flex; gap:24px; }
 .native-column { flex:1 1 0; min-width:0; }
 .native-layout-row { display:flex; gap:16px; }
@@ -152,11 +153,6 @@ button, input { font-family: inherit; }
 .native-tabset [role=tabpanel] { padding:4px 18px; }
 .native-document .column-margin, .native-document .margin-caption { color:var(--muted); font-size:14px; }
 .native-document div.column-margin { margin:16px 0; padding-left:12px; border-left:3px solid var(--line); }
-@media(min-width:1280px) {
-  .native-document:has(.column-margin, .margin-caption) { padding-right:280px; }
-  .native-document .column-margin, .native-document .margin-caption { float:right; clear:right; width:250px; margin:0 -280px 16px 0; font-size:13px; }
-  .native-document div.column-margin { padding-left:0; border:0; }
-}
 @media(max-width:760px) {
   .native-columns, .native-layout-row { flex-direction:column; }
   .native-column { flex:none !important; }

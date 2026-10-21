@@ -87,7 +87,9 @@ provenance and console opt-outs.
 The QMD builder captures source/includes/resources, resolves declared finished
 inputs, records every further artifact cells read, composes an optional front-matter Hydra config with the build's overrides,
 executes a fresh local kernel and packages outputs plus source mappings.
-Its explicit pinned reader avoids global backend monkeypatches. A report is an
+Its explicit report reader avoids global backend monkeypatches. HTML viewers in
+reports run with an opaque origin and read their report's files through a
+signed, expiring link instead of the reader's session. A report is an
 ordinary artifact containing the completed bundle. Editing and execution are local;
 the server stores, queries and serves data only.
 

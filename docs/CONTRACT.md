@@ -221,7 +221,12 @@ synchronous and do not enter a writer's record-upload journal.
 
 ### Native report document versions
 
-New builds write `cairn/document` version **2** in `document.json`. Markdown,
+New builds write `cairn/document` version **3** in `document.json`. Version 3
+is version 2 plus fenced divs: blocks of kind `open` (with `attributes`: `id`,
+`class` list and key/value pairs, and an optional layout `grid` of cell widths
+in percent) and `close` nest the blocks between them. Markdown blocks may be
+marked `caption`, code blocks may carry `caption_prefix` and `embed`, and
+labels may be lettered subfigures. Markdown,
 source locations, code, labels, and output metadata remain in the document.
 Each code-cell MIME value in `outputs[].data` is an asset reference:
 
@@ -237,8 +242,8 @@ content-addressed, and included in its file inventory and published blobs. Ident
 payloads with the same extension reuse one file. Report bundle data advertises
 `document_version`; absent means version 1.
 
-Readers support both versions: version 1 retains inline notebook MIME payloads;
-version 2 loads referenced assets as needed. Existing reports are not migrated.
+Readers support all versions: version 1 retains inline notebook MIME payloads;
+versions 2 and 3 load referenced assets as needed. Existing reports are not migrated.
 Older readers that only understand version 1 cannot read new native documents.
 The `report/bundle` envelope remains version 1; exports remain complete bundles,
 and `document.json` is served byte-for-byte. The archived `executed.ipynb` remains

@@ -492,7 +492,7 @@ test('live artifact keeps polling until it finishes', async ({page,request}) => 
 
 test('v2 reports load document and output assets directly without a preview conversion', async ({page,request}) => {
   const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.find((a:any)=>a.manifest?.value?.data?.document_version===2);
+  const report=items.find((a:any)=>a.manifest?.value?.data?.document_version>=2);
   expect(report).toBeTruthy();
   const paths:string[]=[];
   page.on('request',r=>{paths.push(new URL(r.url()).pathname);});

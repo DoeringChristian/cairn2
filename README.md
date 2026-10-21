@@ -514,18 +514,46 @@ The default `python3` kernel uses the builder's Python environment; `--kernel`
 selects another installed kernel. Code runs locally in a copy of captured files.
 It is trusted Python code, not a security sandbox.
 
-The implemented QMD/Markdown subset includes tables, footnotes, dollar math
-rendered as MathML, figures, cross references, callouts, local includes, and
-Python stdout/static rich outputs. It supports `execute.echo`/`execute.eval` and
-cell options `label`, `fig-cap`, `tbl-cap`, `echo`, `eval`, and `output`.
-`cairn.resources` lists additional relative files/directories. Includes use
-`{{< include relative.qmd >}}`. Equations can use `$$...$$ {#eq-name}`; section and
-figure labels use `{#sec-name}` and `{#fig-name}`. See [the example](examples/report.qmd).
+The implemented QMD/Markdown subset covers:
 
-This is a QMD subset, not full Quarto. It does not implement bibliography/citation
-processing, arbitrary Quarto extensions, other execution languages, or JavaScript
-widgets. Markdown raw HTML is disabled; rich HTML output is placed in an iframe
-without scripts or external resource access. External image URLs and source paths
+- **Markdown:** tables, footnotes, dollar math rendered as MathML, sub- and
+  superscript (`H~2~O`, `x^2^`), definition and task lists, and attributes
+  (`![A](a.png){width=50% .wide}`, `[text]{.class}`, `` `code`{.py} ``).
+- **Python:** `{python}` cells with the options `label`, `fig-cap`, `tbl-cap`,
+  `fig-subcap`, `echo`, `eval`, `output`, `layout-ncol`, `column` and
+  `cap-location`; `execute.echo`/`execute.eval` in the front matter; and inline
+  expressions `` `{python} f"{loss:.3f}"` ``, evaluated in document order.
+- **Labels and references:** `{#sec-name}`, `{#fig-name}`, `{#tbl-name}` and
+  `$$...$$ {#eq-name}`, referenced as `@fig-name`. `@reports/baseline#fig-loss`
+  (or `@reports/baseline@v3#fig-loss`) refers to a label in another published
+  report, and `{{< embed reports/baseline#fig-loss >}}` shows that report's
+  labelled cell outputs. Both resolve once per build and become inputs.
+- **Fenced divs,** which may contain Python cells: callouts
+  (`::: {.callout-note}`), `.columns` with `.column width="40%"`,
+  `.panel-tabset` (one tab per heading), `.column-margin`, `.column-page`,
+  `.column-screen`, and figures `::: {#fig-name layout-ncol=2}` or
+  `layout="[[2,1],[1]]"` whose last paragraph is the caption. Images and cells
+  inside are lettered subfigures, so a labelled `{#fig-left}` inside reads
+  "Figure 1(a)".
+- **Citations:** `bibliography: refs.bib` (a file or a list) and `[@key]`,
+  `[see @a; @b, p. 3]`, `[-@key]` or `@key`. `citation-style` is `author-year`
+  (default) or `numeric`. Cited entries are listed under "References" at the
+  end, or inside `::: {#refs}`.
+- **Viewers:** `![Scene](viewer.html){#fig-scene height=480}` embeds an HTML
+  file of the report as an interactive viewer. It may load scripts from https
+  URLs (three.js, WebGL, WebGPU, WebAssembly, workers) and fetch the report's
+  other files by relative path, such as `fetch("mesh.glb")` for a file listed
+  in `cairn.resources`. In the UI it runs in a sandbox without access to Cairn
+  or the reader's session, and reads files through a signed link scoped to
+  that report.
+
+`cairn.resources` lists additional relative files/directories. Includes use
+`{{< include relative.qmd >}}`. See [the example](examples/report.qmd).
+
+This is a QMD subset, not full Quarto. It does not implement CSL styles,
+arbitrary Quarto extensions, other shortcodes, other execution languages, or
+Markdown raw HTML. Rich HTML output of cells is placed in an iframe without
+scripts or external resource access. External image URLs and source paths
 escaping the report directory are rejected. The supplied `client` is a read-only
 report reader scoped to the report's project; reading a live artifact fails.
 Independently opened clients retain their normal behavior and are not recorded,
