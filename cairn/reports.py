@@ -53,7 +53,12 @@ class BuildResult:
 
 
 _INCLUDE = re.compile(r'^\s*\{\{<\s*include\s+(?:"([^"]+)"|\'([^\']+)\'|(\S+))\s*>\}\}\s*$')
-_LABEL = re.compile(r"\s*\{#((?:fig|tbl|eq|sec)-[\w.-]+)\}\s*$")
+_LABEL = re.compile(r"\s*\{#((?:fig|tbl|eq|sec)-[\w.-]+)(?:\s[^{}]*)?\}\s*$")
+_ATTRIBUTES = re.compile(
+    r"\{((?:\s*(?:[#.][^\s{}\"'=]+|[\w-]+=(?:\"[^\"]*\"|'[^']*'|[^\s{}\"']+)))+)\s*\}"
+)
+_ATTRIBUTE = re.compile(r"([#.])([^\s{}\"'=]+)|([\w-]+)=(?:\"([^\"]*)\"|'([^']*)'|([^\s{}\"']+))")
+_ALLOWED = {"id", "class", "width", "height", "title"}
 _REFERENCE = re.compile(r"(?<![\w\\])@((?:fig|tbl|eq|sec)-[\w-]+(?:\.[\w-]+)*)")
 _KINDS = {"fig": "Figure", "tbl": "Table", "eq": "Equation", "sec": "Section"}
 
@@ -440,8 +445,46 @@ _display({"application/vnd.cairn.environment+json": {
 
 def _markdown_engine(deps):
     _, _, MarkdownIt, _, container_plugin, dollarmath_plugin, footnote_plugin, convert = deps
+    from mdit_py_plugins.attrs import attrs_plugin
+    from mdit_py_plugins.deflist import deflist_plugin
+    from mdit_py_plugins.subscript import sub_plugin
+    from mdit_py_plugins.superscript import superscript_plugin
+    from mdit_py_plugins.tasklists import tasklists_plugin
+
     md = MarkdownIt("commonmark", {"html": False}).enable(["table", "strikethrough"])
-    md.use(footnote_plugin)
+    md.use(footnote_plugin).use(attrs_plugin, spans=True).use(deflist_plugin)
+    md.use(tasklists_plugin).use(sub_plugin).use(superscript_plugin)
+
+    def attributes(state, silent):
+        """Pandoc attributes after images and code, e.g. {#fig-a width=50% .wide}."""
+        last = state.tokens[-1] if state.tokens else None
+        if state.src[state.pos] != "{" or last is None or last.type not in {"image", "code_inline"}:
+            return False
+        match = _ATTRIBUTES.match(state.src, state.pos)
+        if not match:
+            return False
+        if not silent:
+            for item in _ATTRIBUTE.finditer(match.group(1)):
+                if item.group(1) == "#":
+                    last.attrSet("id", item.group(2))
+                elif item.group(1) == ".":
+                    last.attrJoin("class", item.group(2))
+                else:
+                    last.attrSet(
+                        item.group(3), next(v for v in item.group(4, 5, 6) if v is not None)
+                    )
+        state.pos = match.end()
+        return True
+
+    def allowed(state):
+        for token in state.tokens:
+            for child in token.children or []:
+                if child.type in {"image", "code_inline", "span_open"}:
+                    keep = _ALLOWED | ({"src", "alt"} if child.type == "image" else set())
+                    child.attrs = {k: v for k, v in child.attrs.items() if k in keep}
+
+    md.inline.ruler.before("attr", "cairn_attributes", attributes)
+    md.core.ruler.push("cairn_attributes", allowed)
 
     def math_renderer(content, options):
         try:
@@ -660,6 +703,7 @@ def _prepare_markdown(text, segments, md, sources, mapping, directory):
                     and tokens[index - 1].type == "paragraph_open"
                 ):
                     tokens[index - 1].tag = "figure"
+                    image_token.attrs.pop("id", None)
                     if index + 1 < len(tokens) and tokens[index + 1].type == "paragraph_close":
                         tokens[index + 1].tag = "figure"
                     caption = Token("html_inline", "", 0)
@@ -762,7 +806,7 @@ def _rich_output(output: dict, directory: Path, md) -> str:
     return '<pre class="output">' + html.escape(data.get("text/plain", "")) + "</pre>"
 
 
-_CSS = """body{font:17px/1.65 system-ui,sans-serif;color:#253139;margin:0;background:#fafaf8}main{max-width:900px;margin:4rem auto;padding:0 2rem 5rem}h1,h2,h3{line-height:1.2;color:#153b38}h1{font-size:2.7rem}h2{margin-top:2.5rem}a{color:#146e67}pre{overflow:auto;padding:1rem;background:#eef1ef;border-radius:6px;font:14px/1.5 ui-monospace,monospace}code{font-family:ui-monospace,monospace}table{border-collapse:collapse;width:100%;margin:1.5rem 0}th,td{padding:.6rem;text-align:left;border-bottom:1px solid #ccd4d0}th{background:#edf1ef}img{max-width:100%;height:auto}.output-image{display:block;margin:1rem auto}figure{margin:1.5rem 0}figcaption,.caption{color:#53645d;font-size:.9rem}.callout{padding:.6rem 1.2rem;border-left:4px solid #42877a;background:#eef6f2;margin:1.4rem 0}.callout-title{font-weight:700;margin:.2rem 0}.warning,.caution,.important{border-color:#b77b34;background:#fff6e8}.stderr,.error{border-left:3px solid #b84141}.rich-html{display:block;width:100%;min-height:280px;border:0}.math.block{overflow:auto}.provenance{color:#61736a;font-size:.85rem;border-top:1px solid #ccd4d0;padding-top:1rem;margin-top:3rem}.source-block{scroll-margin-top:2rem}details>summary{cursor:pointer}@media print{body{background:white}main{margin:0;max-width:none}pre{white-space:pre-wrap}.rich-html{min-height:350px}}"""
+_CSS = """body{font:17px/1.65 system-ui,sans-serif;color:#253139;margin:0;background:#fafaf8}main{max-width:900px;margin:4rem auto;padding:0 2rem 5rem}h1,h2,h3{line-height:1.2;color:#153b38}h1{font-size:2.7rem}h2{margin-top:2.5rem}a{color:#146e67}pre{overflow:auto;padding:1rem;background:#eef1ef;border-radius:6px;font:14px/1.5 ui-monospace,monospace}code{font-family:ui-monospace,monospace}table{border-collapse:collapse;width:100%;margin:1.5rem 0}th,td{padding:.6rem;text-align:left;border-bottom:1px solid #ccd4d0}th{background:#edf1ef}img{max-width:100%;height:auto}.output-image{display:block;margin:1rem auto}figure{margin:1.5rem 0}figcaption,.caption{color:#53645d;font-size:.9rem}.callout{padding:.6rem 1.2rem;border-left:4px solid #42877a;background:#eef6f2;margin:1.4rem 0}.callout-title{font-weight:700;margin:.2rem 0}.warning,.caution,.important{border-color:#b77b34;background:#fff6e8}.stderr,.error{border-left:3px solid #b84141}.rich-html{display:block;width:100%;min-height:280px;border:0}.math.block{overflow:auto}.task-list-item{list-style:none}.task-list-item-checkbox{margin:0 .5rem 0 -1.5rem}dt{font-weight:600}dd{margin:0 0 .6rem 1.5rem}.provenance{color:#61736a;font-size:.85rem;border-top:1px solid #ccd4d0;padding-top:1rem;margin-top:3rem}.source-block{scroll-margin-top:2rem}details>summary{cursor:pointer}@media print{body{background:white}main{margin:0;max-width:none}pre{white-space:pre-wrap}.rich-html{min-height:350px}}"""
 
 
 def _render(segments, notebook, labels, mapping, md, directory, title, env):

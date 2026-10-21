@@ -152,6 +152,44 @@ See @eq-square.
         reports.publish(result.path, client=client)
 
 
+def test_attributes_sub_superscript_definition_and_task_lists(tmp_path):
+    (tmp_path / "box.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"/>'
+    )
+    source = tmp_path / "markdown.qmd"
+    source.write_text("""## Results {#sec-results .unnumbered}
+
+![A box](box.svg){#fig-box.small width=50% .wide onerror=alert(1)}
+
+See @fig-box.small and @sec-results: H~2~O, x^2^, [red]{.red onclick=x}, `x`{.py}.
+
+Term
+: Definition
+
+- [x] done
+- [ ] open
+""")
+    result = reports.build(source, tmp_path / "build")
+    page = (result.path / "index.html").read_text()
+    assert '<h2 id="sec-results">Results</h2>' in page
+    assert '<figure id="fig-box.small"><img src="assets/' in page
+    assert 'alt="A box" width="50%" class="wide" loading="lazy" />' in page
+    assert "onerror" not in page and "onclick" not in page
+    assert 'href="#fig-box.small">Figure 1</a>' in page
+    assert "H<sub>2</sub>O, x<sup>2</sup>" in page and '<span class="red">red</span>' in page
+    assert '<code class="py">x</code>' in page
+    assert "<dt>Term</dt>\n<dd>Definition</dd>" in page
+    assert 'checked="checked" disabled="disabled" type="checkbox"> done' in page
+    document = json.loads((result.path / "document.json").read_text())
+    image = next(
+        child
+        for node in document["blocks"][0]["nodes"]
+        for child in node["children"]
+        if child["type"] == "image"
+    )
+    assert image["attributes"]["width"] == "50%" and "id" not in image["attributes"]
+
+
 def test_includes_resources_images_static_html_and_source_locations(tmp_path):
     (tmp_path / "parts").mkdir()
     (tmp_path / "data.txt").write_text("captured data")

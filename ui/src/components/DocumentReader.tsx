@@ -23,7 +23,7 @@ type Output={ui_payload?:{path:string;mime:string};output_type:string;name?:stri
 type Block={id:string;kind:string;source:Source;text?:string;nodes?:Node[];code?:string;label?:string;options?:{echo?:boolean;output?:boolean;'fig-cap'?:string;'tbl-cap'?:string};outputs?:Output[]};
 type Document={format:string;version:number;title:string;blocks:Block[];labels:Record<string,{text:string}>};
 const md=new MarkdownIt({html:false,linkify:false}).use(footnote);
-const tags=new Set(['p','h1','h2','h3','h4','h5','h6','table','thead','tbody','tr','th','td','ul','ol','li','blockquote','strong','em','s','code','pre','a','figure','figcaption','span','div','aside','sup']);
+const tags=new Set(['p','h1','h2','h3','h4','h5','h6','table','thead','tbody','tr','th','td','ul','ol','li','blockquote','strong','em','s','code','pre','a','figure','figcaption','span','div','aside','sup','sub','dl','dt','dd']);
 const join=(value:unknown):string=>Array.isArray(value)?value.join(''):String(value??'');
 /** Sanitize rich notebook HTML before placing it in the native document flow. */
 function SafeHtml({html,inline=false}: {html:string;inline?:boolean}) {
@@ -33,6 +33,9 @@ function SafeHtml({html,inline=false}: {html:string;inline?:boolean}) {
 function MathValue({tex,block=false}: {tex:string;block?:boolean}) {
   return <span data-latex={tex}><SafeHtml inline={!block} html={katex.renderToString(tex,{displayMode:block,throwOnError:false,trust:false,output:'mathml'})}/></span>;
 }
+const classes=(value?:string)=>value&&/^[\w -]+$/.test(value)?value:undefined;
+const length=(value?:string)=>value&&/^\d+(\.\d+)?(px|%|em|rem)?$/.test(value)?(/\d$/.test(value)?value+'px':value):undefined;
+const size=(attrs:Record<string,string>)=>({width:length(attrs.width),height:length(attrs.height)});
 function safeHref(value:string) {return /^(https?:|mailto:|#)/i.test(value)?value:undefined;}
 function resource(base:string,raw:string,source:Source,blobs:BlobRef[]) {
   if(/^data:image\/(png|jpeg|gif|webp);base64,/i.test(raw)) return raw;
@@ -58,8 +61,9 @@ function nodesToReact(nodes:Node[],base:string,source:Source,blobs:BlobRef[],lab
       if(node.type==='text'){out.push(<Fragment key={key}>{inlineText(node.content,labels)}</Fragment>);continue;}
       if(node.type==='code_inline'){out.push(<code key={key}>{node.content}</code>);continue;}
       if(node.type==='softbreak'||node.type==='hardbreak'){out.push(node.type==='hardbreak'?<br key={key}/>:'\n');continue;}
-      if(node.type==='image'){const src=resource(base,attrs.src||'',source,blobs);out.push(src?<ZoomImage key={key} src={src} alt={node.content} source={{file:source.path,line:source.line_start}}/>:<span key={key}>[Image unavailable: {node.content}]</span>);continue;}
+      if(node.type==='image'){const src=resource(base,attrs.src||'',source,blobs);out.push(src?<ZoomImage key={key} src={src} alt={node.content} className={classes(attrs.class)} style={size(attrs)} source={{file:source.path,line:source.line_start}}/>:<span key={key}>[Image unavailable: {node.content}]</span>);continue;}
       if(node.type.startsWith('math_')){out.push(<div key={key} id={node.type==='math_block_label'?node.info:undefined} className={node.type==='math_inline'?'native-inline-math':'native-math'}><MathValue tex={node.content} block={node.type!=='math_inline'}/>{node.info&&labels[node.info]&&<small>{labels[node.info].text}</small>}</div>);continue;}
+      if(node.type==='html_inline'&&node.content.startsWith('<input class="task-list-item-checkbox"')){out.push(<input key={key} type="checkbox" className="task-list-item-checkbox" checked={node.content.includes('checked=')} disabled/>);continue;}
       if(node.type==='html_inline'||node.type==='html_block'){out.push(<SafeHtml key={key} html={node.content} inline={node.type==='html_inline'}/>);continue;}
       if(node.type==='fence'||node.type==='code_block'){out.push(<SyntaxCode key={key} code={node.content} language={node.info}/>);continue;}
       if(node.type==='hr'){out.push(<hr key={key}/>);continue;}
@@ -70,7 +74,7 @@ function nodesToReact(nodes:Node[],base:string,source:Source,blobs:BlobRef[],lab
       if(node.type==='container_callout_open'){const kind=/callout-(\w+)/.exec(node.info||'')?.[1]||'note';const title=/title="([^"]+)"/.exec(node.info||'')?.[1]||kind;out.push(<aside key={key} className={`admonition ${kind}`}><p className="admonition-title">{title}</p>{content}</aside>);continue;}
       if(node.type==='footnote_block_open'){out.push(<ol key={key} className="native-footnotes">{content}</ol>);continue;}
       if(node.type==='footnote_open'){out.push(<li key={key} id={`fn-${(node.meta?.id||0)+1}`}>{content}</li>);continue;}
-      if(tags.has(node.tag)){const props:Record<string,unknown>={key};if(node.source){props['data-source-path']=node.source.path;props['data-line-start']=node.source.line_start;props['data-line-end']=node.source.line_end;}if(attrs.id&&/^(sec|fig|tbl|eq)-[\w.-]+$/.test(attrs.id))props.id=attrs.id;if(attrs.href)props.href=safeHref(attrs.href);if(attrs.title)props.title=attrs.title;if(node.tag==='ol'&&attrs.start)props.start=Number(attrs.start);out.push(createElement(node.tag,props,content));}
+      if(tags.has(node.tag)){const props:Record<string,unknown>={key};if(node.source){props['data-source-path']=node.source.path;props['data-line-start']=node.source.line_start;props['data-line-end']=node.source.line_end;}if(attrs.id&&/^(sec|fig|tbl|eq)-[\w.-]+$/.test(attrs.id))props.id=attrs.id;if(attrs.href)props.href=safeHref(attrs.href);if(attrs.title)props.title=attrs.title;if(classes(attrs.class))props.className=classes(attrs.class);if(node.tag==='ol'&&attrs.start)props.start=Number(attrs.start);out.push(createElement(node.tag,props,content));}
       else if(content)out.push(<Fragment key={key}>{content}</Fragment>);
     }return out;
   }return children();
