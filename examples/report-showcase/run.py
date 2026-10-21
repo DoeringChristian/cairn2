@@ -1,6 +1,6 @@
 """Run an experiment and publish its report.
 
-Run: uv run --extra all python examples/build_report_showcase.py
+Run from this folder: uv run --extra all python run.py
 Then: uv run --extra all cairn server --no-auth
 """
 
@@ -30,7 +30,7 @@ def main():
 
     cairn.finish(value={"loss": 0.018, "psnr": 34.2, "converged": True})
 
-    source = Path(__file__).parent / "report-showcase/report.qmd"
+    source = Path(__file__).parent / "report.qmd"
     output = Path("build/report-showcase") / run.id
     result = build(source, output)
     publication = publish(result.path, name="report-field-guide")

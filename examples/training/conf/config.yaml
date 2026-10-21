@@ -1,0 +1,18 @@
+defaults:
+  - model: linear
+  - _self_
+  - override hydra/job_logging: stdout
+
+dataset: datasets/points@latest
+seed: 0
+steps: 300
+batch_size: 16
+learning_rate: 0.1
+
+# Cairn stores the config and console output; Hydra keeps its own files under build/
+hydra:
+  output_subdir: null
+  run:
+    dir: .
+  sweep:
+    dir: build/multirun

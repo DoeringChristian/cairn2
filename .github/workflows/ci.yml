@@ -21,6 +21,15 @@ jobs:
           enable-cache: true
       - run: uv sync --locked --extra all
       - run: uv run pytest -q
+      - name: Run the example projects
+        run: |
+          cd examples/training
+          uv run python data.py
+          uv run bash jobs/local.sh
+          uv run python train.py -m model=cubic learning_rate=0.3 seed=1,2
+          uv run cairn report build report.qmd --output ../../build/training-report > /dev/null
+          cd ../pipeline
+          uv run make > /dev/null
       - run: uv build
       - name: Check wheel contains bundled UI
         run: |
@@ -51,8 +60,8 @@ jobs:
       - run: npx --prefix ui playwright install --with-deps chromium webkit
       - name: Seed two report publications for history and comment tests
         run: |
-          CAIRN_REPO=/tmp/cairn-ci uv run python examples/run.py
-          CAIRN_REPO=/tmp/cairn-ci uv run python examples/run.py
+          CAIRN_REPO=/tmp/cairn-ci uv run python examples/report-showcase/run.py
+          CAIRN_REPO=/tmp/cairn-ci uv run python examples/report-showcase/run.py
       - name: Browser tests
         run: |
           uv run cairn --repo /tmp/cairn-ci server --host 127.0.0.1 --port 18765 --no-auth > /tmp/cairn-server.log 2>&1 &

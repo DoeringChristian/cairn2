@@ -1,0 +1,11 @@
+# Usage: python train.py -m hydra/launcher=slurm model=linear,cubic learning_rate=0.03,0.3
+# Needs hydra-submitit-launcher.
+defaults:
+  - submitit_slurm
+
+timeout_min: 30
+cpus_per_task: 2
+mem_gb: 4
+submitit_folder: build/submitit/%j
+setup:
+  - source jobs/env.sh

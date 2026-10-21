@@ -1,0 +1,4 @@
+model=linear learning_rate=0.03
+model=linear learning_rate=0.3
+model=cubic learning_rate=0.03
+model=cubic learning_rate=0.3

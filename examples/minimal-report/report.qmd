@@ -7,8 +7,9 @@ cairn:
 ## A reproducible calculation {#sec-calculation}
 
 This source executes in a fresh Python kernel. Cells read artifacts with
-`cairn.use("runs/training@latest")`, which names the `training` artifact in the
-`runs` namespace; the manifest records the exact version each reference resolved to.
+`cairn.use("runs/training")`, which names the latest `training` artifact in the
+`runs` namespace, or search with `cairn.find("runs/*")`; the manifest records the
+exact version of every artifact the report used.
 
 ```{python}
 #| label: tbl-squares

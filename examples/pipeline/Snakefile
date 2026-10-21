@@ -1,0 +1,45 @@
+# The same pipeline as the Makefile: snakemake --cores 1
+
+
+rule report:
+    input:
+        "report.qmd",
+        points="build/points.id",
+        fit="build/fit.id",
+        evaluation="build/evaluate.id",
+    output:
+        "build/report.json",
+    shell:
+        "rm -rf build/report && cairn report build report.qmd --output build/report --publish"
+        " dataset=$(cat {input.points}) fit=$(cat {input.fit})"
+        " evaluation=$(cat {input.evaluation}) > {output}"
+
+
+rule prepare:
+    input:
+        "prepare.py",
+    output:
+        "build/points.id",
+    shell:
+        "python prepare.py > {output}"
+
+
+rule fit:
+    input:
+        "fit.py",
+        points="build/points.id",
+    output:
+        "build/fit.id",
+    shell:
+        "python fit.py $(cat {input.points}) > {output}"
+
+
+rule evaluate:
+    input:
+        "evaluate.py",
+        fit="build/fit.id",
+        points="build/points.id",
+    output:
+        "build/evaluate.id",
+    shell:
+        "python evaluate.py $(cat {input.fit}) $(cat {input.points}) > {output}"
