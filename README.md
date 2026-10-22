@@ -489,7 +489,7 @@ cairn --repo ./results server
 ```
 
 The server serves the bundled React UI and prints an immediate login link.
-Browser sessions last 12 hours. Use `--no-ui` for API-only operation or
+Browser sessions end after 7 days without use. Use `--no-ui` for API-only operation or
 `--no-auth` for local development without a token. Reports open directly with
 a table of contents, interactive figures and media, source copying, and comments
 that carry across reports with the same project and name and can be resolved.

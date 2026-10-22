@@ -1,3 +1,4 @@
+import time
 from contextlib import closing
 
 from fastapi.testclient import TestClient
@@ -144,6 +145,28 @@ def test_browser_tags_use_annotations_and_reject_conflicts_and_foreign_origins(t
                 ).status_code
                 == 200
             )
+
+
+def test_browser_sessions_renew_while_used_and_end_after_a_week_idle(tmp_path, monkeypatch):
+    now = [time.time()]
+    monkeypatch.setattr("itsdangerous.timed.time.time", lambda: now[0])
+    with (
+        closing(Repository(tmp_path)) as repo,
+        TestClient(create_app(repo, token="test-token", ui=True)) as browser,
+    ):
+        browser.post("/ui-api/login", json={"token": "test-token"})
+        assert "set-cookie" not in browser.get("/ui-api/session").headers
+        now[0] += 6 * 24 * 60 * 60
+        renewed = browser.get("/ui-api/session")
+        assert "max-age=604800" in renewed.headers["set-cookie"].lower()
+        now[0] += 6 * 24 * 60 * 60
+        assert browser.get("/ui-api/session").status_code == 200
+        now[0] += 2 * 60 * 60
+        browser.post("/ui-api/logout")
+        assert browser.get("/ui-api/session").status_code == 401
+        browser.post("/ui-api/login", json={"token": "test-token"})
+        now[0] += 8 * 24 * 60 * 60
+        assert browser.get("/ui-api/session").status_code == 401
 
 
 def test_browser_removal_requires_session_and_origin(tmp_path):

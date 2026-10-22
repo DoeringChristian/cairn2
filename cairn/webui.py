@@ -9,6 +9,7 @@ import importlib.util
 import json
 import mimetypes
 import secrets
+import time
 from pathlib import Path
 from typing import Annotated
 
@@ -28,7 +29,9 @@ from .model import NotFound, Unauthorized, ValidationError, safe_path
 
 STATIC = Path(__file__).with_name("ui_static")
 COOKIE = "cairn_browser"
-SESSION_SECONDS = 12 * 60 * 60
+SESSION_SECONDS = 7 * 24 * 60 * 60
+RENEW_SECONDS = 60 * 60
+VIEWER_SECONDS = 12 * 60 * 60
 READ_POSTS = {"/v1/resolutions", "/v1/records/query", "/v1/blobs/availability"}
 
 
@@ -47,18 +50,34 @@ class BrowserSessions:
         # Isolate cookies from other Cairn instances on the same hostname.
         self.cookie = COOKIE + "_" + hashlib.sha256(token.encode()).hexdigest()[:12]
 
-    def valid(self, request):
+    def _issued(self, request):
         from itsdangerous import BadSignature
 
-        if self.no_auth:
-            return True
         try:
-            return (
-                self.signer.loads(request.cookies.get(self.cookie, ""), max_age=SESSION_SECONDS)
-                == "read"
+            value, issued = self.signer.loads(
+                request.cookies.get(self.cookie, ""), max_age=SESSION_SECONDS, return_timestamp=True
             )
         except BadSignature:
-            return False
+            return None
+        return issued if value == "read" else None
+
+    def valid(self, request):
+        return self.no_auth or self._issued(request) is not None
+
+    def stale(self, request):
+        """Whether a valid session should be renewed, so sessions in use do not expire."""
+        issued = None if self.no_auth else self._issued(request)
+        return issued is not None and time.time() - issued.timestamp() > RENEW_SECONDS
+
+    def grant(self, response, request):
+        response.set_cookie(
+            self.cookie,
+            self.signer.dumps("read"),
+            max_age=SESSION_SECONDS,
+            httponly=True,
+            samesite="strict",
+            secure=request.url.scheme == "https",
+        )
 
     def require(self, request):
         if not self.valid(request):
@@ -107,13 +126,16 @@ class BrowserAccess:
             removal = (
                 method == "DELETE" and len(parts) == 4 and parts[1:3] == ["ui-api", "artifacts"]
             )
+            explicit = b"authorization" in dict(scope["headers"])
+            session = (read or comment or tag_edit or removal) and self.sessions.valid(request)
+            renew = (
+                session
+                and not explicit
+                and path != "/ui-api/logout"
+                and self.sessions.stale(request)
+            )
             # Explicit bearer headers take precedence, including invalid ones.
-            if (
-                shell
-                or login
-                or viewer
-                or ((read or comment or tag_edit or removal) and self.sessions.valid(request))
-            ) and (b"authorization" not in dict(scope["headers"])):
+            if (shell or login or viewer or session) and not explicit:
                 scope = {
                     **scope,
                     "headers": [
@@ -121,6 +143,10 @@ class BrowserAccess:
                         (b"authorization", b"Bearer " + self.token.encode()),
                     ],
                 }
+
+            renewal = Response()
+            if renew:
+                self.sessions.grant(renewal, request)
 
             async def secure_send(message):
                 if message["type"] == "http.response.start":
@@ -130,6 +156,15 @@ class BrowserAccess:
                             *message.get("headers", []),
                             (b"x-content-type-options", b"nosniff"),
                             (b"referrer-policy", b"no-referrer"),
+                            *(
+                                [
+                                    (key, value)
+                                    for key, value in renewal.raw_headers
+                                    if key == b"set-cookie"
+                                ]
+                                if renew
+                                else []
+                            ),
                             *(
                                 [(b"cache-control", b"no-store")]
                                 if not any(
@@ -204,14 +239,7 @@ def install(app, repository, token, *, no_auth=False):
         if not authenticated:
             raise Unauthorized("Invalid token")
         response = JSONResponse({"authenticated": True})
-        response.set_cookie(
-            sessions.cookie,
-            sessions.signer.dumps("read"),
-            max_age=SESSION_SECONDS,
-            httponly=True,
-            samesite="strict",
-            secure=request.url.scheme == "https",
-        )
+        sessions.grant(response, request)
         return response
 
     @app.post("/ui-api/logout")
@@ -642,7 +670,7 @@ def install(app, repository, token, *, no_auth=False):
     @app.get("/ui-api/viewers/{signed}/{path:path}")
     def viewer_file(signed: str, path: str, request: Request):
         try:
-            artifact_id = viewers.loads(signed, max_age=SESSION_SECONDS)
+            artifact_id = viewers.loads(signed, max_age=VIEWER_SECONDS)
         except BadSignature:
             raise Unauthorized("Viewer link expired; reload the report") from None
         origin = f"{request.url.scheme}://{request.url.netloc}"
