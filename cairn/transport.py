@@ -321,6 +321,12 @@ class HTTPRepository:
                 headers={"Content-Type": "application/octet-stream"},
             )
 
+    def link_blob(self, path) -> BlobDescriptor:
+        self._require("links")
+        # The server hashes the file in place, which takes minutes for large files.
+        with self.request_timeout(24 * 3600):
+            return self._request("POST", "v1/links", json={"path": path})
+
     def has_blobs(self, digests) -> dict[str, bool]:
         return self._request("POST", "v1/blobs/availability", json={"digests": digests})
 

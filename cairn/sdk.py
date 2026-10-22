@@ -10,6 +10,7 @@ import os
 import sys
 import threading
 import time
+import warnings
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
@@ -32,6 +33,7 @@ from .model import (
     Conflict,
     NotFound,
     NotPublished,
+    Unsupported,
     ValidationError,
     canonical,
     new_id,
@@ -74,7 +76,7 @@ class Client:
         else:
             from .storage import Repository
 
-            self.backend = Repository(self.repo)
+            self.backend = Repository(self.repo, link_roots=[Path("/")])
             self.token = None
 
     def _ensure_delivery(self):
@@ -285,7 +287,7 @@ class Artifact:
     def version(self):
         return self.result.get("number") if self.result else None
 
-    def _encode(self, value, *, describe=False):
+    def _encode(self, value, *, describe=False, link=False):
         if describe:
             return encode(value, _describe_blob)
         put_blob = (
@@ -293,13 +295,24 @@ class Artifact:
             if self.client.delivery
             else self.client.backend.put_blob
         )
-        return encode(value, put_blob)
+        return encode(value, self._linker(put_blob) if link else put_blob)
 
-    def _append(self, kind, data):
+    def _linker(self, put_blob):
+        def store(source):
+            if isinstance(source, (str, os.PathLike)):
+                try:
+                    return self.client.backend.link_blob(str(Path(source).resolve()))
+                except Unsupported as error:
+                    warnings.warn(f"{error}; uploading a copy instead", stacklevel=2)
+            return put_blob(source)
+
+        return store
+
+    def _append(self, kind, data, *, link=False):
         with self._lock:
             if self._closed:
                 raise Conflict("Writer is closed")
-            encoded = self._encode(data)
+            encoded = self._encode(data, link=link)
             if self.client.delivery:
                 return self.client.delivery.append(self.writer_id, kind, encoded)
             result = self.client.backend.append_batch(
@@ -340,10 +353,15 @@ class Artifact:
             raise ValidationError("Metadata updates must be dictionaries")
         return self._append("metadata", metadata)
 
-    def add(self, source, *, name=None):
-        return self._add(source, name, reserved=False)
+    def add(self, source, *, name=None, link=False):
+        """Add a file, folder, bytes or typed value under a name.
 
-    def _add(self, source, name, *, reserved=True):
+        link=True references files the repository can read where they are instead of
+        copying them; the repository copies them when it cannot read them.
+        """
+        return self._add(source, name, reserved=False, link=link)
+
+    def _add(self, source, name, *, reserved=True, link=False):
         if isinstance(source, (str, os.PathLike)):
             path = Path(source)
             value = Directory(path) if path.is_dir() else File(path)
@@ -360,7 +378,7 @@ class Artifact:
             raise ValidationError("add() requires a name for this typed value")
         if not reserved and name.split("/", 1)[0] in SECTIONS:
             raise ValidationError(f'"{name.split("/", 1)[0]}/" is reserved for Cairn files')
-        return self._append("capture", {"name": name, "value": value})
+        return self._append("capture", {"name": name, "value": value}, link=link)
 
     def annotate(self, patch, *, expected_etag=None, target="artifact"):
         return self.client.annotate(self.id, patch, expected_etag=expected_etag, target=target)

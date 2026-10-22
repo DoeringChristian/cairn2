@@ -58,6 +58,7 @@ UTC ISO strings; errors have a stable code, message and details.
 | `set_alias(artifact_id, alias, *, expected_id=None, request_id=None)` | Assigns an alias within the artifact's name; compare-and-swap against its previous target. `latest` is allowed; `live` and `vN` are reserved. |
 | `query(ref, *, project='default', where=None, fields=None, limit=100, cursor=None, kind=None)` | `{items, next_cursor, cutoff, artifact_id}`; cursor pins artifact and acknowledged cutoff. |
 | `put_blob(source, *, digest=None, size=None)` | Verified immutable content descriptor `{digest, size}`. |
+| `link_blob(path)` | `{digest, size}` of a file the repository can read, registered in place without a copy. Only absolute paths under the repository's link roots are accepted, otherwise Unsupported; the stored entry records the file's modification time, and opening it raises IntegrityError when size or time changed. |
 | `has_blobs(digests)` | Mapping of digest to availability. |
 | `open_blob(digest)` | Binary stream context manager, caller closes it. |
 | `delete(artifact_id, *, request_id=None)` | Soft deletion: `{id, deleted, retained_by}`. Names and aliases stop resolving it; `latest` falls back to the highest remaining finished version. Finished IDs stay readable for provenance until garbage collection. |
@@ -116,7 +117,7 @@ exact retry intent. The 8 MiB final manifest bound is a defensive check.
 
 Routes are named REST resources: `POST /v1/artifacts`, artifact-scoped writers,
 entries, finalization, aliases, annotations and comments; `PUT /v1/comments/{id}`
-and `PUT /v1/comments/{id}/resolution`; `POST /v1/resolutions`, `POST /v1/searches`,
+and `PUT /v1/comments/{id}/resolution`; `POST /v1/resolutions`, `POST /v1/searches`, `POST /v1/links`,
 `POST /v1/records/query`, `GET /v1/history?ref=...&project=...`,
 `DELETE /v1/artifacts/{id}`, and `POST /v1/maintenance/gc`.
 Blob uploads/downloads stream bytes. There are no revision, snapshot or separate
@@ -219,7 +220,8 @@ the Python client. Cursors bind project, namespace, state and predicate.
 HTTP annotation edits use `PATCH /v1/artifacts/{id}/annotations` with
 `{patch, expected_etag, target, request_id}`; `GET` on the same path returns the
 layers. `GET /v1/artifacts/{id}/comments` accepts `scope` and `include_resolved`.
-`/v1/capabilities` lists the `search` feature, which `find` requires, and the
+`/v1/capabilities` lists the `search` feature, which `find` requires, the `links`
+feature, which `link_blob` requires, and the
 `annotations` feature; clients check it before using
 name targets, layers, comment authors, scopes, edits or resolution. Discovery passes
 JSON `where` and optional `state` to `GET /v1/artifacts`. Python exposes

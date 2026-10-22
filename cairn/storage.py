@@ -289,7 +289,9 @@ def effective_annotations(conn, artifact):
 
 
 class Repository:
-    def __init__(self, path=None, *, database_url=None, object_store=None, migrate=False):
+    def __init__(
+        self, path=None, *, database_url=None, object_store=None, migrate=False, link_roots=()
+    ):
         if path is not None and database_url is not None:
             raise ValidationError("Choose a local path or database URL")
         self.path = (
@@ -302,6 +304,7 @@ class Repository:
         if object_store is None:
             raise ValidationError("An explicit database requires an object store")
         self.objects = object_store
+        self.link_roots = [Path(root).resolve() for root in link_roots]
         self.engine = sa.create_engine(
             database_url,
             pool_pre_ping=True,
@@ -1533,6 +1536,73 @@ class Repository:
             )
         return {sha: sha in ready for sha in digests}
 
+    def link_blob(self, path):
+        """Register a file this repository can read as content, without copying it.
+
+        Only files under link_roots are linked; their bytes stay where they are.
+        """
+        if not isinstance(path, str) or not Path(path).is_absolute():
+            raise ValidationError("Link an absolute file path")
+        resolved = Path(path).resolve()
+        if not any(resolved.is_relative_to(root) for root in self.link_roots):
+            raise Unsupported(f"This repository does not link files outside its link roots: {path}")
+        if not resolved.is_file():
+            raise ValidationError(f"Only regular files can be linked: {path}")
+        before = resolved.stat()
+        hasher = hashlib.sha256()
+        with resolved.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                hasher.update(chunk)
+        after = resolved.stat()
+        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+            raise Conflict(f"File changed while it was linked: {path}")
+        sha, length = hasher.hexdigest(), after.st_size
+        with self._transaction(write=True) as conn:
+            existing = _row(
+                conn.execute(sa.select(blobs).where(blobs.c.digest == sha).with_for_update())
+            )
+            if existing and existing["state"] == "ready":
+                return {"digest": sha, "size": length}
+            if existing and existing["lease_until"] > time.time():
+                raise Pending("Another upload or cleanup owns this content")
+            values = {
+                "digest": sha,
+                "size": length,
+                "key": f"link:{after.st_mtime_ns}:{resolved}",
+                "state": "ready",
+                "lease_until": time.time() + 3600,
+                "created_at": now(),
+            }
+            if existing:
+                conn.execute(blobs.update().where(blobs.c.digest == sha).values(**values))
+            else:
+                conn.execute(blobs.insert().values(**values))
+        return {"digest": sha, "size": length}
+
+    def linked_path(self, digest):
+        """The original file of linked content, or None for content stored in the repository."""
+        with self._transaction() as conn:
+            stored = _row(conn.execute(sa.select(blobs).where(blobs.c.digest == digest)))
+        if stored is None or stored["state"] != "ready" or not stored["key"].startswith("link:"):
+            return None
+        return self._linked(stored)
+
+    @staticmethod
+    def _linked(stored):
+        _, modified, path = stored["key"].split(":", 2)
+        try:
+            info = Path(path).stat()
+        except FileNotFoundError as exc:
+            raise NotFound(f"Linked file is missing: {path}") from exc
+        if (info.st_size, info.st_mtime_ns) != (stored["size"], int(modified)):
+            raise IntegrityError(f"Linked file changed since it was linked: {path}")
+        return Path(path)
+
+    def delete_object(self, key):
+        """Delete stored bytes; linked files belong to their owner and stay."""
+        if not key.startswith("link:"):
+            self.objects.delete(key)
+
     @contextmanager
     def open_blob(self, digest):
         validate_digest(digest)
@@ -1548,8 +1618,12 @@ class Repository:
                 .where(blobs.c.digest == digest)
                 .values(lease_until=time.time() + 3600)
             )
-        with self.objects.open(stored["key"]) as stream:
-            yield stream
+        if stored["key"].startswith("link:"):
+            with self._linked(stored).open("rb") as stream:
+                yield stream
+        else:
+            with self.objects.open(stored["key"]) as stream:
+                yield stream
 
     def delete(self, artifact_id, *, request_id=None):
         def remove():

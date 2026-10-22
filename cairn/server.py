@@ -92,6 +92,10 @@ class Resolve(StrictBody):
     project: str = "default"
 
 
+class Link(StrictBody):
+    path: str
+
+
 class Search(StrictBody):
     pattern: str
     project: str = "default"
@@ -310,6 +314,7 @@ def create_app(
                 "annotations",
                 "streaming_blobs",
                 "search",
+                "links",
             ],
         }
 
@@ -387,6 +392,10 @@ def create_app(
     @app.post("/v1/records/query")
     def query(body: Records):
         return repository.query(**body.model_dump())
+
+    @app.post("/v1/links")
+    def link_blob(body: Link):
+        return repository.link_blob(body.path)
 
     @app.put("/v1/blobs")
     async def put_blob(

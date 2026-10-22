@@ -593,7 +593,7 @@ def check_repository(repository, *, verify_blobs=False):
         errors.extend(_integrity_errors(conn))
         content = list(
             conn.execute(
-                sa.select(blobs.c.digest, blobs.c.size).where(
+                sa.select(blobs.c.digest, blobs.c.size, blobs.c.key).where(
                     blobs.c.state == "ready",
                     sa.exists(
                         sa.select(blob_refs.c.owner).where(blob_refs.c.digest == blobs.c.digest)
@@ -601,9 +601,9 @@ def check_repository(repository, *, verify_blobs=False):
                 )
             ).mappings()
         )
-    if verify_blobs:
-        for blob in content:
-            try:
+    for blob in content:
+        try:
+            if verify_blobs:
                 hasher, size = hashlib.sha256(), 0
                 with repository.open_blob(blob["digest"]) as stream:
                     while chunk := stream.read(1024 * 1024):
@@ -611,8 +611,10 @@ def check_repository(repository, *, verify_blobs=False):
                         size += len(chunk)
                 if hasher.hexdigest() != blob["digest"] or size != blob["size"]:
                     raise IntegrityError("Stored bytes do not match digest/size")
-            except (OSError, CairnError) as exc:
-                errors.append({"blob": blob["digest"], "error": str(exc)})
+            elif blob["key"].startswith("link:"):
+                repository._linked(blob)
+        except (OSError, CairnError) as exc:
+            errors.append({"blob": blob["digest"], "error": str(exc)})
     return {"ok": not errors, "errors": errors, "counts": counts}
 
 
@@ -732,7 +734,7 @@ def collect_garbage(repository, *, grace_seconds=3600, dry_run=True):
                 )
     if not dry_run:
         for row in candidates:
-            repository.objects.delete(row["key"])
+            repository.delete_object(row["key"])
             with repository._transaction(write=True) as conn:
                 conn.execute(
                     blobs.delete().where(

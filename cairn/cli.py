@@ -124,6 +124,11 @@ def parser() -> argparse.ArgumentParser:
     add.add_argument(
         "--use", action="append", default=[], help="Record an input artifact; repeatable"
     )
+    add.add_argument(
+        "--link",
+        action="store_true",
+        help="Reference the files where they are if the repository can read them, else copy them",
+    )
     add.set_defaults(action="add")
     remove = commands.add_parser("remove", help="Remove one exact artifact; gc reclaims storage")
     remove.add_argument("reference")
@@ -277,6 +282,13 @@ def parser() -> argparse.ArgumentParser:
         "--no-auth", action="store_true", help="Development only: disable authentication"
     )
     server.add_argument("--no-ui", action="store_true", help="Disable the optional browser UI")
+    server.add_argument(
+        "--link-root",
+        action="append",
+        default=[],
+        metavar="FOLDER",
+        help="Let clients link files under this folder instead of uploading them; repeatable",
+    )
     _storage_arguments(server)
     server.set_defaults(action="server")
     return root
@@ -362,6 +374,7 @@ def _serve(args):
         args.repo = repo
     try:
         repository = _repository(args)
+        repository.link_roots = [Path(root).resolve() for root in args.link_root]
     except Unsupported as exc:
         if exc.details.get("schema_version") != 6 or not sys.stdin.isatty():
             raise
@@ -462,7 +475,7 @@ def _dispatch(args, client):
             for reference in args.use:
                 artifact.use(reference)
             for path in args.paths:
-                artifact.add(path)
+                artifact.add(path, link=args.link)
         return artifact.result
     if action == "remove":
         return client.remove(args.reference)

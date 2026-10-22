@@ -371,7 +371,12 @@ def _sha256(path):
 
 
 def cached_blob(backend, digest):
-    """Return the verified, read-only cache copy of a blob, fetching it at most once."""
+    """Return the verified, read-only cache copy of a blob, fetching it at most once.
+
+    Files a local repository links are used where they are instead.
+    """
+    if (linked := getattr(backend, "linked_path", None)) and (original := linked(digest)):
+        return original
     path = cache_root() / "blobs" / digest
     if path.is_file():
         return path
@@ -410,10 +415,13 @@ def save_blob(backend, blob, root, name):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}")
     try:
-        try:
-            os.link(source, temporary)
-        except OSError:
-            shutil.copyfile(source, temporary)
+        if not source.is_relative_to(cache_root()):
+            os.symlink(source, temporary)
+        else:
+            try:
+                os.link(source, temporary)
+            except OSError:
+                shutil.copyfile(source, temporary)
         os.replace(temporary, path)
     except BaseException:
         temporary.unlink(missing_ok=True)

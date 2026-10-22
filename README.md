@@ -110,6 +110,19 @@ cairn add datasets/shapes data/shapes data/labels.csv --metadata '{"source": "su
 cairn add models/resnet ckpt.pt --use datasets/shapes@v1
 ```
 
+Large data that already sits where the repository can read it can be linked
+instead of copied: `cairn add datasets/gonio /data/gonio --link`, or
+`dataset.add(path, link=True)` in Python. The repository records each file's
+location, size, modification time and SHA-256, hashing it in place, and keeps no
+copy. Readers on other machines download it through the server like any other
+file, and readers of a local repository use the files where they are:
+`download()` creates symbolic links to them. The repository needs to read the
+path: a local repository can link any file, a server only files under its
+`--link-root` folders; otherwise the files are uploaded as a copy, with a
+warning. Treat linked files as read-only: reading a changed or missing one raises
+`IntegrityError`, `cairn repo check` lists them, and garbage collection never
+deletes them. Export copies their bytes.
+
 After `cairn.init()`, report `build()` and `publish()` can omit `client=`:
 they inherit that run's repository and project even after the run finishes.
 Explicit clients remain supported.
@@ -399,7 +412,9 @@ Startup prints the absolute repository path. Explicit `--repo` or
 `--database-url` settings take precedence over discovery.
 If that default port is occupied, it warns and selects a free port. An explicit
 `--port` is fixed and fails if occupied. Use `--host 0.0.0.0` to listen on all
-interfaces. Startup prints URLs using the actual bound port.
+interfaces. Startup prints URLs using the actual bound port. `--link-root FOLDER`
+(repeatable) lets clients link files under that folder instead of uploading them;
+without it, the server links nothing.
 
 When the UI is installed, startup also prints login links with the server token
 embedded in the URL fragment. They remain reusable across restarts until that
