@@ -64,13 +64,14 @@ discussion by project, namespace and report name, so new published versions reta
 the discussion while each comment keeps its original artifact, quote and source
 anchor. Browser sessions may add report comments; other repository writes still
 require the bearer token. Select report text to reveal copy and comment icons, or
-click an existing comment marker beside its passage to reopen and edit it.
+click a highlighted passage to reopen and edit its comment. Normal text has no
+right-side comment marker.
 
 The selection comment editor is a floating text box. Edits autosave after a short
 pause; clicking outside flushes pending changes and closes it. Enter inserts a
 newline. A small delete icon removes the comment across all report versions. Commented quotations are highlighted
 without changing report layout. Highlight matching is scoped to the original
-source file; unmatched quotations remain accessible from a marker at the start of the report.
+source file; unmatched quotations remain accessible in the unplaced-comments list below the report.
 
 The report overview groups builds by report name and opens the latest finished
 version by default. The artifact detail selector retains access to older versions.
@@ -91,3 +92,8 @@ Project lists offer matching-all tag filters, kept in the URL, and tag chips in
 artifact/run rows. Annotation ETags protect against overwriting concurrent edits.
 Displayed IDs copy their full value; code blocks copy the original code with a
 brief tick confirmation. Text, media, selection, and lightbox comment controls share `CommentButton`. Media controls appear on the right and reopen an existing comment when present.
+
+Lightbox zoom controls and gesture hints occupy a separate row below the media.
+The annotation editor also reserves space when open, so neither covers the image.
+New figure anchors distinguish each output within a cell. Existing anchors fall
+back to their saved source line and label.

@@ -3,7 +3,7 @@ import { useRef, useState } from 'react';
 import { heldVideos, VideoPreview } from './media/VideoPreview';
 import { MediaLightbox, type Playback } from './MediaLightbox';
 /** Prism2 playback transport and lightbox; audio uses its native accessible player. */
-export function MediaPlayback({src,mime,label,source}: {src:string;mime:string;label:string;source?:{file:string;line:number;artifact_ref?:string}}) {
+export function MediaPlayback({src,mime,label,source}: {src:string;mime:string;label:string;source?:{file:string;line:number;artifact_ref?:string;media_id?:string}}) {
   const [expanded,setExpanded]=useState<Playback>(), video=useRef<HTMLVideoElement|null>(null);
   if(mime.startsWith('audio/'))return <OutputComment source={source||{file:"report",line:1}} label="audio"><audio controls preload="metadata" src={src} aria-label={label} className="native-audio"/></OutputComment>;
   function enlarge(){const node=video.current;setExpanded({time:node?.currentTime??0,playing:node?!node.paused:true});if(node){heldVideos.add(node);node.pause();}}

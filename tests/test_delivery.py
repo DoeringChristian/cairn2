@@ -360,3 +360,27 @@ def test_abrupt_process_exit_keeps_committed_entry_and_staged_bytes(tmp_path):
     digest = remote.entries[writer][0]["data"]["file"]["blobs"][0]["digest"]
     assert remote.blobs[digest] == b"before crash"
     delivery.close()
+
+
+def test_records_logged_together_reach_the_repository_in_one_batch(tmp_path):
+    remote = Remote()
+    batches = []
+    original = remote.append_batch
+
+    def counted(artifact_id, writer_id, entries):
+        batches.append(len(entries))
+        return original(artifact_id, writer_id, entries)
+
+    remote.append_batch = counted
+    delivery = Delivery(remote, tmp_path, "https://example.test")
+    try:
+        writer = begin(delivery)["writer"]["id"]
+        time.sleep(0.5)
+        for step in range(20):
+            delivery.append(writer, "record", {"step": step})
+        deadline = time.monotonic() + 5
+        while sum(batches) < 20 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert batches == [20]
+    finally:
+        delivery.close()

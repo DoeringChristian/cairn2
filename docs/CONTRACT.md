@@ -62,10 +62,13 @@ UTC ISO strings; errors have a stable code, message and details.
 | `has_blobs(digests)` | Mapping of digest to availability. |
 | `open_blob(digest)` | Binary stream context manager, caller closes it. |
 | `delete(artifact_id, *, request_id=None)` | Soft deletion: `{id, deleted, retained_by}`. Names and aliases stop resolving it; `latest` falls back to the highest remaining finished version. Finished IDs stay readable for provenance until garbage collection. |
-| `add_comment(artifact_id, anchor, body, *, author=None, request_id=None)` | Comment on a finished, not deleted artifact; anchor is structured source location data and `author` unauthenticated text. |
+| `add_comment(artifact_id, anchor, body, *, author=None, for_agent=False, request_id=None)` | Comment on a finished, not deleted artifact; anchor is structured source location data and `author` unauthenticated text. `for_agent` marks it for an agent. |
+| `reply_comment(comment_id, body, *, author=None, for_agent=False, request_id=None)` | Reply in the thread of an open comment: `reply_to` names the thread's first comment, the anchor is empty and the artifact is the first comment's. |
+| `send_comment(comment_id, *, request_id=None)` | Stamps `sent_at` on a comment marked for an agent that is not sent yet and returns it; otherwise returns it unchanged. |
 | `comments(artifact_id, *, scope='artifact', include_resolved=True)` | Comments on the exact artifact, or with `scope='name'` on every version of its name, oldest first. |
-| `update_comment(comment_id, body, *, expected_revision=None, request_id=None)` | Replaces the body; a stale revision raises Conflict. |
-| `resolve_comment(comment_id, *, resolved=True, note=None, by=None, request_id=None)` | Sets or clears `resolved_at` and `resolution: {note, by}`. |
+| `list_comments(pattern=None, *, project='default', include_resolved=True, limit=100, cursor=None)` | Pages `{items, next_cursor}` of the project's comments, oldest first, including those on deleted versions; `pattern` is a name glob such as `reports/**` without a selector. |
+| `update_comment(comment_id, body, *, expected_revision=None, for_agent=None, request_id=None)` | Replaces the body and the agent mark; a change to either clears `sent_at`. A stale revision raises Conflict. |
+| `resolve_comment(comment_id, *, resolved=True, note=None, by=None, request_id=None)` | Sets or clears `resolved_at` and `resolution: {note, by}` on a thread's first comment; its replies follow its `resolved_at`. Deleting the first comment deletes its replies. |
 | `delete_comment(comment_id, *, request_id=None)` | `{id, deleted}`; an unknown ID raises NotFound. |
 | `collect_garbage(*, grace_seconds=3600, dry_run=True)` | `{dry_run, pinned, artifacts, candidates, removed, orphans}`. Purges artifacts deleted before the grace period that only other purged artifacts reference, then unreferenced content. |
 
@@ -116,7 +119,8 @@ exact retry intent. The 8 MiB final manifest bound is a defensive check.
 ## HTTP, SDK and reports
 
 Routes are named REST resources: `POST /v1/artifacts`, artifact-scoped writers,
-entries, finalization, aliases, annotations and comments; `PUT /v1/comments/{id}`
+entries, finalization, aliases, annotations and comments; `GET /v1/comments`, `PUT /v1/comments/{id}`,
+`POST /v1/comments/{id}/replies`, `POST /v1/comments/{id}/sending`
 and `PUT /v1/comments/{id}/resolution`; `POST /v1/resolutions`, `POST /v1/searches`, `POST /v1/links`,
 `POST /v1/records/query`, `GET /v1/history?ref=...&project=...`,
 `DELETE /v1/artifacts/{id}`, and `POST /v1/maintenance/gc`.
@@ -203,8 +207,17 @@ Annotation objects are capped at 1 MiB and their scalar array membership index a
 Updates, projections, ETags and index rows commit or roll back together.
 
 Comments always anchor to an exact finished artifact and carry its `number`,
-`artifact_deleted`, `author`, `revision`, `resolved_at` and `resolution`. They are
+`artifact_deleted`, `author`, `revision`, `resolved_at`, `resolution`, `reply_to`,
+`for_agent` and `sent_at`. They are
 not part of the projected `annotations` and do not count toward its limits.
+
+UI figure anchors may include an optional `media_id` string distinguishing outputs
+within a report. New code-output anchors use the source path, cell label (or source
+line when unlabelled), and output position. Readers match this identifier when
+present and fall back to existing `media_key`/source-line anchors otherwise.
+Existing comments remain readable without migration; older readers ignore the
+optional field and may still conflate outputs sharing the same legacy key.
+
 
 Discovery predicates use explicit roots `/metadata/...` and `/annotations/...`;
 `find` also accepts `/value/...`.
@@ -219,9 +232,12 @@ the Python client. Cursors bind project, namespace, state and predicate.
 
 HTTP annotation edits use `PATCH /v1/artifacts/{id}/annotations` with
 `{patch, expected_etag, target, request_id}`; `GET` on the same path returns the
-layers. `GET /v1/artifacts/{id}/comments` accepts `scope` and `include_resolved`.
+layers. `GET /v1/artifacts/{id}/comments` accepts `scope` and `include_resolved`;
+`GET /v1/comments` accepts `pattern`, `project`, `include_resolved`, `limit` and `cursor`.
 `/v1/capabilities` lists the `search` feature, which `find` requires, the `links`
-feature, which `link_blob` requires, and the
+feature, which `link_blob` requires, the `comment_listing` feature, which
+`list_comments` requires, the `comment_threads` feature, which replies, sending
+and `for_agent` require, and the
 `annotations` feature; clients check it before using
 name targets, layers, comment authors, scopes, edits or resolution. Discovery passes
 JSON `where` and optional `state` to `GET /v1/artifacts`. Python exposes
@@ -236,7 +252,14 @@ synchronous and do not enter a writer's record-upload journal.
 
 ### Native report document versions
 
-New builds write `cairn/document` version **3** in `document.json`. Version 3
+New builds write `cairn/document` version **4** in `document.json`. Version 4
+is version 3 with all Markdown parsed at build, so readers never parse Markdown:
+the asset reference of a `text/markdown` output also carries `nodes`, and code
+blocks with `fig-cap`/`tbl-cap` or `fig-subcap` carry `caption_nodes` and
+`subcaption_nodes` (one list per subcaption). Nodes have the shape of Markdown
+block nodes, with cross references resolved and the source range of their block;
+fenced div nodes carry parsed `attributes` with `class` as a space-separated
+string. `index.html` renders the same parse. Version 3
 is version 2 plus fenced divs: blocks of kind `open` (with `attributes`: `id`,
 `class` list and key/value pairs, and an optional layout `grid` of cell widths
 in percent) and `close` nest the blocks between them. Markdown blocks may be
@@ -258,8 +281,11 @@ payloads with the same extension reuse one file. Report bundle data advertises
 `document_version`; absent means version 1.
 
 Readers support all versions: version 1 retains inline notebook MIME payloads;
-versions 2 and 3 load referenced assets as needed. Existing reports are not migrated.
-Older readers that only understand version 1 cannot read new native documents.
+versions 2 to 4 load referenced assets as needed. Existing reports are not migrated:
+the UI server's `preview.json` parses what versions 1 to 3 left as Markdown into
+the version 4 node shapes, so its `ui` extra includes the Markdown packages.
+Older readers that only understand version 1 cannot read new native documents,
+and readers that only understand versions 1 to 3 cannot read version 4.
 The `report/bundle` envelope remains version 1; exports remain complete bundles,
 and `document.json` is served byte-for-byte. The archived `executed.ipynb` remains
 standard nbformat with its original outputs, including Jupyter's base64 encoding;

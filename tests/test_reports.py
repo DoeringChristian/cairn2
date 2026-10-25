@@ -191,6 +191,73 @@ Term
     assert image["attributes"]["width"] == "50%" and "id" not in image["attributes"]
 
 
+def test_cell_markdown_and_captions_are_parsed_once_for_every_reader(tmp_path):
+    source = tmp_path / "cells.qmd"
+    source.write_text("""## Data {#sec-data}
+
+```{python}
+#| label: fig-a
+#| fig-cap: "A *plot*, see @sec-data"
+#| fig-subcap: ["left **one**"]
+from IPython.display import Markdown, display
+display(Markdown(\"\"\"::: {.finding}
+**Finding** for @fig-a
+:::
+
+::: {.callout-warning title="Careful"}
+Warned.
+:::\"\"\"))
+```
+""")
+    result = reports.build(source, tmp_path / "build")
+    page = (result.path / "index.html").read_text()
+    assert '<div class="finding">' in page and '<p class="callout-title">Careful</p>' in page
+    assert ":::" not in page.split("</code></pre>")[-1]
+    assert '<em>plot</em>, see <a class="crossref" href="#sec-data">' in page
+    assert "(a) left <strong>one</strong>" in page
+    code = next(
+        b
+        for b in json.loads((result.path / "document.json").read_text())["blocks"]
+        if b["kind"] == "code"
+    )
+    nodes = code["outputs"][0]["data"]["text/markdown"]["nodes"]
+    assert [
+        n["attributes"]
+        for n in nodes
+        if n["type"].endswith("_open") and n["type"].startswith("container_")
+    ] == [
+        {"class": "finding"},
+        {"class": "callout-warning", "title": "Careful"},
+    ]
+    assert [n["type"] for n in code["caption_nodes"]] == [
+        "text",
+        "em_open",
+        "text",
+        "em_close",
+        "text",
+        "html_inline",
+        "text",
+    ]
+    assert code["subcaption_nodes"][0][1]["type"] == "strong_open"
+
+
+def test_html_comments_are_hidden_and_other_raw_html_stays_text(tmp_path):
+    source = tmp_path / "comments.qmd"
+    source.write_text("""<!-- Direction report; results come from runs. -->
+
+## Results
+
+Loss fell <!-- check seed 3 --> by half.
+<!-- @agent: compare with
+the reference run -->
+Kept `<!-- code -->` and <b>bold</b>.
+""")
+    page = (reports.build(source, tmp_path / "build").path / "index.html").read_text()
+    assert "Direction report" not in page and "seed 3" not in page and "@agent" not in page
+    assert "Loss fell  by half." in page
+    assert "<code>&lt;!-- code --&gt;</code> and &lt;b&gt;bold&lt;/b&gt;." in page
+
+
 def test_fenced_divs_hold_cells_columns_tabs_figures_and_margins(tmp_path):
     (tmp_path / "box.svg").write_text(
         '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"/>'
@@ -445,8 +512,8 @@ Sources and local resources are captured.
     assert (result.path / "sources/data.txt").read_text() == "captured data"
     assert len(list((result.path / "assets").glob("*.svg"))) == 2
     document = json.loads((result.path / "document.json").read_text())
-    assert document["version"] == 3
-    assert result.manifest["document_version"] == 3
+    assert document["version"] == 4
+    assert result.manifest["document_version"] == 4
     code = next(block for block in document["blocks"] if block["kind"] == "code")
     assert code["source"] == {"path": "parts/results.qmd", "line_start": 5, "line_end": 12}
     assert len(code["outputs"]) == 3

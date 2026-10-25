@@ -207,6 +207,7 @@ display({"audio/wav": base64.b64encode(Path("assets/signal.wav").read_bytes()).d
 ```{python}
 #| echo: true
 display(Markdown("**Generated Markdown** can contain lists:\n\n- Pinned input readers\n- Captured local resources\n- Immutable publication"))
+display(Markdown("::: {.callout-note title=\"Generated callout\"}\nCells can print fenced divs, see @sec-code.\n:::"))
 print("Standard output stays selectable, with its code-cell source marker.")
 ```
 

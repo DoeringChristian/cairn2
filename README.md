@@ -336,12 +336,25 @@ script can pull the open ones, address them and mark them resolved:
 ```sh
 cairn comments list reports/direction           # open comments on every version
 cairn comments list reports/direction --json    # full anchors for agents
+cairn comments list 'reports/**'                # open comments on every report
+cairn comments list                             # open comments in the whole project
+cairn comments reply c_123 "Rewrote §3, see v5" --by agent
 cairn comments resolve c_123 --note "Rewrote report.qmd:42-44" --by agent
 cairn comments reopen c_123
+cairn comments watch 'reports/**'               # threads as they are sent to an agent
 ```
 
+Replies form a thread under the comment they answer; resolving, reopening or
+deleting the first comment covers its replies. In the UI, "Send to agent" (on by
+default) sends a comment to the agent when you click out of it, and a reply when
+you post it; editing a sent comment sends it again once you click out.
+`cairn comments watch` prints each open thread whenever a comment in it is sent,
+so an agent running it in the background is woken by every comment you finish;
+`--json` prints each batch as one line.
+
 `--all` includes resolved comments and `--exact` limits the list to the referenced
-version. Python offers `client.comments(ref, scope="name", include_resolved=False)`,
+version. Python offers `client.comments(ref=None, scope="name", include_resolved=False)`,
+`client.reply_comment(id, body, by=...)`, `client.send_comment(id)`,
 `client.resolve_comment(id, note=..., by=...)` and `client.reopen_comment(id)`.
 The UI hides resolved comments unless "Show resolved comments" is on. Authors and
 resolvers are free text; Cairn has no user accounts.
@@ -618,7 +631,8 @@ The implemented QMD/Markdown subset covers:
 
 This is a QMD subset, not full Quarto. It does not implement CSL styles,
 arbitrary Quarto extensions, other shortcodes, other execution languages, or
-Markdown raw HTML. Rich HTML output of cells is placed in an iframe without
+Markdown raw HTML; `<!-- -->` comments are hidden and other raw HTML shows as
+text. Rich HTML output of cells is placed in an iframe without
 scripts or external resource access. External image URLs and source paths
 escaping the report directory are rejected. Reading a live artifact fails.
 `cairn.Client()` opens the repository the report is built from; explicit clients
@@ -688,7 +702,7 @@ cairn gc --apply --grace-seconds 3600
 ```
 
 ```python
-client.remove("runs/training@v2")                  # or cairn.remove(...)
+client.remove("runs/training@v2")  # or cairn.remove(...)
 client.gc(apply=True)
 ```
 

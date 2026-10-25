@@ -398,3 +398,10 @@
 .prism-lightbox .media-timeline-handle { position: absolute; top: 5px; width: 10px; height: 26px; padding: 0; transform: translateX(-50%); border: 1px solid var(--card); border-radius: 3px; background: var(--accent); cursor: ew-resize; touch-action: none; }
 .media-selection-summary { font-size: 11px; color: var(--muted); }
 .prism-lightbox .media-icon-button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+
+/* Reserve space for controls instead of covering the image at fit. */
+.prism-lightbox-tools { display: flex; flex: none; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 16px; padding: 6px 10px; background: var(--card); border-top: 1px solid var(--line); }
+.prism-lightbox-tools .prism-zoom-toolbar { position: static; max-width: 100%; margin: 0; box-shadow: none; border: 0; }
+.prism-lightbox-tools .prism-gesture-hint { position: static; transform: none; background: transparent; color: var(--muted); padding: 0; white-space: normal; flex: 1 1 180px; }
+.prism-lightbox-surface { overflow-y: auto; }
+.prism-lightbox-stage { flex-shrink: 0; }

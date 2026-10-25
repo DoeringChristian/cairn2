@@ -134,11 +134,19 @@ class Comment(RequestID):
     anchor: dict[str, Any]
     body: str
     author: str | None = None
+    for_agent: bool = False
+
+
+class Reply(RequestID):
+    body: str
+    author: str | None = None
+    for_agent: bool = False
 
 
 class CommentEdit(RequestID):
     body: str
     expected_revision: int | None = None
+    for_agent: bool | None = None
 
 
 class Resolution(RequestID):
@@ -230,6 +238,8 @@ def _queries(request: Request):
         allowed = ("project", "namespace", "where", "state", "limit", "cursor")
     elif path == "/v1/blobs" and request.method == "PUT":
         allowed = ("digest", "size")
+    elif path == "/v1/comments" and request.method == "GET":
+        allowed = ("pattern", "project", "include_resolved", "limit", "cursor")
     elif path.endswith("/comments") and request.method == "GET":
         allowed = ("scope", "include_resolved")
     keys = list(request.query_params.keys())
@@ -311,6 +321,8 @@ def create_app(
                 "writers",
                 "aliases",
                 "comments",
+                "comment_listing",
+                "comment_threads",
                 "annotations",
                 "streaming_blobs",
                 "search",
@@ -460,6 +472,31 @@ def create_app(
         include_resolved: bool = True,
     ):
         return repository.comments(artifact_id, scope=scope, include_resolved=include_resolved)
+
+    @app.get("/v1/comments")
+    def list_comments(
+        request: Request,
+        pattern: str | None = None,
+        project: str = "default",
+        include_resolved: bool = True,
+        limit: int = Query(default=100, ge=1),
+        cursor: str | None = None,
+    ):
+        return repository.list_comments(
+            pattern,
+            project=project,
+            include_resolved=include_resolved,
+            limit=limit,
+            cursor=cursor,
+        )
+
+    @app.post("/v1/comments/{comment_id}/sending")
+    def send_comment(comment_id: str, body: RequestID):
+        return repository.send_comment(comment_id, **body.model_dump())
+
+    @app.post("/v1/comments/{comment_id}/replies")
+    def reply_comment(comment_id: str, body: Reply):
+        return repository.reply_comment(comment_id, **body.model_dump())
 
     @app.put("/v1/comments/{comment_id}")
     def update_comment(comment_id: str, body: CommentEdit):

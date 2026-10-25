@@ -45,6 +45,7 @@ from .model import (
 from .objects import Files, ensure_directory
 
 SCHEMA_VERSION = 7
+BUSY_SECONDS = 30
 schema = sa.MetaData()
 NAME_KEYS = ("project", "namespace", "name")
 # PostgreSQL JSON preserves the logged numeric representation (-0.0, 1e20).
@@ -227,6 +228,27 @@ def _natural(left, right):
     return (key(left) > key(right)) - (key(left) < key(right))
 
 
+def _glob(pattern):
+    """A regular expression for a name pattern: * stays within one path segment and ** crosses them."""
+    return (
+        "^"
+        + "".join(
+            ".*" if part == "**" else "[^/]*" if part == "*" else re.escape(part)
+            for part in re.split(r"(\*\*|\*)", pattern)
+        )
+        + "$"
+    )
+
+
+def _comment_value(comment):
+    """The stored value of a comment as listings return it."""
+    value = {"anchor": comment["anchor"], "body": comment["body"]}
+    value.update(
+        {key: comment[key] for key in ("reply_to", "for_agent", "sent_at") if comment[key]}
+    )
+    return value
+
+
 def _row(result):
     value = result.mappings().first()
     return dict(value) if value is not None else None
@@ -308,7 +330,7 @@ class Repository:
         self.engine = sa.create_engine(
             database_url,
             pool_pre_ping=True,
-            connect_args={"check_same_thread": False, "timeout": 30}
+            connect_args={"check_same_thread": False, "timeout": BUSY_SECONDS}
             if database_url.startswith("sqlite")
             else {},
         )
@@ -320,12 +342,35 @@ class Repository:
             @sa.event.listens_for(self.engine, "connect")
             def initialize_sqlite(connection, _):
                 connection.isolation_level = None
-                connection.execute("PRAGMA busy_timeout=30000")
+                connection.execute(f"PRAGMA busy_timeout={int(BUSY_SECONDS * 1000)}")
                 connection.execute("PRAGMA journal_mode=WAL")
                 connection.execute("PRAGMA synchronous=FULL")
                 connection.execute("PRAGMA foreign_keys=ON")
                 connection.create_collation("cairn_natural", _natural)
 
+        if migrate or not self._current():
+            self._initialize(migrate)
+
+    def _current(self):
+        """Whether the repository already has this schema, so opening it needs no write lock."""
+        with self._transaction() as conn:
+            if not set(schema.tables) <= set(sa.inspect(conn).get_table_names()):
+                return False
+            version = conn.execute(
+                sa.select(meta.c.value).where(meta.c.key == "schema_version")
+            ).scalar()
+            if version != SCHEMA_VERSION:
+                return False
+            self.natural = (
+                self.dialect == "sqlite"
+                or conn.execute(
+                    sa.text("SELECT 1 FROM pg_collation WHERE collname = 'cairn_natural'")
+                ).first()
+                is not None
+            )
+            return True
+
+    def _initialize(self, migrate):
         with self._transaction(write=True) as conn:
             if self.dialect == "postgresql":
                 conn.execute(sa.text("SELECT pg_advisory_xact_lock(731804171)"))
@@ -437,7 +482,12 @@ class Repository:
     def _transaction(self, *, write=False):
         with self.engine.connect() as conn:
             if self.dialect == "sqlite":
-                conn.exec_driver_sql("BEGIN IMMEDIATE" if write else "BEGIN")
+                try:
+                    conn.exec_driver_sql("BEGIN IMMEDIATE" if write else "BEGIN")
+                except sa.exc.OperationalError as exc:
+                    if "locked" not in str(exc.orig):
+                        raise
+                    raise Pending("The repository is busy with other writes; retry") from exc
             elif not write:
                 conn = conn.execution_options(isolation_level="REPEATABLE READ")
                 conn.begin()
@@ -1189,13 +1239,8 @@ class Repository:
                 return [*conditions, artifacts.c.id == self._resolve(conn, pattern, project)["id"]]
             except (NotFound, NotPublished):
                 return [sa.false()]
-        # * stays within one path segment and ** crosses them, as in shell globs.
-        expression = "".join(
-            ".*" if part == "**" else "[^/]*" if part == "*" else re.escape(part)
-            for part in re.split(r"(\*\*|\*)", spelling)
-        )
         spelled = artifacts.c.namespace + "/" + artifacts.c.name
-        conditions.append(spelled.regexp_match(f"^{expression}$"))
+        conditions.append(spelled.regexp_match(_glob(spelling)))
         namespace = spelling.split("/", 1)[0]
         if "/" in spelling and "*" not in namespace:
             conditions.append(artifacts.c.namespace == namespace)
@@ -1603,21 +1648,34 @@ class Repository:
         if not key.startswith("link:"):
             self.objects.delete(key)
 
-    @contextmanager
     def open_blob(self, digest):
+        return self._open_blob(digest, lease=True)
+
+    @contextmanager
+    def _open_blob(self, digest, *, lease):
+        """Open stored content for reading.
+
+        A lease keeps the content from garbage collection while it is read. It is renewed
+        only when less than half of it remains, so most reads do not write. Passive readers
+        such as the browser explorer take none and report content removed meanwhile.
+        """
         validate_digest(digest)
-        # Opening is a bounded lease; retained artifacts provide long-lived ownership.
-        with self._transaction(write=True) as conn:
-            stored = _row(
-                conn.execute(sa.select(blobs).where(blobs.c.digest == digest).with_for_update())
-            )
-            if stored is None or stored["state"] != "ready":
-                raise NotFound("Content is unavailable")
-            conn.execute(
-                blobs.update()
-                .where(blobs.c.digest == digest)
-                .values(lease_until=time.time() + 3600)
-            )
+        with self._transaction() as conn:
+            stored = _row(conn.execute(sa.select(blobs).where(blobs.c.digest == digest)))
+        if stored is None or stored["state"] != "ready":
+            raise NotFound("Content is unavailable")
+        if lease and stored["lease_until"] < time.time() + 1800:
+            with self._transaction(write=True) as conn:
+                stored = _row(
+                    conn.execute(sa.select(blobs).where(blobs.c.digest == digest).with_for_update())
+                )
+                if stored is None or stored["state"] != "ready":
+                    raise NotFound("Content is unavailable")
+                conn.execute(
+                    blobs.update()
+                    .where(blobs.c.digest == digest)
+                    .values(lease_until=time.time() + 3600)
+                )
         if stored["key"].startswith("link:"):
             with self._linked(stored).open("rb") as stream:
                 yield stream
@@ -1666,7 +1724,7 @@ class Repository:
             return self._once(conn, request_id, "delete", artifact_id, remove)
 
     @staticmethod
-    def _comments(conn, *conditions, lock=False):
+    def _comments(conn, *conditions, lock=False, offset=0, limit=None):
         statement = (
             sa.select(
                 annotations_table,
@@ -1679,13 +1737,15 @@ class Repository:
         )
         if lock:
             statement = statement.with_for_update(of=annotations_table)
+        if limit is not None:
+            statement = statement.offset(offset).limit(limit)
         comments = []
         for row in conn.execute(statement).mappings():
             row = dict(row)
             value = row.pop("value")
             del row["kind"], row["key"]
             row["artifact_deleted"] = row.pop("artifact_deleted_at") is not None
-            comments.append({**row, **value})
+            comments.append({**row, "reply_to": None, "for_agent": False, "sent_at": None, **value})
         return comments
 
     def _comment(self, conn, comment_id):
@@ -1696,35 +1756,64 @@ class Repository:
             raise NotFound(f"Unknown comment: {comment_id}")
         return found[0]
 
-    def add_comment(self, artifact_id, anchor, body, *, author=None, request_id=None):
+    def _insert_comment(self, conn, target, value, author, for_agent):
+        identifier, stamp = new_id("c"), now()
+        conn.execute(
+            annotations_table.insert().values(
+                **{key: target[key] for key in NAME_KEYS},
+                id=identifier,
+                artifact_id=target["id"],
+                kind="comment",
+                value={**value, "for_agent": True} if for_agent else value,
+                author=author,
+                created_at=stamp,
+                updated_at=stamp,
+                revision=1,
+            )
+        )
+        return self._comment(conn, identifier)
+
+    def add_comment(
+        self, artifact_id, anchor, body, *, author=None, for_agent=False, request_id=None
+    ):
         if not isinstance(anchor, dict) or len(canonical(anchor)) > 65536:
             raise ValidationError("Comment anchor must be a bounded object")
         _text(body, "Comment body", 65536)
         _text(author, "Comment author", 256, optional=True)
+        if type(for_agent) is not bool:
+            raise ValidationError("for_agent must be a boolean")
 
         def add():
             target = self._artifact(conn, artifact_id)
             if target["state"] != "finished":
                 raise ValidationError("Comments require a finished artifact")
-            identifier, stamp = new_id("c"), now()
-            conn.execute(
-                annotations_table.insert().values(
-                    **{key: target[key] for key in NAME_KEYS},
-                    id=identifier,
-                    artifact_id=artifact_id,
-                    kind="comment",
-                    value={"anchor": anchor, "body": body},
-                    author=author,
-                    created_at=stamp,
-                    updated_at=stamp,
-                    revision=1,
-                )
-            )
-            return self._comment(conn, identifier)
+            value = {"anchor": anchor, "body": body}
+            return self._insert_comment(conn, target, value, author, for_agent)
 
         payload = [artifact_id, anchor, body] + ([author] if author is not None else [])
+        payload += [True] if for_agent else []
         with self._transaction(write=True) as conn:
             return self._once(conn, request_id, "add_comment", payload, add)
+
+    def reply_comment(self, comment_id, body, *, author=None, for_agent=False, request_id=None):
+        """Answer a comment; the reply joins the thread of the comment it answers."""
+        _text(body, "Comment body", 65536)
+        _text(author, "Comment author", 256, optional=True)
+        if type(for_agent) is not bool:
+            raise ValidationError("for_agent must be a boolean")
+
+        def reply():
+            parent = self._comment(conn, comment_id)
+            root = self._comment(conn, parent["reply_to"]) if parent["reply_to"] else parent
+            if root["resolved_at"]:
+                raise Conflict("Reopen the comment before replying")
+            target = self._artifact(conn, root["artifact_id"], deleted=True)
+            value = {"anchor": {}, "body": body, "reply_to": root["id"]}
+            return self._insert_comment(conn, target, value, author, for_agent)
+
+        payload = [comment_id, body, author, for_agent]
+        with self._transaction(write=True) as conn:
+            return self._once(conn, request_id, "reply_comment", payload, reply)
 
     def comments(self, artifact_id, *, scope="artifact", include_resolved=True):
         if scope not in ("artifact", "name"):
@@ -1742,10 +1831,41 @@ class Repository:
                 selected.append(annotations_table.c.resolved_at.is_(None))
             return self._comments(conn, *selected)
 
+    def list_comments(
+        self, pattern=None, *, project="default", include_resolved=True, limit=100, cursor=None
+    ):
+        """Comments in a project, oldest first; a name pattern such as reports/** narrows them."""
+        self._limit(limit)
+        selected = [annotations_table.c.project == project]
+        if pattern is not None:
+            if not isinstance(pattern, str) or not pattern or "@" in pattern:
+                raise ValidationError("Expected a nonempty name pattern")
+            spelled = annotations_table.c.namespace + "/" + annotations_table.c.name
+            selected.append(spelled.regexp_match(_glob(pattern)))
+        if not include_resolved:
+            selected.append(annotations_table.c.resolved_at.is_(None))
+        fingerprint = digest([pattern, project, include_resolved])
+        offset = 0
+        if cursor:
+            position = queries.decode_cursor(cursor)
+            if position.get("query") != fingerprint or type(position.get("offset")) is not int:
+                raise ValidationError("Cursor belongs to another listing")
+            offset = position["offset"]
+        with self._transaction() as conn:
+            found = self._comments(conn, *selected, offset=offset, limit=limit + 1)
+        next_cursor = (
+            queries.encode_cursor({"query": fingerprint, "offset": offset + limit})
+            if len(found) > limit
+            else None
+        )
+        return {"items": found[:limit], "next_cursor": next_cursor}
+
     def _change_comment(self, comment_id, request_id, operation, payload, change):
         def apply():
             comment = self._comment(conn, comment_id)
-            values = change(comment)
+            values = change(conn, comment)
+            if values is None:
+                return comment
             conn.execute(
                 annotations_table.update()
                 .where(annotations_table.c.id == comment_id)
@@ -1756,20 +1876,40 @@ class Repository:
         with self._transaction(write=True) as conn:
             return self._once(conn, request_id, operation, [comment_id, *payload], apply)
 
-    def update_comment(self, comment_id, body, *, expected_revision=None, request_id=None):
+    def update_comment(
+        self, comment_id, body, *, expected_revision=None, for_agent=None, request_id=None
+    ):
         _text(body, "Comment body", 65536)
         if expected_revision is not None and (
             type(expected_revision) is not int or expected_revision < 1
         ):
             raise ValidationError("Expected revision must be a positive integer")
+        if for_agent is not None and type(for_agent) is not bool:
+            raise ValidationError("for_agent must be a boolean")
 
-        def change(comment):
+        def change(conn, comment):
             if expected_revision is not None and comment["revision"] != expected_revision:
                 raise Conflict("Comment changed since it was read")
-            return {"value": {"anchor": comment["anchor"], "body": body}}
+            value = {**_comment_value(comment), "body": body}
+            if for_agent is not None:
+                value.pop("for_agent", None)
+                if for_agent:
+                    value["for_agent"] = True
+            if (body, value.get("for_agent", False)) != (comment["body"], comment["for_agent"]):
+                value.pop("sent_at", None)
+            return {"value": value}
 
-        payload = [body, expected_revision]
+        payload = [body, expected_revision] + ([for_agent] if for_agent is not None else [])
         return self._change_comment(comment_id, request_id, "update_comment", payload, change)
+
+    def send_comment(self, comment_id, *, request_id=None):
+        """Send a comment marked for an agent once its author finished it; edits unsend it."""
+
+        def change(conn, comment):
+            if comment["for_agent"] and not comment["sent_at"]:
+                return {"value": {**_comment_value(comment), "sent_at": now()}}
+
+        return self._change_comment(comment_id, request_id, "send_comment", [], change)
 
     def resolve_comment(self, comment_id, *, resolved=True, note=None, by=None, request_id=None):
         if type(resolved) is not bool:
@@ -1779,10 +1919,24 @@ class Repository:
         if not resolved and (note is not None or by is not None):
             raise ValidationError("Reopening takes no note")
 
-        def change(comment):
-            if not resolved:
-                return {"resolved_at": None, "resolution": None}
-            return {"resolved_at": now(), "resolution": {"note": note, "by": by}}
+        def change(conn, comment):
+            if comment["reply_to"]:
+                raise ValidationError("Resolve the thread through its first comment")
+            values = (
+                {"resolved_at": now(), "resolution": {"note": note, "by": by}}
+                if resolved
+                else {"resolved_at": None, "resolution": None}
+            )
+            # Replies follow their thread, so listings of open comments leave them out too.
+            conn.execute(
+                annotations_table.update()
+                .where(
+                    annotations_table.c.kind == "comment",
+                    annotations_table.c.value["reply_to"].as_string() == comment_id,
+                )
+                .values(resolved_at=values["resolved_at"])
+            )
+            return values
 
         payload = [resolved, note, by]
         return self._change_comment(comment_id, request_id, "resolve_comment", payload, change)
@@ -1790,7 +1944,17 @@ class Repository:
     def delete_comment(self, comment_id, *, request_id=None):
         def remove():
             self._comment(conn, comment_id)
-            conn.execute(annotations_table.delete().where(annotations_table.c.id == comment_id))
+            conn.execute(
+                annotations_table.delete().where(
+                    sa.or_(
+                        annotations_table.c.id == comment_id,
+                        sa.and_(
+                            annotations_table.c.kind == "comment",
+                            annotations_table.c.value["reply_to"].as_string() == comment_id,
+                        ),
+                    )
+                )
+            )
             return {"id": comment_id, "deleted": True}
 
         with self._transaction(write=True) as conn:

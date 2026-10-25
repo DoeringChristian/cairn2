@@ -219,11 +219,38 @@ class Client:
             request_id=new_id("request"),
         )
 
-    def comments(self, ref, *, scope="name", include_resolved=False):
-        """Comments on every version of the name, or with scope="artifact" on this one."""
+    def comments(self, ref=None, *, scope="name", include_resolved=False):
+        """Comments on every version of the name, or with scope="artifact" on this one.
+
+        Without a reference, every comment in the project; a name pattern such as
+        reports/** lists the comments on every name it matches.
+        """
         ref = _identifier(ref)
+        if ref is None or "*" in ref:
+            if scope != "name":
+                raise ValidationError("A comment listing covers every version of each name")
+            comments, cursor = [], None
+            while True:
+                page = self.backend.list_comments(
+                    ref,
+                    project=self.project,
+                    include_resolved=include_resolved,
+                    limit=1000,
+                    cursor=cursor,
+                )
+                comments += page["items"]
+                cursor = page["next_cursor"]
+                if cursor is None:
+                    return comments
         artifact = self.backend.resolve(ref, project=self.project)
         return self.backend.comments(artifact["id"], scope=scope, include_resolved=include_resolved)
+
+    def reply_comment(self, comment_id, body, *, by=None):
+        return self.backend.reply_comment(comment_id, body, author=by, request_id=new_id("request"))
+
+    def send_comment(self, comment_id):
+        """Send a comment marked for an agent; an edit unsends it until it is sent again."""
+        return self.backend.send_comment(comment_id, request_id=new_id("request"))
 
     def resolve_comment(self, comment_id, *, note=None, by=None):
         return self.backend.resolve_comment(

@@ -60,6 +60,7 @@ class Delivery:
         max_entries=100_000,
         batch_size=256,
         batch_bytes=4 * 1024**2,
+        linger=0.5,
         background=True,
     ):
         self.backend = backend
@@ -84,6 +85,7 @@ class Delivery:
         self.max_entries = max_entries
         self.batch_size = batch_size
         self.batch_bytes = batch_bytes
+        self.linger = linger
         self._lock = threading.RLock()
         self._dispatch = threading.RLock()
         self._wake = threading.Event()
@@ -620,16 +622,20 @@ class Delivery:
                 self._stop.wait(min(0.1, remaining))
 
     def _run(self):
-        delay = 0.1
+        delay, idle = 0.1, False
         while not self._stop.is_set():
             self._wake.wait(delay)
             self._wake.clear()
+            if idle:
+                # Collect what is logged meanwhile, so one transaction carries it.
+                self._stop.wait(self.linger)
             if self._stop.is_set():
                 break
             try:
                 self._pass()
                 self.last_error = None
-                delay = 0.1 if self.pending() else 1.0
+                idle = not self.pending()
+                delay = 1.0 if idle else 0.1
             except Exception as exc:  # noqa: BLE001 - retain and expose dispatcher failures.
                 self.last_error = exc
                 delay = min(delay * 2, 10.0)

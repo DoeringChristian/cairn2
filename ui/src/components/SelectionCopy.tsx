@@ -8,7 +8,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 export function SelectionCopy({container,version}: {container:RefObject<HTMLElement>;version:string}) {
   const [selection,setSelection]=useState<{text:string;x:number;y:number;anchor:CommentAnchor}>(),[copied,setCopied]=useState(false);
   const [composer,setComposer]=useState(false),[commented,setCommented]=useState(false);
-  const editing=useRef(false),savedRange=useRef<Range>();
+  const editing=useRef(false);
   useEffect(()=>{if(!copied&&!commented)return;const timer=setTimeout(()=>{setCopied(false);setCommented(false);},1400);return()=>clearTimeout(timer);},[copied,commented]);
   useEffect(()=>{
     function inspect(){if(editing.current)return;const selected=window.getSelection();if(!selected?.rangeCount||!selected.toString().trim()){setSelection(undefined);return;}
@@ -20,7 +20,6 @@ export function SelectionCopy({container,version}: {container:RefObject<HTMLElem
       fragment.querySelectorAll('button,summary').forEach(n=>n.remove());fragment.querySelectorAll('p,li,div,tr,td,th,h1,h2,h3,pre').forEach(n=>n.append(' '));
       const formula=element?.closest<HTMLElement>('[data-latex]');const endElement=end.nodeType===3?end.parentElement:end as Element;
       const quote=formula&&formula===endElement?.closest('[data-latex]')?`$${formula.dataset.latex}$`:(fragment.textContent||selected.toString()).replace(/\s+/g,' ').trim();
-      savedRange.current=range.cloneRange();
       const rect=selectedTextRect(range);if(!rect){setSelection(undefined);return;}setCopied(false);setSelection({anchor:{quote,path:source.dataset.sourcePath,line_start:Number(source.dataset.lineStart),line_end:Number(endElement?.closest<HTMLElement>('[data-line-end]')?.dataset.lineEnd||source.dataset.lineStart)},text:`${source.dataset.sourcePath}:${source.dataset.lineStart} "${quote}" [cairn:${version}]`,x:Math.max(8,commentColumnX(container.current!)-(innerWidth<=760?49:37)),y:Math.max(8,Math.min(innerHeight-52,rect.top))});
     }
     document.addEventListener('selectionchange',inspect);window.addEventListener('scroll',inspect,{passive:true});window.addEventListener('resize',inspect);
@@ -29,9 +28,9 @@ export function SelectionCopy({container,version}: {container:RefObject<HTMLElem
   async function copy(){if(!selection)return;try{await navigator.clipboard.writeText(selection.text);setCopied(true);}catch{
     const text=document.createElement('textarea');text.value=selection.text;text.style.cssText='position:fixed;opacity:0';document.body.append(text);text.select();const ok=document.execCommand('copy');text.remove();setCopied(ok);
   }}
-  return selection?createPortal(<><div className="selection-actions" style={{left:selection.x,top:selection.y}}>
+  return selection?createPortal(<><div hidden={composer} className="selection-actions" style={{left:selection.x,top:selection.y}}>
     <button className="image-copy" type="button" aria-label="Copy selected text and source" onMouseDown={e=>e.preventDefault()} onClick={copy}>{copied?<Check aria-hidden="true"/>:<Copy aria-hidden="true"/>}</button>
     <CommentButton saved={commented} aria-label="Comment on selected text" onMouseDown={e=>e.preventDefault()} onClick={()=>{editing.current=true;setComposer(true);}}/>
     <span className="sr-only" role="status">{copied?'Copied':commented?'Comment saved':''}</span>
-  </div>{composer&&<CommentComposer artifact={version} anchor={selection.anchor} position={selection} onClose={saved=>{setComposer(false);if(saved)setCommented(true);requestAnimationFrame(()=>{if(savedRange.current){const native=window.getSelection();native?.removeAllRanges();native?.addRange(savedRange.current);}editing.current=false;});}}/>}</>,document.body):null;
+  </div>{composer&&<CommentComposer artifact={version} anchor={selection.anchor} position={selection} onClose={saved=>{setComposer(false);if(saved)setCommented(true);requestAnimationFrame(()=>{window.getSelection()?.removeAllRanges();setSelection(undefined);editing.current=false;});}}/>}</>,document.body):null;
 }

@@ -115,6 +115,7 @@ class BrowserAccess:
                     (method == "POST" and len(parts) == 5)
                     or (method in {"PUT", "DELETE"} and len(parts) == 6)
                     or (method == "PUT" and len(parts) == 7 and parts[6] == "resolution")
+                    or (method == "POST" and len(parts) == 7 and parts[6] in {"replies", "sending"})
                 )
             )
             tag_edit = (
@@ -503,7 +504,7 @@ def install(app, repository, token, *, no_auth=False):
         # Comments keep their original version and anchor and show across the report's name.
         return repository.comments(report_target(artifact_id)["id"], scope="name")
 
-    from .server import Comment, Resolution
+    from .server import Comment, Reply, Resolution
 
     @app.post("/ui-api/reports/{artifact_id}/comments")
     def add_report_comment(artifact_id: str, body: Comment, request: Request):
@@ -516,19 +517,30 @@ def install(app, repository, token, *, no_auth=False):
         report_target(artifact_id)
         return repository.add_comment(artifact_id, **body.model_dump())
 
-    def check_comment_write(request, artifact_id, comment_id):
+    def check_comment_write(request, artifact_id, comment_id=None):
         sessions.require(request)
         origin = request.headers.get("origin")
         if origin and origin != str(request.base_url).rstrip("/"):
             raise Unauthorized("Comments must come from this server's origin")
         family = repository.comments(report_target(artifact_id)["id"], scope="name")
-        if all(comment["id"] != comment_id for comment in family):
+        if comment_id and all(comment["id"] != comment_id for comment in family):
             raise NotFound("Comment not found in this report")
 
     @app.put("/ui-api/reports/{artifact_id}/comments/{comment_id}")
     def update_report_comment(artifact_id: str, comment_id: str, body: Comment, request: Request):
         check_comment_write(request, artifact_id, comment_id)
-        return repository.update_comment(comment_id, body.body)
+        agent = body.for_agent if "for_agent" in body.model_fields_set else None
+        return repository.update_comment(comment_id, body.body, for_agent=agent)
+
+    @app.post("/ui-api/reports/{artifact_id}/comments/{comment_id}/replies")
+    def reply_report_comment(artifact_id: str, comment_id: str, body: Reply, request: Request):
+        check_comment_write(request, artifact_id, comment_id)
+        return repository.reply_comment(comment_id, **body.model_dump())
+
+    @app.post("/ui-api/reports/{artifact_id}/comments/{comment_id}/sending")
+    def send_report_comment(artifact_id: str, comment_id: str, request: Request):
+        check_comment_write(request, artifact_id, comment_id)
+        return repository.send_comment(comment_id)
 
     @app.put("/ui-api/reports/{artifact_id}/comments/{comment_id}/resolution")
     def resolve_report_comment(
@@ -554,7 +566,7 @@ def install(app, repository, token, *, no_auth=False):
         )
         if not document:
             raise NotFound("Report document not found")
-        return document["digest"]
+        return document["digest"], value.get("blobs", [])
 
     def preview_response(payload, mime, etag, request):
         headers = {
@@ -589,18 +601,18 @@ def install(app, repository, token, *, no_auth=False):
 
     @app.get("/ui-api/reports/{artifact_id}/preview.json")
     def report_preview(artifact_id: str, request: Request):
-        digest = preview_digest(artifact_id)
-        etag = f'"ui-preview-v1-{digest}"'
+        digest, blobs = preview_digest(artifact_id)
+        etag = f'"ui-preview-v2-{digest}"'
         # Authenticate and resolve first, but skip document parsing on a cache hit.
         if request.headers.get("if-none-match") == etag:
             return preview_response(b"", "application/json", etag, request)
-        document, _ = previews.get(digest)
+        document, _ = previews.get(digest, blobs)
         return preview_response(document, "application/json", etag, request)
 
     @app.get("/ui-api/reports/{artifact_id}/output/{block_index}/{output_index}")
     def report_output(artifact_id: str, block_index: int, output_index: int, request: Request):
-        digest = preview_digest(artifact_id)
-        _, outputs = previews.get(digest)
+        digest, blobs = preview_digest(artifact_id)
+        _, outputs = previews.get(digest, blobs)
         key = f"{block_index}/{output_index}"
         if key not in outputs:
             raise NotFound("Report output not found")
@@ -618,16 +630,16 @@ def install(app, repository, token, *, no_auth=False):
         )
         if not document or block_index < 0 or output_index < 0:
             raise NotFound("HTML output not found")
-        if value.get("data", {}).get("document_version") in {2, 3}:
-            with repository.open_blob(document["digest"]) as stream:
+        if value.get("data", {}).get("document_version") in {2, 3, 4}:
+            with repository._open_blob(document["digest"], lease=False) as stream:
                 data = json.load(stream)
         else:
-            data = json.loads(previews.get(document["digest"])[0])
+            data = json.loads(previews.get(document["digest"], value.get("blobs", []))[0])
         try:
             content = data["blocks"][block_index]["outputs"][output_index]["data"]["text/html"]
         except (KeyError, IndexError, TypeError):
             raise NotFound("HTML output not found") from None
-        if data.get("version") in {2, 3}:
+        if data.get("version") in {2, 3, 4}:
             if (
                 not isinstance(content, dict)
                 or content.get("mime") != "text/html"
@@ -638,7 +650,7 @@ def install(app, repository, token, *, no_auth=False):
             matches = [blob for blob in value.get("blobs", []) if blob.get("name") == name]
             if len(matches) != 1:
                 raise NotFound("HTML asset not found in report")
-            with repository.open_blob(matches[0]["digest"]) as stream:
+            with repository._open_blob(matches[0]["digest"], lease=False) as stream:
                 content = stream.read().decode("utf-8")
         if isinstance(content, list):
             content = "".join(content)
@@ -736,7 +748,7 @@ def install(app, repository, token, *, no_auth=False):
             status = 206
             cache_headers["Content-Range"] = f"bytes {start}-{end}/{blob['size']}"
         cache_headers["Content-Length"] = str(max(0, end - start + 1))
-        manager = repository.open_blob(blob["digest"])
+        manager = repository._open_blob(blob["digest"], lease=False)
         stream = manager.__enter__()
 
         def content():

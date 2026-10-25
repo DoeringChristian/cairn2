@@ -36,13 +36,19 @@ export function useCommentHighlights(container:RefObject<HTMLElement>,comments:A
   const [ranges,setRanges]=useState<Map<string,Range>>(new Map());
   useEffect(()=>{
     const article=container.current;if(!article)return;
-    const matches=new Map<string,Range>();
-    for(const comment of comments){const range=findQuote(article,comment.anchor);if(range)matches.set(comment.id,range);}
-    const mediaNodes=comments.filter(c=>c.anchor.media_key).flatMap(c=>Array.from(article.querySelectorAll<HTMLElement>('[data-comment-media]')).filter(n=>n.dataset.commentMedia===c.anchor.media_key));
-    mediaNodes.forEach(node=>node.classList.add('commented-media'));
-    setRanges(matches);
-    if(typeof Highlight==='undefined'||!CSS.highlights)return;
-    CSS.highlights.set('cairn-comments',new Highlight(...matches.values()));
+    let matches=new Map<string,Range>(),mediaNodes:HTMLElement[]=[],frame=0;
+    const refresh=()=>{
+      frame=0;matches=new Map();
+      for(const comment of comments){const range=findQuote(article,comment.anchor);if(range)matches.set(comment.id,range);}
+      mediaNodes.forEach(node=>node.classList.remove('commented-media'));
+      mediaNodes=comments.filter(c=>c.anchor.media_key).flatMap(c=>Array.from(article.querySelectorAll<HTMLElement>('[data-comment-media]')).filter(n=>c.anchor.media_id ? n.dataset.commentId===c.anchor.media_id : n.dataset.commentMedia===c.anchor.media_key && (c.anchor.line_start===undefined || Number(n.dataset.commentLine)===c.anchor.line_start)));
+      mediaNodes.forEach(node=>node.classList.add('commented-media'));
+      setRanges(matches);
+      if(typeof Highlight!=='undefined'&&CSS.highlights)CSS.highlights.set('cairn-comments',new Highlight(...matches.values()));
+    };
+    refresh();
+    const observer=new MutationObserver(()=>{if(!frame)frame=requestAnimationFrame(refresh);});
+    observer.observe(article,{childList:true,subtree:true});
     const showComment=(event:MouseEvent)=>{
       if(window.getSelection()?.toString().trim())return;
       for(const [id,range] of matches){if(comments.find(c=>c.id===id)?.anchor.media_key)continue;if(Array.from(range.getClientRects()).some(r=>event.clientX>=r.left&&event.clientX<=r.right&&event.clientY>=r.top&&event.clientY<=r.bottom)){
@@ -50,7 +56,7 @@ export function useCommentHighlights(container:RefObject<HTMLElement>,comments:A
       }}
     };
     article.addEventListener('click',showComment);
-    return()=>{mediaNodes.forEach(node=>node.classList.remove('commented-media'));CSS.highlights.delete('cairn-comments');article.removeEventListener('click',showComment);};
+    return()=>{observer.disconnect();cancelAnimationFrame(frame);mediaNodes.forEach(node=>node.classList.remove('commented-media'));CSS.highlights?.delete('cairn-comments');article.removeEventListener('click',showComment);};
   },[container,comments]);
   return ranges;
 }

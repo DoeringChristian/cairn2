@@ -1,5 +1,5 @@
 import { CommentButton } from './CommentButton';
-import { ReportArtifactContext, mediaCommentKey } from "./ReportContext";
+import { ReportArtifactContext, matchesMediaComment, mediaCommentKey } from "./ReportContext";
 import { CommentComposer, useReportComments, type Comment, type CommentAnchor } from "./ReportComments";
 import { VideoTimeline } from "./media/VideoTimeline";
 import { Scissors, SquareDashed, RotateCcw, Repeat, Copy, Check, CircleAlert, Play, Pause, StepBack, StepForward, Volume2, VolumeX, ZoomIn, ZoomOut, Maximize2, Minimize2, Shrink, X, Download, ChevronLeft, ChevronRight } from "lucide-react";
@@ -33,6 +33,7 @@ export type MediaItem = {
     path?: string;
     file?: string;
     line?: number;
+    media_id?: string;
   };
 };
 export type MediaSelection = {
@@ -95,7 +96,7 @@ export function MediaLightbox({
   );
   const item = items[index],
     isVideo = item?.mime.startsWith("video/");
-  const {items:comments,saved}=useReportComments(),existingComment=comments.find(comment=>comment.anchor.media_key===mediaCommentKey(item?.source,item?.name));
+  const {items:comments,saved}=useReportComments(),existingComment=comments.find(comment=>matchesMediaComment(comment.anchor,item?.source,item?.name));
   const [pane, setPane] = useState<Size>({ w: 1, h: 1 }),
     [natural, setNatural] = useState<Size | null>(null);
   const [view, setView] = useState<ZoomView>(FIT_VIEW),
@@ -359,7 +360,7 @@ export function MediaLightbox({
               label={copied || (selection.clip ? "Copy clip reference" : selection.region ? "Copy region reference" : isVideo ? "Copy time reference" : "Copy source reference")}
               icon={copied === "Copied" ? Check : copied ? CircleAlert : Copy}/>
             <span className="sr-only" role="status">{copied}</span>
-            {artifact&&<CommentButton aria-label={existingComment?"Open comment":"Comment on media"} existing={!!existingComment} saved={!!existingComment&&saved===existingComment.id} onClick={event=>{video.current?.pause();const box=event.currentTarget.getBoundingClientRect();const {item:media,...position}=currentSelection();setComment({x:box.left,y:box.top,initial:existingComment,anchor:existingComment?.anchor||{path:media.source?.file||media.source?.path,line_start:media.source?.line,media_key:mediaCommentKey(media.source,media.name),media:position}});}}/>}
+            {artifact&&<CommentButton aria-label={existingComment?"Open comment":"Comment on media"} existing={!!existingComment} saved={!!existingComment&&saved===existingComment.id} onClick={event=>{video.current?.pause();const box=event.currentTarget.getBoundingClientRect();const {item:media,...position}=currentSelection();setComment({x:box.left,y:box.top,initial:existingComment,anchor:existingComment?.anchor||{path:media.source?.file||media.source?.path,line_start:media.source?.line,media_key:mediaCommentKey(media.source,media.name),media_id:media.source?.media_id,media:position}});}}/>}
             {onSelection && (
               <Button small onClick={() => onSelection(currentSelection())}>
                 Use selection
@@ -427,7 +428,7 @@ export function MediaLightbox({
       }}
     >
       <div ref={surface} className="prism-lightbox-surface">
-        {comment&&artifact&&<CommentComposer artifact={artifact} initial={comment.initial} anchor={comment.anchor} position={comment} portalTarget={surface.current} onClose={()=>setComment(undefined)}/>}
+
         <header className="prism-lightbox-header">
           <div>
             <strong>{item.name || "Media"}</strong>
@@ -721,6 +722,8 @@ export function MediaLightbox({
               )}
             </div>
           )}
+        </div>
+        <div className="prism-lightbox-tools">
           <div className="prism-zoom-toolbar" aria-label="Media zoom controls">
             <MediaIconButton
               label="Zoom out"
@@ -750,6 +753,7 @@ export function MediaLightbox({
             {selecting ? "Drag on the content to select a spatial region" : "Scroll or pinch to zoom · drag to pan · double-click to fit"}
           </span>
         </div>
+        {comment&&artifact&&<CommentComposer docked artifact={artifact} initial={comment.initial} anchor={comment.anchor} position={comment} portalTarget={surface.current} onClose={()=>setComment(current=>current===comment?undefined:current)}/>}
         {isVideo && (
           <div className="prism-video-transport">
             <div className="prism-video-main">

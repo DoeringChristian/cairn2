@@ -71,26 +71,26 @@ def _dependencies():
     try:
         import nbformat
         import yaml
-        from latex2mathml.converter import convert
-        from markdown_it import MarkdownIt
-        from mdit_py_plugins.container import container_plugin
-        from mdit_py_plugins.dollarmath import dollarmath_plugin
-        from mdit_py_plugins.footnote import footnote_plugin
         from nbclient import NotebookClient
     except ImportError as exc:
         raise ValidationError(
             "Reports require the 'reports' extra: pip install 'cairn2[reports]'"
         ) from exc
-    return (
-        nbformat,
-        yaml,
-        MarkdownIt,
-        NotebookClient,
-        container_plugin,
-        dollarmath_plugin,
-        footnote_plugin,
-        convert,
-    )
+    return nbformat, yaml, NotebookClient, _markdown_dependencies()
+
+
+def _markdown_dependencies():
+    try:
+        from latex2mathml.converter import convert
+        from markdown_it import MarkdownIt
+        from mdit_py_plugins.container import container_plugin
+        from mdit_py_plugins.dollarmath import dollarmath_plugin
+        from mdit_py_plugins.footnote import footnote_plugin
+    except ImportError as exc:
+        raise ValidationError(
+            "Report Markdown requires the 'reports' extra: pip install 'cairn2[reports]'"
+        ) from exc
+    return MarkdownIt, container_plugin, dollarmath_plugin, footnote_plugin, convert
 
 
 def _write_json(path: Path, value: Any):
@@ -659,7 +659,7 @@ _display({"application/vnd.cairn.environment+json": {
 
 
 def _markdown_engine(deps):
-    _, _, MarkdownIt, _, container_plugin, dollarmath_plugin, footnote_plugin, convert = deps
+    MarkdownIt, container_plugin, dollarmath_plugin, footnote_plugin, convert = deps
     from mdit_py_plugins.attrs import attrs_plugin
     from mdit_py_plugins.deflist import deflist_plugin
     from mdit_py_plugins.subscript import sub_plugin
@@ -712,7 +712,33 @@ def _markdown_engine(deps):
             f'title="{html.escape(token.content, quote=True)}"{style}></iframe>'
         )
 
+    def comment_block(state, start, end, silent):
+        """HTML comments are notes for authors and never render; other raw HTML stays text."""
+        begin = state.bMarks[start] + state.tShift[start]
+        if state.sCount[start] - state.blkIndent >= 4 or not state.src.startswith("<!--", begin):
+            return False
+        if not silent:
+            close, line = state.src.find("-->", begin + 4), start
+            while line + 1 < end and (close < 0 or state.eMarks[line] < close):
+                line += 1
+            state.line = line + 1
+        return True
+
+    def comment_inline(state, silent):
+        close = state.src.find("-->", state.pos + 4)
+        if not state.src.startswith("<!--", state.pos) or close < 0:
+            return False
+        state.pos = close + 3
+        return True
+
     md.add_render_rule("image", image)
+    md.block.ruler.before(
+        "html_block",
+        "cairn_comment",
+        comment_block,
+        {"alt": ["paragraph", "reference", "blockquote"]},
+    )
+    md.inline.ruler.before("html_inline", "cairn_comment", comment_inline)
     md.inline.ruler.before("attr", "cairn_attributes", attributes)
     md.core.ruler.push("cairn_attributes", allowed)
 
@@ -932,8 +958,19 @@ def _asset(directory: Path, data: bytes, suffix: str) -> str:
     return path
 
 
-def _native_output(output: dict, directory: Path) -> dict:
-    """cairn/document v2 stores payload bytes once, outside the document tree."""
+def _markdown_tokens(output, md, labels, references=None):
+    """Parsed Markdown output of a cell, or None; parsed once for every reader."""
+    value = output.get("data", {}).get("text/markdown")
+    if value is None:
+        return None
+    text = "".join(value) if isinstance(value, list) else str(value)
+    return _resolved(md.parse(text, {}), labels, references)
+
+
+def _native_output(output: dict, directory: Path, nodes=None) -> dict:
+    """cairn/document v2 stores payload bytes once, outside the document tree.
+
+    From v4 Markdown output also carries its parsed nodes."""
     result = dict(output)
 
     def reference(value, mime):
@@ -962,9 +999,87 @@ def _native_output(output: dict, directory: Path) -> dict:
 
     if "data" in output:
         result["data"] = {mime: reference(value, mime) for mime, value in output["data"].items()}
+        if nodes is not None:
+            result["data"]["text/markdown"]["nodes"] = nodes
     if output.get("output_type") == "stream":
         result["text"] = reference(output.get("text", ""), "text/plain")
     return result
+
+
+def _crossrefs(content, labels, references=None):
+    """Text and links for @label and @namespace/name#label references in content.
+
+    Without references (old documents) unresolvable references stay text."""
+    from markdown_it.token import Token
+
+    result, position = [], 0
+    for match in _REFERENCE.finditer(content):
+        reference, name = match.groups()
+        if references is None and (reference or name not in labels):
+            continue
+        before = Token("text", "", 0)
+        before.content = content[position : match.start()]
+        link = Token("html_inline", "", 0)
+        if reference:
+            report, text = references.label(reference, name)
+            link.content = (
+                f'<a class="crossref" href="{html.escape(report["url"], quote=True)}#'
+                f'{html.escape(name)}">{html.escape(text)} in '
+                f"<em>{html.escape(report['title'])}</em></a>"
+            )
+        elif name not in labels:
+            raise ValidationError(f"Unknown report cross reference: @{name}")
+        else:
+            link.content = (
+                f'<a class="crossref" href="#{html.escape(name)}">{labels[name]["text"]}</a>'
+            )
+        result.extend([before, link])
+        position = match.end()
+    after = Token("text", "", 0)
+    after.content = content[position:]
+    return [*result, after]
+
+
+def _resolved(tokens, labels, references=None):
+    """Tokens with cross references in their text resolved, as in report text."""
+    for token in tokens:
+        if token.children:
+            token.children = [
+                part
+                for child in token.children
+                for part in (
+                    _crossrefs(child.content, labels, references)
+                    if child.type == "text"
+                    else [child]
+                )
+            ]
+    return tokens
+
+
+def _native_node(token, source, mapping=None):
+    """A token as stored in a native document, with its source range.
+
+    Fenced divs carry their parsed attributes, so readers never parse Markdown."""
+    attributes = token.attrs
+    if token.type.startswith("container_") and token.nesting == 1:
+        attributes = {
+            key: " ".join(value) if key == "class" else value
+            for key, value in _div_attributes(token.info).items()
+        }
+    return {
+        "type": token.type,
+        "tag": token.tag,
+        "nesting": token.nesting,
+        "source": _source_range(mapping, token.map[0], token.map[1])
+        if token.map and mapping is not None
+        else source,
+        "content": token.content,
+        "attributes": attributes,
+        "info": token.info,
+        "meta": token.meta,
+        "hidden": token.hidden,
+        "children": [_native_node(child, source, mapping) for child in token.children or []],
+    }
 
 
 def _prepare_markdown(text, segments, md, sources, mapping, directory, references, citations):
@@ -1145,33 +1260,6 @@ def _prepare_markdown(text, segments, md, sources, mapping, directory, reference
         if any(key in segment["attributes"] for key in ("layout", "layout-ncol", "layout-nrow")):
             segment["grid"] = _grid(segment["attributes"], len(cells))
 
-    def crossrefs(content):
-        """Text and links for @label and @namespace/name#label references in content."""
-        result, position = [], 0
-        for match in _REFERENCE.finditer(content):
-            reference, name = match.groups()
-            before = Token("text", "", 0)
-            before.content = content[position : match.start()]
-            link = Token("html_inline", "", 0)
-            if reference:
-                report, text = references.label(reference, name)
-                link.content = (
-                    f'<a class="crossref" href="{html.escape(report["url"], quote=True)}#'
-                    f'{html.escape(name)}">{html.escape(text)} in '
-                    f"<em>{html.escape(report['title'])}</em></a>"
-                )
-            elif name not in labels:
-                raise ValidationError(f"Unknown report cross reference: @{name}")
-            else:
-                link.content = (
-                    f'<a class="crossref" href="#{html.escape(name)}">{labels[name]["text"]}</a>'
-                )
-            result.extend([before, link])
-            position = match.end()
-        after = Token("text", "", 0)
-        after.content = content[position:]
-        return [*result, after]
-
     for segment in segments:
         for token in segment.get("tokens", []):
             if not token.children:
@@ -1195,7 +1283,7 @@ def _prepare_markdown(text, segments, md, sources, mapping, directory, reference
                         cited.content = piece
                         children.append(cited)
                         continue
-                    children.extend(crossrefs(piece))
+                    children.extend(_crossrefs(piece, labels, references))
             token.children = children
     if citations.cited:
         heading = [
@@ -1244,7 +1332,7 @@ def _prepare_markdown(text, segments, md, sources, mapping, directory, reference
     return labels, env
 
 
-def _rich_output(output: dict, directory: Path, md) -> str:
+def _rich_output(output: dict, directory: Path, md, tokens) -> str:
     kind = output.get("output_type")
     if kind == "stream":
         return f'<pre class="output {html.escape(output.get("name", "stdout"))}">{html.escape(output["text"])}</pre>'
@@ -1286,7 +1374,7 @@ def _rich_output(output: dict, directory: Path, md) -> str:
         name = _asset(directory, body.encode("utf-8"), ".html")
         return f'<iframe class="rich-html" sandbox="" src="{name}" title="Python HTML output"></iframe>'
     if "text/markdown" in data:
-        return md.render(data["text/markdown"])
+        return md.renderer.render(tokens, md.options, {})
     if "application/json" in data:
         return (
             '<pre class="output">'
@@ -1296,7 +1384,7 @@ def _rich_output(output: dict, directory: Path, md) -> str:
     return '<pre class="output">' + html.escape(data.get("text/plain", "")) + "</pre>"
 
 
-_CSS = """body{font:17px/1.65 system-ui,sans-serif;color:#253139;margin:0;background:#fafaf8}main{max-width:900px;margin:4rem auto;padding:0 2rem 5rem}h1,h2,h3{line-height:1.2;color:#153b38}h1{font-size:2.7rem}h2{margin-top:2.5rem}a{color:#146e67}pre{overflow:auto;padding:1rem;background:#eef1ef;border-radius:6px;font:14px/1.5 ui-monospace,monospace}code{font-family:ui-monospace,monospace}table{border-collapse:collapse;width:100%;margin:1.5rem 0}th,td{padding:.6rem;text-align:left;border-bottom:1px solid #ccd4d0}th{background:#edf1ef}img{max-width:100%;height:auto}.output-image{display:block;margin:1rem auto}figure{margin:1.5rem 0}figcaption,.caption{color:#53645d;font-size:.9rem}.callout{padding:.6rem 1.2rem;border-left:4px solid #42877a;background:#eef6f2;margin:1.4rem 0}.callout-title{font-weight:700;margin:.2rem 0}.warning,.caution,.important{border-color:#b77b34;background:#fff6e8}.stderr,.error{border-left:3px solid #b84141}.rich-html{display:block;width:100%;min-height:280px;border:0}.viewer{display:block;width:100%;height:480px;border:1px solid #ccd4d0;border-radius:6px}.math.block{overflow:auto}.task-list-item{list-style:none}.task-list-item-checkbox{margin:0 .5rem 0 -1.5rem}dt{font-weight:600}dd{margin:0 0 .6rem 1.5rem}.columns,.layout-row{display:flex;gap:1.5rem}.column{flex:1 1 0;min-width:0}.layout-cell{min-width:0}.layout-grid{display:grid;gap:1rem}.panel-tabset{border:1px solid #ccd4d0;border-radius:6px;padding:0 1rem;margin:1.4rem 0}.tab-title{font-weight:700;border-bottom:1px solid #ccd4d0;padding:.5rem 0}.column-page,.column-page-inset{margin:0 -8%}.column-body-outset{margin:0 -4%}.column-screen,.column-screen-inset{width:100vw;margin-left:calc(50% - 50vw)}@media(min-width:1300px){.column-margin,.margin-caption{float:right;clear:right;width:240px;margin-right:-280px;font-size:.85rem}}@media(max-width:700px){.columns,.layout-row{flex-direction:column}.column{flex:none!important}.layout-cell{width:auto!important}}.provenance{color:#61736a;font-size:.85rem;border-top:1px solid #ccd4d0;padding-top:1rem;margin-top:3rem}.source-block{scroll-margin-top:2rem}details>summary{cursor:pointer}@media print{body{background:white}main{margin:0;max-width:none}pre{white-space:pre-wrap}.rich-html{min-height:350px}}"""
+_CSS = """body{font:17px/1.65 system-ui,sans-serif;color:#253139;margin:0;background:#fafaf8}main{max-width:900px;margin:4rem auto;padding:0 2rem 5rem}h1,h2,h3{line-height:1.2;color:#153b38}h1{font-size:2.7rem}h2{margin-top:2.5rem}a{color:#146e67}pre{overflow:auto;padding:1rem;background:#eef1ef;border-radius:6px;font:14px/1.5 ui-monospace,monospace}code{font-family:ui-monospace,monospace}table{display:block;width:fit-content;max-width:100%;overflow-x:auto;border-collapse:collapse;margin:1.5rem 0}th,td{padding:.4rem .75rem;text-align:left;border-bottom:1px solid #ccd4d0}th{background:#edf1ef}img{max-width:100%;height:auto}.output-image{display:block;margin:1rem auto}figure{margin:1.5rem 0}figcaption,.caption{color:#53645d;font-size:.9rem}.callout{padding:.6rem 1.2rem;border-left:4px solid #42877a;background:#eef6f2;margin:1.4rem 0}.callout-title{font-weight:700;margin:.2rem 0}.warning,.caution,.important{border-color:#b77b34;background:#fff6e8}.stderr,.error{border-left:3px solid #b84141}.rich-html{display:block;width:100%;min-height:280px;border:0}.viewer{display:block;width:100%;height:480px;border:1px solid #ccd4d0;border-radius:6px}.math.block{overflow:auto}.task-list-item{list-style:none}.task-list-item-checkbox{margin:0 .5rem 0 -1.5rem}dt{font-weight:600}dd{margin:0 0 .6rem 1.5rem}.columns,.layout-row{display:flex;gap:1.5rem}.column{flex:1 1 0;min-width:0}.layout-cell{min-width:0}.layout-grid{display:grid;gap:1rem}.panel-tabset{border:1px solid #ccd4d0;border-radius:6px;padding:0 1rem;margin:1.4rem 0}.tab-title{font-weight:700;border-bottom:1px solid #ccd4d0;padding:.5rem 0}.column-page,.column-page-inset{margin:0 -8%}.column-body-outset{margin:0 -4%}.column-screen,.column-screen-inset{width:100vw;margin-left:calc(50% - 50vw)}@media(min-width:1300px){.column-margin,.margin-caption{float:right;clear:right;width:240px;margin-right:-280px;font-size:.85rem}}@media(max-width:700px){table{font-size:.85rem}th,td{min-width:8rem;padding:.3rem .5rem}.columns,.layout-row{flex-direction:column}.column{flex:none!important}.layout-cell{width:auto!important}}.provenance{color:#61736a;font-size:.85rem;border-top:1px solid #ccd4d0;padding-top:1rem;margin-top:3rem}.source-block{scroll-margin-top:2rem}details>summary{cursor:pointer}@media print{body{background:white}main{margin:0;max-width:none}pre{white-space:pre-wrap}.rich-html{min-height:350px}}"""
 
 
 _CALLOUT = re.compile(r"callout-(?:note|tip|warning|important|caution)")
@@ -1361,7 +1449,7 @@ def _tree(items):
     return result
 
 
-def _render(segments, notebook, labels, mapping, md, directory, title, env):
+def _render(segments, notebook, labels, references, mapping, md, directory, title, env):
     blocks, items = [], []
     for number, segment in enumerate(segments, 1):
         source = segment["source"]
@@ -1393,29 +1481,19 @@ def _render(segments, notebook, labels, mapping, md, directory, title, env):
             if segment.get("caption"):
                 block["caption"] = True
 
-            def native_node(token, source=source):
-                # Keep resolved inline structure (assets, crossrefs and footnotes)
-                # so native readers need not reconstruct it from source spelling.
-                return {
-                    "type": token.type,
-                    "tag": token.tag,
-                    "nesting": token.nesting,
-                    "source": _source_range(mapping, token.map[0], token.map[1])
-                    if token.map
-                    else source,
-                    "content": token.content,
-                    "attributes": token.attrs,
-                    "info": token.info,
-                    "meta": token.meta,
-                    "hidden": token.hidden,
-                    "children": [native_node(child) for child in token.children or []],
-                }
-
-            block["nodes"] = [native_node(token) for token in segment["tokens"]]
+            block["nodes"] = [_native_node(token, source, mapping) for token in segment["tokens"]]
             content = md.renderer.render(segment["tokens"], md.options, env)
         else:
             options = segment["options"]
             cell = segment.get("cell") or notebook.cells[segment["cell_index"]]
+
+            def inline(text):
+                return _resolved(md.parseInline(str(text), {}), labels, references)[0].children
+
+            markdown = [_markdown_tokens(output, md, labels, references) for output in cell.outputs]
+            caption = options.get("fig-cap") or options.get("tbl-cap")
+            caption = caption and inline(caption)
+            subcaptions = [inline(text) for text in options.get("fig-subcap", [])]
             if "cell" in segment:
                 block["embed"] = {"reference": segment["reference"], "label": segment["label"]}
             block.update(
@@ -1424,9 +1502,22 @@ def _render(segments, notebook, labels, mapping, md, directory, title, env):
                     "line_map": segment["line_map"],
                     "options": options,
                     "execution_count": cell.execution_count,
-                    "outputs": [_native_output(output, directory) for output in cell.outputs],
+                    "outputs": [
+                        _native_output(
+                            output,
+                            directory,
+                            tokens and [_native_node(token, source) for token in tokens],
+                        )
+                        for output, tokens in zip(cell.outputs, markdown)
+                    ],
                 }
             )
+            if caption:
+                block["caption_nodes"] = [_native_node(token, source) for token in caption]
+            if subcaptions:
+                block["subcaption_nodes"] = [
+                    [_native_node(token, source) for token in children] for children in subcaptions
+                ]
             content = ""
             if options.get("echo", True):
                 content += (
@@ -1435,15 +1526,18 @@ def _render(segments, notebook, labels, mapping, md, directory, title, env):
                     + "</code></pre>"
                 )
             if options.get("output", True):
-                outputs = [_rich_output(output, directory, md) for output in cell.outputs]
-                subcaptions = enumerate(options.get("fig-subcap", []))
+                outputs = [
+                    _rich_output(output, directory, md, tokens)
+                    for output, tokens in zip(cell.outputs, markdown)
+                ]
+                pending = enumerate(subcaptions)
                 for index, output in enumerate(cell.outputs):
                     if output.get("output_type") in {"display_data", "execute_result"} and (
-                        subcaption := next(subcaptions, None)
+                        subcaption := next(pending, None)
                     ):
                         outputs[index] = (
                             f"<figure>{outputs[index]}<figcaption>({chr(97 + subcaption[0])}) "
-                            f"{md.renderInline(str(subcaption[1]))}</figcaption></figure>"
+                            f"{md.renderer.renderInline(subcaption[1], md.options, {})}</figcaption></figure>"
                         )
                 if columns := options.get("layout-ncol"):
                     outputs = [
@@ -1454,7 +1548,6 @@ def _render(segments, notebook, labels, mapping, md, directory, title, env):
                     ]
                 content += "".join(outputs)
             label = options.get("label")
-            caption = options.get("fig-cap") or options.get("tbl-cap")
             prefix = segment.get("caption_prefix")
             if prefix:
                 block["caption_prefix"] = prefix
@@ -1463,11 +1556,11 @@ def _render(segments, notebook, labels, mapping, md, directory, title, env):
                 block["label"] = label
                 content = f'<figure id="{html.escape(label, quote=True)}">{content}'
                 if caption:
-                    content += f"<figcaption{margin}>{html.escape(prefix + ' ' if prefix else '')}{md.renderInline(str(caption))}</figcaption>"
+                    content += f"<figcaption{margin}>{html.escape(prefix + ' ' if prefix else '')}{md.renderer.renderInline(caption, md.options, {})}</figcaption>"
                 content += "</figure>"
             elif caption:
                 names = "caption margin-caption" if margin else "caption"
-                content += f'<p class="{names}">{html.escape(prefix + " " if prefix else "")}{md.renderInline(str(caption))}</p>'
+                content += f'<p class="{names}">{html.escape(prefix + " " if prefix else "")}{md.renderer.renderInline(caption, md.options, {})}</p>'
         column = (
             f" column-{segment['options']['column']}"
             if segment["kind"] == "code" and "column" in segment["options"]
@@ -1484,7 +1577,7 @@ def _render(segments, notebook, labels, mapping, md, directory, title, env):
         blocks.append(block)
     document = {
         "format": "cairn/document",
-        "version": 3,
+        "version": 4,
         "title": title,
         "blocks": blocks,
         "labels": labels,
@@ -1543,8 +1636,7 @@ def build(
                     kernel_name=kernel_name,
                     overrides=overrides,
                 )
-    deps = _dependencies()
-    nbformat, yaml, _, NotebookClient, *_ = deps
+    nbformat, yaml, NotebookClient, markdown = _dependencies()
     source = Path(source).absolute()
     if source.is_symlink() or not source.is_file():
         raise ValidationError(f"Report source must be an existing regular file: {source}")
@@ -1563,7 +1655,7 @@ def build(
         "source": "sources/" + source.name,
         "html": "index.html",
         "document": "document.json",
-        "document_version": 3,
+        "document_version": 4,
         "notebook": "executed.ipynb",
         "input_policy": "recorded",
     }
@@ -1593,7 +1685,7 @@ def build(
         ]
         _write_json(directory / "inputs.json", pins)
         _write_json(directory / "source-map.json", mapping)
-        md = _markdown_engine(deps)
+        md = _markdown_engine(markdown)
         segments = _segments(text, mapping, md, yaml)
         references, citations = _References(client), _Citations(metadata, sources)
         labels, markdown_env = _prepare_markdown(
@@ -1702,7 +1794,7 @@ def build(
             if captured:
                 manifest["environment"].update(captured)
         nbformat.write(notebook, directory / "executed.ipynb")
-        _render(segments, notebook, labels, mapping, md, directory, title, markdown_env)
+        _render(segments, notebook, labels, references, mapping, md, directory, title, markdown_env)
         shutil.rmtree(work)
         manifest["status"] = "complete"
         manifest["files"] = [
@@ -1804,7 +1896,7 @@ def _validated_bundle(directory: Path) -> tuple[dict, list]:
     }
     if not required.issubset(paths):
         raise ValidationError("Report bundle is missing required source or output files")
-    if manifest.get("document_version", 1) in {2, 3}:
+    if manifest.get("document_version", 1) in {2, 3, 4}:
         document = json.loads((directory / "document.json").read_text("utf-8"))
         if (
             document.get("format") != "cairn/document"

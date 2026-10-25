@@ -196,6 +196,9 @@ server = [
 ui = [
     { name = "fastapi" },
     { name = "itsdangerous" },
+    { name = "latex2mathml" },
+    { name = "markdown-it-py" },
+    { name = "mdit-py-plugins" },
     { name = "uvicorn" },
 ]
 
@@ -225,12 +228,15 @@ requires-dist = [
     { name = "itsdangerous", marker = "extra == 'ui'", specifier = ">=2.2,<3" },
     { name = "latex2mathml", marker = "extra == 'all'", specifier = ">=3.77,<4" },
     { name = "latex2mathml", marker = "extra == 'reports'", specifier = ">=3.77,<4" },
+    { name = "latex2mathml", marker = "extra == 'ui'", specifier = ">=3.77,<4" },
     { name = "markdown-it-py", marker = "extra == 'all'", specifier = ">=3,<5" },
     { name = "markdown-it-py", marker = "extra == 'reports'", specifier = ">=3,<5" },
+    { name = "markdown-it-py", marker = "extra == 'ui'", specifier = ">=3,<5" },
     { name = "matplotlib", marker = "extra == 'all'", specifier = ">=3.8" },
     { name = "matplotlib", marker = "extra == 'media'", specifier = ">=3.8" },
     { name = "mdit-py-plugins", marker = "extra == 'all'", specifier = ">=0.4,<1" },
     { name = "mdit-py-plugins", marker = "extra == 'reports'", specifier = ">=0.4,<1" },
+    { name = "mdit-py-plugins", marker = "extra == 'ui'", specifier = ">=0.4,<1" },
     { name = "nbclient", marker = "extra == 'all'", specifier = ">=0.10,<1" },
     { name = "nbclient", marker = "extra == 'reports'", specifier = ">=0.10,<1" },
     { name = "nbformat", marker = "extra == 'all'", specifier = ">=5,<6" },

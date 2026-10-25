@@ -103,12 +103,19 @@ def test_report_comments_persist_across_versions_and_stay_project_scoped(tmp_pat
             assert browser.put(edit_path, json=updated).status_code == 200
             assert browser.get(path).json()[0]["body"] == "Autosaved edit"
             assert browser.put(edit_path, json=body).status_code == 200
+            assert browser.put(edit_path, json={**body, "for_agent": True}).json()["for_agent"]
+            reply = browser.post(f"{edit_path}/replies", json={"body": "Which one?"}).json()
+            assert reply["reply_to"] == comment_id and not reply["for_agent"]
+            sent = browser.post(f"{edit_path}/sending").json()
+            assert sent["id"] == comment_id and sent["sent_at"]
+            elsewhere = f"/ui-api/reports/{other}/comments/{comment_id}/sending"
+            assert browser.post(elsewhere).status_code == 404
             assert browser.post("/v1/artifacts", json={}).status_code == 401
     with closing(Repository(tmp_path)) as repo:
         third = publish(repo)
         with TestClient(create_app(repo, ui=True, no_auth=True)) as browser:
             saved = browser.get(f"/ui-api/reports/{third}/comments").json()
-            assert len(saved) == 1 and saved[0]["body"] == body["body"]
+            assert [item["body"] for item in saved] == [body["body"], "Which one?"]
             assert (
                 browser.delete(f"/ui-api/reports/{third}/comments/{saved[0]['id']}").status_code
                 == 200
@@ -396,6 +403,87 @@ def test_v2_reports_serve_assets_without_legacy_preview_cache(tmp_path, monkeypa
             response = browser.get(base + "html/0/0")
             assert response.status_code == 200 and "Interactive" in response.text
             assert "sandbox allow-scripts" in response.headers["content-security-policy"]
+
+
+def test_previews_parse_markdown_that_old_documents_left_as_text(tmp_path):
+    import json
+
+    from cairn.reports import _native_output
+
+    source = {"path": "report.qmd", "line_start": 1, "line_end": 1}
+    output = _native_output(
+        {
+            "output_type": "display_data",
+            "data": {"text/markdown": "::: {.finding}\nSee @fig-a\n:::"},
+        },
+        tmp_path / "build",
+    )
+    documents = {
+        1: {
+            "nodes": [
+                {"type": "paragraph_open", "tag": "p", "nesting": 1, "content": ""},
+                {"type": "inline", "tag": "", "nesting": 0, "content": "*Old* text {#sec-old}"},
+                {"type": "paragraph_close", "tag": "p", "nesting": -1, "content": ""},
+            ],
+            "outputs": [{"output_type": "display_data", "data": {"text/markdown": ["**raw**"]}}],
+        },
+        2: {"outputs": [output], "options": {"fig-cap": "Caption $x$ for @fig-a"}},
+    }
+    with (
+        closing(Repository(tmp_path / "repo")) as repo,
+        TestClient(create_app(repo, ui=True, no_auth=True)) as browser,
+    ):
+        previews = {}
+        for version, block in documents.items():
+            document = {
+                "format": "cairn/document",
+                "version": version,
+                "labels": {"fig-a": {"text": "Figure 1"}},
+                "blocks": [{"id": "b", "kind": "code", "source": source, **block}],
+            }
+            blobs = [{**repo.put_blob(json.dumps(document).encode()), "name": "document.json"}]
+            for path in (tmp_path / "build/assets").iterdir():
+                blobs.append({**repo.put_blob(path), "name": "assets/" + path.name})
+            started = repo.start("demo", "reports", f"v{version}")
+            identity = started["artifact"]["id"]
+            repo.close_writer(identity, started["writer"]["id"], 0)
+            repo.finish(
+                identity,
+                value={
+                    "$cairn": 1,
+                    "format": "report/bundle",
+                    "version": 1,
+                    "data": {"document_version": version},
+                    "blobs": blobs,
+                    "refs": [],
+                },
+            )
+            response = browser.get(f"/ui-api/reports/{identity}/preview.json")
+            previews[version] = response.json()["blocks"][0]
+        old = previews[1]
+        assert [n["type"] for n in old["nodes"][1]["children"]] == [
+            "em_open",
+            "text",
+            "em_close",
+            "text",
+        ]
+        assert old["nodes"][1]["children"][3]["content"] == " text"
+        raw = old["outputs"][0]["data"]["text/markdown"]["nodes"][1]["children"]
+        assert "raw" in [n["content"] for n in raw if n["type"] == "text"]
+        current = previews[2]
+        nodes = current["outputs"][0]["data"]["text/markdown"]["nodes"]
+        assert current["outputs"][0]["data"]["text/markdown"]["asset"].startswith("assets/")
+        assert nodes[0]["attributes"] == {"class": "finding"}
+        assert '<a class="crossref" href="#fig-a">Figure 1</a>' in [
+            child["content"] for child in nodes[2]["children"]
+        ]
+        assert [n["type"] for n in current["caption_nodes"]] == [
+            "text",
+            "math_inline",
+            "text",
+            "html_inline",
+            "text",
+        ]
 
 
 def test_report_viewers_read_their_report_files_through_a_signed_link(tmp_path):

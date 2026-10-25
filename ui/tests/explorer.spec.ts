@@ -1,4 +1,13 @@
-import {test,expect} from '@playwright/test';
+import {test,expect, type Page} from '@playwright/test';
+async function openTextComment(page:Page) {
+  await page.evaluate(()=>window.getSelection()?.removeAllRanges());
+  const paragraph=page.locator('.native-document p').filter({hasText:'This is a working tour'}).first();
+  await paragraph.scrollIntoViewIfNeeded();
+  await expect.poll(()=>page.evaluate(()=>CSS.highlights.get('cairn-comments')?.size||0)).toBeGreaterThan(0);
+  const point=await paragraph.evaluate(node=>{const range=document.createRange();range.selectNodeContents(node);const rect=range.getClientRects()[0];return {x:rect.x+4,y:rect.y+rect.height/2};});
+  await page.mouse.click(point.x,point.y);
+}
+
 
 test('plain artifact identities, native reports, media zoom and lineage',async({page,request})=>{
   const errors:string[]=[];
@@ -127,16 +136,8 @@ test('comments autosave, highlight, reopen beside text, and delete across versio
   await expect(editor).toHaveCount(0);
   await expect.poll(()=>page.evaluate(()=>CSS.highlights.get('cairn-comments')?.size||0)).toBeGreaterThan(0);
   await expect(page.locator('.report-comments')).toHaveCount(0);
-  const marker=page.getByTitle(body+' updated',{exact:true});
-  await expect(marker).toBeVisible();
-  const appearance=(node:Element)=>{const css=getComputedStyle(node);return [css.width,css.height,css.color,css.backgroundColor,css.border,css.borderRadius,css.boxShadow];};
-  expect(await page.locator('.output-comment-button').first().evaluate(appearance)).toEqual(await marker.evaluate(appearance));
-  const shell=page.locator('.native-output-shell').first();
-  await shell.evaluate(node=>(node as HTMLElement).style.width='180px');
-  const mediaMarker=shell.locator(':scope > .output-comment-button');
-  await expect.poll(async()=>Math.abs((await mediaMarker.boundingBox())!.x-(await marker.boundingBox())!.x)).toBeLessThan(1);
-  await shell.evaluate(node=>(node as HTMLElement).style.removeProperty('width'));
-  await marker.click();
+  await expect(page.locator('.report-comment-marker')).toHaveCount(0);
+  await openTextComment(page);
   await expect(editor.getByLabel('Comment',{exact:true})).toHaveValue(body+' updated');
   await editor.getByLabel('Comment',{exact:true}).fill(body+' final');
   await page.getByRole('heading',{name:'Published report',exact:true}).click();
@@ -145,10 +146,44 @@ test('comments autosave, highlight, reopen beside text, and delete across versio
   await page.goto(`/p/neural-rendering/a/${reports[1].id}`);
   await page.locator('.native-document p').filter({hasText:'This is a working tour'}).first().scrollIntoViewIfNeeded();
   await expect.poll(()=>page.evaluate(()=>CSS.highlights.get('cairn-comments')?.size||0)).toBeGreaterThan(0);
-  await page.getByTitle(body+' final',{exact:true}).click();
+  await openTextComment(page);
   await expect(editor.getByLabel('Comment',{exact:true})).toHaveValue(body+' final');
   await editor.getByRole('button',{name:'Delete comment'}).click();await expect(editor).toHaveCount(0);
   await expect.poll(async()=>{const rows=await (await request.get(`/ui-api/reports/${reports[0].id}/comments`)).json();return rows.some((c:any)=>c.body===body+' final');}).toBe(false);
+});
+
+test('comments for the agent are sent when their author clicks out, and again after an edit',async({page,request})=>{
+  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
+  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
+  const rows=async()=>(await (await request.get(`/ui-api/reports/${report.id}/comments`)).json()) as any[];
+  const sent=async(text:string)=>(await rows()).find(c=>c.body===text)?.sent_at||null;
+  await page.goto(`/p/neural-rendering/a/${report.id}`);
+  const paragraph=page.locator('.native-document p').filter({hasText:'This is a working tour'}).first();
+  await paragraph.scrollIntoViewIfNeeded();
+  await paragraph.evaluate(node=>{const range=document.createRange();range.selectNodeContents(node);const selection=window.getSelection()!;selection.removeAllRanges();selection.addRange(range);});
+  await page.getByRole('button',{name:'Comment on selected text',exact:true}).click();
+  const editor=page.getByRole('group',{name:'Add report comment'}),body=`Agent comment test ${Date.now()}`;
+  await expect(editor.getByLabel('Send to agent')).toBeChecked();
+  await editor.getByLabel('Comment',{exact:true}).fill(body);
+  await expect(editor.getByLabel('Saved',{exact:true})).toBeVisible({timeout:5000});
+  expect(await sent(body)).toBeNull();
+  await page.getByRole('heading',{name:'Published report',exact:true}).click();
+  await expect(editor).toHaveCount(0);
+  await expect.poll(()=>sent(body)).not.toBeNull();
+  const first=await sent(body);
+  await openTextComment(page);
+  await editor.getByLabel('Reply',{exact:true}).fill('A follow-up');
+  await editor.getByRole('button',{name:'Send reply',exact:true}).click();
+  await expect(editor.locator('.comment-reply')).toContainText('A follow-up');
+  await expect(editor.locator('.comment-reply').getByText('Sent to agent')).toBeVisible();
+  await editor.getByLabel('Comment',{exact:true}).fill(body+' edited');
+  await expect.poll(()=>rows().then(r=>r.some(c=>c.body===body+' edited'&&!c.sent_at))).toBe(true);
+  await page.getByRole('heading',{name:'Published report',exact:true}).click();
+  await expect.poll(()=>sent(body+' edited')).not.toBeNull();
+  expect(await sent(body+' edited')).not.toBe(first);
+  await openTextComment(page);
+  await editor.getByRole('button',{name:'Delete comment'}).click();await expect(editor).toHaveCount(0);
+  await expect.poll(async()=>(await rows()).some(c=>c.body.startsWith(body)||c.body==='A follow-up')).toBe(false);
 });
 
 test('report overview groups versions and opens latest publication',async({page,request})=>{
@@ -172,16 +207,16 @@ test('comments resolve, hide, show on request and reopen across versions',async(
   const state=async()=>(await (await request.get(`/ui-api/reports/${reports[0].id}/comments`)).json()).find((c:any)=>c.id===comment.id)?.resolved_at??null;
   try{
     await page.goto(`/p/neural-rendering/a/${reports[0].id}`);
-    const editor=page.getByRole('group',{name:'Add report comment'}),marker=page.getByTitle(body,{exact:true});
+    const editor=page.getByRole('group',{name:'Add report comment'});
     await page.locator('.native-document p').filter({hasText:'This is a working tour'}).first().scrollIntoViewIfNeeded();
-    await marker.click();
+    await openTextComment(page);
     await expect(editor).toContainText(`v${reports[1].number} · reviewer`);
     await editor.getByRole('button',{name:'Resolve comment'}).click();
-    await expect(editor).toHaveCount(0);await expect(marker).toHaveCount(0);
+    await expect(editor).toHaveCount(0);await expect(page.locator('.report-comment-marker')).toHaveCount(0);
     await expect.poll(state).not.toBeNull();
     await page.getByRole('button',{name:'Show resolved comments'}).click();
-    await expect(marker).toHaveClass(/resolved/);
-    await marker.click();await expect(editor).toContainText('Resolved');
+    await expect.poll(()=>page.evaluate(()=>CSS.highlights.get('cairn-comments')?.size||0)).toBeGreaterThan(0);
+    await openTextComment(page);await expect(editor).toContainText('Resolved');
     await editor.getByRole('button',{name:'Reopen comment'}).click();
     await expect.poll(state).toBeNull();
   }finally{await request.delete(`/ui-api/reports/${reports[0].id}/comments/${comment.id}`);}
@@ -490,9 +525,9 @@ test('live artifact keeps polling until it finishes', async ({page,request}) => 
   expect(checks).toBe(3);
 });
 
-test('v2 reports load document and output assets directly without a preview conversion', async ({page,request}) => {
+test('v4 reports load document and output assets directly without a preview conversion', async ({page,request}) => {
   const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.find((a:any)=>a.manifest?.value?.data?.document_version>=2);
+  const report=items.find((a:any)=>a.name==='report-field-guide'&&a.manifest?.value?.data?.document_version>=4);
   expect(report).toBeTruthy();
   const paths:string[]=[];
   page.on('request',r=>{paths.push(new URL(r.url()).pathname);});
@@ -504,6 +539,20 @@ test('v2 reports load document and output assets directly without a preview conv
   await expect(image).toHaveAttribute('src',new RegExp(`/ui-api/reports/${report.id}/assets/`));
   expect(paths).toContain(`/ui-api/reports/${report.id}/document.json`);
   expect(paths.some(p=>p.endsWith('/preview.json')||p.endsWith('/executed.ipynb'))).toBe(false);
+  const callout=page.locator('aside.admonition.note',{hasText:'Cells can print fenced divs'});
+  await expect(callout.locator('.admonition-title')).toHaveText('Generated callout');
+  await expect(callout.locator('a')).toHaveAttribute('href','#sec-code');
+});
+
+test('v3 reports read their Markdown output parsed by the server', async ({page,request}) => {
+  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
+  const report=items.find((a:any)=>a.name==='report-field-guide'&&a.manifest?.value?.data?.document_version===3);
+  test.skip(!report,'Needs a report built before document version 4');
+  const paths:string[]=[];
+  page.on('request',r=>{paths.push(new URL(r.url()).pathname);});
+  await page.goto(`/p/neural-rendering/a/${report.id}`);
+  await expect(page.locator('article.native-document strong',{hasText:'Generated Markdown'})).toBeVisible();
+  expect(paths).toContain(`/ui-api/reports/${report.id}/preview.json`);
 });
 
 test('legacy v1 inline report output remains readable', async ({page,request}) => {

@@ -4,6 +4,7 @@ import concurrent.futures
 import hashlib
 import json
 import os
+import sqlite3
 import threading
 import time
 import uuid
@@ -794,3 +795,36 @@ def test_integrity_reconstructs_publication_capacity(tmp_path):
         assert "capacity counter" in str(result)
     finally:
         repository.close()
+
+
+def test_opening_an_existing_repository_does_not_wait_for_writers(tmp_path):
+    Repository(tmp_path).close()
+    holder = sqlite3.connect(tmp_path / "metadata.sqlite3", isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        started = time.monotonic()
+        repository = Repository(tmp_path)
+        try:
+            assert repository.info()["schema_version"]
+        finally:
+            repository.close()
+        assert time.monotonic() - started < 5
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+
+
+def test_writes_report_a_busy_repository_as_pending(tmp_path, monkeypatch):
+    Repository(tmp_path).close()
+    monkeypatch.setattr("cairn.storage.BUSY_SECONDS", 0.1)
+    holder = sqlite3.connect(tmp_path / "metadata.sqlite3", isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    repository = Repository(tmp_path)
+    try:
+        with pytest.raises(model.Pending, match="busy"):
+            repository.start("default", "runs", "blocked")
+        holder.execute("ROLLBACK")
+        assert repository.start("default", "runs", "blocked")["artifact"]["id"]
+    finally:
+        repository.close()
+        holder.close()

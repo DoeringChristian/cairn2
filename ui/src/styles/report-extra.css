@@ -35,9 +35,10 @@
 .zoom[hidden] { display: none; }
 .report-prose .raw-html { max-width: 100%; overflow-x: auto; }
 .report-prose .callout { margin: 18px 0; padding: 12px 16px; border-left: 4px solid var(--accent); border-radius: 8px; background: var(--accent-soft); }
-.report-prose table { width: 100%; margin: 18px 0; border-collapse: collapse; font-size: 14px; line-height: 1.5; }
+/* Columns fit their content; a table wider than the column scrolls instead of squeezing its text. */
+.report-prose table { display: block; width: fit-content; max-width: 100%; overflow-x: auto; margin: 18px 0; border-collapse: collapse; font-size: 14px; line-height: 1.45; }
 .report-prose caption { caption-side: top; padding-bottom: 8px; color: var(--muted); font-size: 12px; text-align: left; }
-.report-prose th, .report-prose td { padding: 9px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.report-prose th, .report-prose td { padding: 6px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 .report-prose th { color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .report-prose .pill { display: inline-block; padding: 2px 9px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 700; }
 .report-prose .pill.tentative { background: #f5e6dc; color: var(--warn); }
@@ -212,7 +213,8 @@ main { width: min(100%, calc(var(--column) + 2 * clamp(24px, 5vw, 74px))); }
   h1 { font-size: clamp(32px, 10vw, 44px); overflow-wrap: anywhere; }
   .report-prose h2 { font-size: 26px; }
   .report-prose pre, .report-prose .out { max-width: 100%; overflow-x: auto; }
-  .report-prose table { display: block; max-width: 100%; overflow-x: auto; }
+  .report-prose table { font-size: 13px; }
+  .report-prose th, .report-prose td { min-width: 8rem; padding: 5px 8px; }
   .back-link { min-height: 40px; box-sizing: border-box; display: inline-flex; align-items: center; }
   body { padding-bottom: 64px; } /* room for the back pill at the bottom of the window */
   .zoom button, .lightbox .icon { min-width: 40px; min-height: 40px; }

@@ -17,6 +17,7 @@ from .contract import (
     ArtifactDescriptor,
     ArtifactPage,
     BlobDescriptor,
+    CommentPage,
     JSONValue,
     QueryPage,
     Receipt,
@@ -355,13 +356,34 @@ class HTTPRepository:
         )
 
     def add_comment(
-        self, artifact_id, anchor, body, *, author=None, request_id=None
+        self, artifact_id, anchor, body, *, author=None, for_agent=False, request_id=None
     ) -> dict[str, JSONValue]:
         payload = {"anchor": anchor, "body": body, "request_id": request_id}
         if author is not None:
             self._require("annotations")
             payload["author"] = author
+        if for_agent:
+            self._require("comment_threads")
+            payload["for_agent"] = True
         return self._request("POST", f"v1/artifacts/{self._id(artifact_id)}/comments", json=payload)
+
+    def reply_comment(
+        self, comment_id, body, *, author=None, for_agent=False, request_id=None
+    ) -> dict[str, JSONValue]:
+        self._require("comment_threads")
+        return self._request(
+            "POST",
+            f"v1/comments/{self._id(comment_id)}/replies",
+            json={"body": body, "author": author, "for_agent": for_agent, "request_id": request_id},
+        )
+
+    def send_comment(self, comment_id, *, request_id=None) -> dict[str, JSONValue]:
+        self._require("comment_threads")
+        return self._request(
+            "POST",
+            f"v1/comments/{self._id(comment_id)}/sending",
+            json={"request_id": request_id},
+        )
 
     def comments(
         self, artifact_id, *, scope="artifact", include_resolved=True
@@ -372,15 +394,32 @@ class HTTPRepository:
             params = {"scope": scope, "include_resolved": str(include_resolved).lower()}
         return self._request("GET", f"v1/artifacts/{self._id(artifact_id)}/comments", params=params)
 
+    def list_comments(
+        self, pattern=None, *, project="default", include_resolved=True, limit=100, cursor=None
+    ) -> CommentPage:
+        self._require("comment_listing")
+        params = {
+            key: value
+            for key, value in {
+                "pattern": pattern,
+                "project": project,
+                "include_resolved": str(include_resolved).lower(),
+                "limit": limit,
+                "cursor": cursor,
+            }.items()
+            if value is not None
+        }
+        return self._request("GET", "v1/comments", params=params)
+
     def update_comment(
-        self, comment_id, body, *, expected_revision=None, request_id=None
+        self, comment_id, body, *, expected_revision=None, for_agent=None, request_id=None
     ) -> dict[str, JSONValue]:
         self._require("annotations")
-        return self._request(
-            "PUT",
-            f"v1/comments/{self._id(comment_id)}",
-            json={"body": body, "expected_revision": expected_revision, "request_id": request_id},
-        )
+        payload = {"body": body, "expected_revision": expected_revision, "request_id": request_id}
+        if for_agent is not None:
+            self._require("comment_threads")
+            payload["for_agent"] = for_agent
+        return self._request("PUT", f"v1/comments/{self._id(comment_id)}", json=payload)
 
     def resolve_comment(
         self, comment_id, *, resolved=True, note=None, by=None, request_id=None

@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 
@@ -358,6 +359,34 @@ def test_garbage_collection_recovers_after_delete_failure_and_lease_expiry(pair,
     result = collect_garbage(source, grace_seconds=0, dry_run=False)
     assert result["removed"] == [blob["digest"]]
     assert collect_garbage(source, grace_seconds=0, dry_run=False)["removed"] == []
+
+
+def test_reads_renew_a_low_lease_and_passive_reads_take_none(pair):
+    source, _ = pair
+    digest = source.put_blob(b"read while collected")["digest"]
+
+    def lease(value=None):
+        with source._transaction(write=value is not None) as conn:
+            if value is not None:
+                conn.execute(blobs.update().values(lease_until=value))
+            return conn.execute(sa.select(blobs.c.lease_until)).scalar_one()
+
+    lease(0)
+    with source._open_blob(digest, lease=False) as stream:
+        assert stream.read() == b"read while collected"
+    assert lease() == 0
+    with source.open_blob(digest):
+        pass
+    renewed = lease()
+    assert renewed > time.time() + 3000
+    with source.open_blob(digest):
+        pass
+    assert lease() == renewed
+    assert collect_garbage(source, grace_seconds=0, dry_run=False)["removed"] == []
+    lease(0)
+    assert collect_garbage(source, grace_seconds=0, dry_run=False)["removed"] == [digest]
+    with pytest.raises(NotFound), source._open_blob(digest, lease=False):
+        pass
 
 
 @pytest.mark.parametrize("dependency", ["blob", "version"])

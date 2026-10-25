@@ -27,6 +27,38 @@ def _json(value: str):
         raise argparse.ArgumentTypeError(f"Invalid JSON: {exc}") from exc
 
 
+def _watch_comments(client, reference, interval, as_json):
+    """Open threads with comments sent to an agent, printed again whenever one is (re)sent."""
+    import time
+
+    import httpx
+
+    from .model import Pending
+
+    seen = set()
+    while True:
+        try:
+            found = client.comments(reference, include_resolved=False)
+        except (Pending, httpx.TransportError) as exc:
+            print(f"cairn: {exc}; retrying", file=sys.stderr)
+            found = []
+        threads = {}
+        for comment in found:
+            threads.setdefault(comment["reply_to"] or comment["id"], []).append(comment)
+        batch = [
+            thread
+            for thread in threads.values()
+            if any(c["sent_at"] and (c["id"], c["sent_at"]) not in seen for c in thread)
+        ]
+        seen.update((c["id"], c["sent_at"]) for thread in batch for c in thread if c["sent_at"])
+        if batch:
+            if as_json:
+                print(json.dumps(batch, ensure_ascii=False), flush=True)
+            else:
+                print("\n".join(_comment_line(c) for thread in batch for c in thread), flush=True)
+        time.sleep(interval)
+
+
 def _print(value):
     print(json.dumps(value, ensure_ascii=False, allow_nan=False, indent=2, default=str))
 
@@ -36,7 +68,11 @@ def _comment_line(comment):
     if "line_start" in anchor:
         end = anchor.get("line_end", anchor["line_start"])
         where += f":{anchor['line_start']}" + (f"-{end}" if end != anchor["line_start"] else "")
-    parts = [comment["id"], f"v{comment['number']}", where]
+    parts = [comment["id"], f"{comment['namespace']}/{comment['name']}@v{comment['number']}", where]
+    if comment.get("reply_to"):
+        parts[1:] = [f"↳ {comment['reply_to']}"]
+    if comment.get("author"):
+        parts.append(f"({comment['author']})")
     if "time" in anchor.get("media", {}):
         parts.append(f"@{anchor['media']['time']:.1f}s")
     if anchor.get("quote"):
@@ -140,12 +176,26 @@ def parser() -> argparse.ArgumentParser:
     comments = commands.add_parser(
         "comments", help="List and resolve comments made in the UI"
     ).add_subparsers(dest="comments_command", required=True)
-    listing = comments.add_parser("list", help="Open comments on every version of a name")
-    listing.add_argument("reference")
+    listing = comments.add_parser(
+        "list", help="Open comments on every version of a name, or in the whole project"
+    )
+    listing.add_argument("reference", nargs="?", help="A reference or name pattern; default all")
     listing.add_argument("--all", action="store_true", help="Include resolved comments")
     listing.add_argument("--exact", action="store_true", help="Only the referenced version")
     listing.add_argument("--json", action="store_true", help="Print full comment objects")
     listing.set_defaults(action="comments")
+    reply = comments.add_parser("reply", help="Answer a comment in its thread")
+    reply.add_argument("comment_id")
+    reply.add_argument("body")
+    reply.add_argument("--by", help="Who answers, e.g. an agent name")
+    reply.set_defaults(action="comment-reply")
+    watch = comments.add_parser(
+        "watch", help="Print comment threads as they are sent to an agent, until interrupted"
+    )
+    watch.add_argument("reference", nargs="?", help="A reference or name pattern; default all")
+    watch.add_argument("--interval", type=float, default=5.0, help="Seconds between checks")
+    watch.add_argument("--json", action="store_true", help="Print each batch as one JSON line")
+    watch.set_defaults(action="comment-watch")
     resolve = comments.add_parser("resolve", help="Mark a comment as addressed")
     resolve.add_argument("comment_id")
     resolve.add_argument("--note", help="What was done, shown beside the comment")
@@ -520,6 +570,10 @@ def _dispatch(args, client):
         for comment in found:
             print(_comment_line(comment))
         return 0
+    if action == "comment-reply":
+        return client.reply_comment(args.comment_id, args.body, by=args.by)
+    if action == "comment-watch":
+        return _watch_comments(client, args.reference, args.interval, args.json)
     if action == "comment-resolve":
         return client.resolve_comment(args.comment_id, note=args.note, by=args.by)
     if action == "comment-reopen":

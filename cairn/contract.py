@@ -89,6 +89,11 @@ class SearchPage(TypedDict):
     next_cursor: str | None
 
 
+class CommentPage(TypedDict):
+    items: list[dict[str, JSONValue]]
+    next_cursor: str | None
+
+
 class BlobDescriptor(TypedDict):
     digest: str
     size: int
@@ -221,7 +226,22 @@ class RepositoryProtocol(Protocol):
         body: str,
         *,
         author: str | None = None,
+        for_agent: bool = False,
         request_id: str | None = None,
+    ) -> dict[str, JSONValue]: ...
+
+    def reply_comment(
+        self,
+        comment_id: str,
+        body: str,
+        *,
+        author: str | None = None,
+        for_agent: bool = False,
+        request_id: str | None = None,
+    ) -> dict[str, JSONValue]: ...
+
+    def send_comment(
+        self, comment_id: str, *, request_id: str | None = None
     ) -> dict[str, JSONValue]: ...
 
     def comments(
@@ -232,12 +252,23 @@ class RepositoryProtocol(Protocol):
         include_resolved: bool = True,
     ) -> list[dict[str, JSONValue]]: ...
 
+    def list_comments(
+        self,
+        pattern: str | None = None,
+        *,
+        project: str = "default",
+        include_resolved: bool = True,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> CommentPage: ...
+
     def update_comment(
         self,
         comment_id: str,
         body: str,
         *,
         expected_revision: int | None = None,
+        for_agent: bool | None = None,
         request_id: str | None = None,
     ) -> dict[str, JSONValue]: ...
 
