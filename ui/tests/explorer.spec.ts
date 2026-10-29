@@ -36,6 +36,7 @@ test('plain artifact identities, native reports, media zoom and lineage',async({
   await dialog.getByRole('button',{name:'Pause video',exact:true}).click();
   await expect(dialog.getByRole('button',{name:'Play video',exact:true}).locator('svg')).toHaveCount(1);
   await dialog.getByRole('button',{name:'Close media viewer'}).click();
+  await page.getByRole('button',{name:'Show table of contents',exact:true}).click();
   const toc=page.getByRole('navigation',{name:'Table of contents'});
   await expect(toc).toBeVisible();
   if(await toc.getByRole('button').getAttribute('aria-expanded')==='false')await toc.getByRole('button').click();
@@ -152,38 +153,49 @@ test('comments autosave, highlight, reopen beside text, and delete across versio
   await expect.poll(async()=>{const rows=await (await request.get(`/ui-api/reports/${reports[0].id}/comments`)).json();return rows.some((c:any)=>c.body===body+' final');}).toBe(false);
 });
 
-test('comments for the agent are sent when their author clicks out, and again after an edit',async({page,request})=>{
+test('Enter sends immutable messages; leaving saves root and reply drafts',async({page,request})=>{
   const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
   const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
   const rows=async()=>(await (await request.get(`/ui-api/reports/${report.id}/comments`)).json()) as any[];
-  const sent=async(text:string)=>(await rows()).find(c=>c.body===text)?.sent_at||null;
   await page.goto(`/p/neural-rendering/a/${report.id}`);
   const paragraph=page.locator('.native-document p').filter({hasText:'This is a working tour'}).first();
   await paragraph.scrollIntoViewIfNeeded();
   await paragraph.evaluate(node=>{const range=document.createRange();range.selectNodeContents(node);const selection=window.getSelection()!;selection.removeAllRanges();selection.addRange(range);});
   await page.getByRole('button',{name:'Comment on selected text',exact:true}).click();
-  const editor=page.getByRole('group',{name:'Add report comment'}),body=`Agent comment test ${Date.now()}`;
-  await expect(editor.getByLabel('Send to agent')).toBeChecked();
-  await editor.getByLabel('Comment',{exact:true}).fill(body);
-  await expect(editor.getByLabel('Saved',{exact:true})).toBeVisible({timeout:5000});
-  expect(await sent(body)).toBeNull();
-  await page.getByRole('heading',{name:'Published report',exact:true}).click();
-  await expect(editor).toHaveCount(0);
-  await expect.poll(()=>sent(body)).not.toBeNull();
-  const first=await sent(body);
-  await openTextComment(page);
-  await editor.getByLabel('Reply',{exact:true}).fill('A follow-up');
-  await editor.getByRole('button',{name:'Send reply',exact:true}).click();
-  await expect(editor.locator('.comment-reply')).toContainText('A follow-up');
-  await expect(editor.locator('.comment-reply').getByText('Sent to agent')).toBeVisible();
-  await editor.getByLabel('Comment',{exact:true}).fill(body+' edited');
-  await expect.poll(()=>rows().then(r=>r.some(c=>c.body===body+' edited'&&!c.sent_at))).toBe(true);
-  await page.getByRole('heading',{name:'Published report',exact:true}).click();
-  await expect.poll(()=>sent(body+' edited')).not.toBeNull();
-  expect(await sent(body+' edited')).not.toBe(first);
-  await openTextComment(page);
-  await editor.getByRole('button',{name:'Delete comment'}).click();await expect(editor).toHaveCount(0);
-  await expect.poll(async()=>(await rows()).some(c=>c.body.startsWith(body)||c.body==='A follow-up')).toBe(false);
+  const editor=page.getByRole('group',{name:'Add report comment'}),field=editor.getByLabel('Comment',{exact:true}),body=`Agent comment test ${Date.now()}`;
+  let rootId:string|undefined;
+  try {
+    await field.fill(body);
+    // Click away immediately, before the autosave timer.
+    await page.getByRole('heading',{name:'Published report',exact:true}).click();
+    await expect(editor).toHaveCount(0);
+    const root=(await rows()).find(c=>c.body===body);rootId=root.id;
+    expect(root.sent_at).toBeNull();
+    await openTextComment(page);
+    await expect(field).toHaveValue(body);
+    await field.evaluate((node:HTMLTextAreaElement)=>node.setSelectionRange(node.value.length,node.value.length));await field.press('Shift+Enter');await field.pressSequentially('Second line');
+    await field.press('Enter');
+    await expect(editor.getByRole('log')).toContainText(body+'\nSecond line');
+    await expect(field).toHaveValue('');
+    await expect.poll(async()=>(await rows()).find(c=>c.id===rootId)?.sent_at).toBeTruthy();
+    await expect(editor.locator('textarea')).toHaveCount(1);
+    await field.fill('A saved follow-up');
+    await page.getByRole('heading',{name:'Published report',exact:true}).click();
+    await expect(editor).toHaveCount(0);
+    const reply=(await rows()).find(c=>c.reply_to===rootId);
+    expect(reply.body).toBe('A saved follow-up');expect(reply.sent_at).toBeNull();
+    await openTextComment(page);
+    await expect(field).toHaveValue('A saved follow-up');
+    await field.fill('An adjusted follow-up');await field.press('Enter');
+    await expect(editor.getByRole('log')).toContainText('An adjusted follow-up');
+    await expect(field).toHaveValue('');
+    const after=await rows();
+    expect(after.filter(c=>c.reply_to===rootId)).toHaveLength(1);
+    expect(after.find(c=>c.id===reply.id).sent_at).toBeTruthy();
+    expect(after.find(c=>c.id===rootId).body).toBe(body+'\nSecond line');
+    await editor.getByRole('button',{name:'Delete comment'}).click();await expect(editor).toHaveCount(0);
+    await expect.poll(async()=>(await rows()).some(c=>c.id===rootId||c.reply_to===rootId)).toBe(false);
+  } finally {if(rootId)await request.delete(`/ui-api/reports/${report.id}/comments/${rootId}`);}
 });
 
 test('report overview groups versions and opens latest publication',async({page,request})=>{
@@ -433,7 +445,7 @@ test('list cache survives category navigation and reload, refresh bypasses it', 
   const nav = page.getByRole('navigation', {name:'Project navigation'});
   await page.goto('/p/cache-demo?view=runs');
   await expect(page.getByRole('link', {name:'cached-runs', exact:true})).toBeVisible();
-  await page.getByRole('button', {name:'Auto-refresh · 5s', exact:true}).click();
+  await page.getByRole('button', {name:'Pause auto-refresh', exact:true}).click();
   await nav.getByRole('link', {name:'Reports', exact:true}).click();
   await expect(page.getByText('cached-reports', {exact:true})).toBeVisible();
   await nav.getByRole('link', {name:'Artifacts', exact:true}).click();
@@ -444,7 +456,7 @@ test('list cache survives category navigation and reload, refresh bypasses it', 
   await page.reload();
   await expect(page.getByRole('link', {name:'cached-runs', exact:true})).toBeVisible();
   expect(requests).toEqual(['runs','reports','artifacts']);
-  await page.getByRole('button', {name:'Auto-refresh · 5s', exact:true}).click();
+  await page.getByRole('button', {name:'Pause auto-refresh', exact:true}).click();
   await page.getByRole('button', {name:'Refresh', exact:true}).click();
   await expect.poll(() => requests.length).toBe(4);
   expect(requests.at(-1)).toBe('runs');
@@ -568,7 +580,7 @@ test('legacy v1 inline report output remains readable', async ({page,request}) =
   await expect.poll(()=>image.evaluate((img:HTMLImageElement)=>img.naturalWidth)).toBe(1);
 });
 
-test('full paragraph selection keeps actions beside selected text in the comment column',async({page,request})=>{
+test('full paragraph selection keeps actions beside selected text',async({page,request})=>{
   const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
   const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
   await page.goto(`/p/neural-rendering/a/${report.id}`);
@@ -579,9 +591,14 @@ test('full paragraph selection keeps actions beside selected text in the comment
   const actions=page.locator('.selection-actions');
   await expect(actions).toBeVisible();
   const p=(await paragraph.boundingBox())!,a=(await actions.boundingBox())!;
-  expect(a.y).toBeGreaterThanOrEqual(p.y-2);expect(a.y).toBeLessThanOrEqual(p.y+p.height+2);
-  const x=await page.locator('article.native-document').evaluate(node=>Math.min(innerWidth-52,node.getBoundingClientRect().right+8));
-  expect(Math.abs((await actions.getByRole('button',{name:'Comment on selected text'}).boundingBox())!.x-x)).toBeLessThan(1);
+  expect(a.y).toBeGreaterThanOrEqual(p.y);expect(a.y).toBeLessThanOrEqual(p.y+p.height+12);
+  expect(a.x).toBeGreaterThanOrEqual(p.x);expect(a.x).toBeLessThan(p.x+p.width);
+  await actions.getByRole('button',{name:'Comment on selected text'}).click();
+  const chat=page.locator('.comment-popover');
+  const before=(await chat.boundingBox())!;
+  await page.evaluate(()=>scrollBy(0,80));
+  await expect.poll(async()=>Math.abs((await chat.boundingBox())!.y-before.y)).toBeGreaterThan(20);
+  await chat.getByRole('button',{name:'Delete comment'}).click();
 });
 
 test('Plotly comments do not highlight chart text',async({page,request})=>{

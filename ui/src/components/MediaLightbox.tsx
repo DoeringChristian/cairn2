@@ -360,7 +360,7 @@ export function MediaLightbox({
               label={copied || (selection.clip ? "Copy clip reference" : selection.region ? "Copy region reference" : isVideo ? "Copy time reference" : "Copy source reference")}
               icon={copied === "Copied" ? Check : copied ? CircleAlert : Copy}/>
             <span className="sr-only" role="status">{copied}</span>
-            {artifact&&<CommentButton aria-label={existingComment?"Open comment":"Comment on media"} existing={!!existingComment} saved={!!existingComment&&saved===existingComment.id} onClick={event=>{video.current?.pause();const box=event.currentTarget.getBoundingClientRect();const {item:media,...position}=currentSelection();setComment({x:box.left,y:box.top,initial:existingComment,anchor:existingComment?.anchor||{path:media.source?.file||media.source?.path,line_start:media.source?.line,media_key:mediaCommentKey(media.source,media.name),media_id:media.source?.media_id,media:position}});}}/>}
+            {artifact&&<CommentButton aria-label={existingComment?"Open comment":"Comment on media"} existing={!!existingComment} saved={!!existingComment&&saved===existingComment.id} onClick={event=>{video.current?.pause();const box=event.currentTarget.getBoundingClientRect();const {item:media,...position}=currentSelection();if(existingComment?.anchor.media){const saved=existingComment.anchor.media;if(saved.region){const r=saved.region;setRegion({a:{x:r.x/r.imageWidth,y:r.y/r.imageHeight},b:{x:(r.x+r.width)/r.imageWidth,y:(r.y+r.height)/r.imageHeight}});}else setRegion(null);if(saved.time!==undefined)seek(saved.time);setClipStart(saved.clip?.start??null);setClipEnd(saved.clip?.end??null);}setComment({x:box.left,y:box.top,initial:existingComment,anchor:existingComment?.anchor||{path:media.source?.file||media.source?.path,line_start:media.source?.line,media_key:mediaCommentKey(media.source,media.name),media_id:media.source?.media_id,media:position}});}}/>}
             {onSelection && (
               <Button small onClick={() => onSelection(currentSelection())}>
                 Use selection
@@ -753,7 +753,7 @@ export function MediaLightbox({
             {selecting ? "Drag on the content to select a spatial region" : "Scroll or pinch to zoom · drag to pan · double-click to fit"}
           </span>
         </div>
-        {comment&&artifact&&<CommentComposer docked artifact={artifact} initial={comment.initial} anchor={comment.anchor} position={comment} portalTarget={surface.current} onClose={()=>setComment(current=>current===comment?undefined:current)}/>}
+        {comment&&artifact&&<CommentComposer artifact={artifact} initial={comment.initial} anchor={comment.anchor} position={comment} getAnchorRect={()=>surface.current?.querySelector<HTMLElement>('.prism-region-box')?.getBoundingClientRect()||stage.current?.getBoundingClientRect()} portalTarget={surface.current} onClose={()=>setComment(current=>current===comment?undefined:current)}/>}
         {isVideo && (
           <div className="prism-video-transport">
             <div className="prism-video-main">

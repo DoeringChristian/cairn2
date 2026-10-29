@@ -345,9 +345,9 @@ cairn comments watch 'reports/**'               # threads as they are sent to an
 ```
 
 Replies form a thread under the comment they answer; resolving, reopening or
-deleting the first comment covers its replies. In the UI, "Send to agent" (on by
-default) sends a comment to the agent when you click out of it, and a reply when
-you post it; editing a sent comment sends it again once you click out.
+deleting the first comment covers its replies. In the UI, Enter or the send button queues a message for the agent; Shift+Enter
+inserts a newline. Clicking away saves an editable draft without sending it,
+including for replies. Sent messages are read-only in the floating conversation.
 `cairn comments watch` prints each open thread whenever a comment in it is sent,
 so an agent running it in the background is woken by every comment you finish;
 `--json` prints each batch as one line.
@@ -507,7 +507,10 @@ Browser sessions end after 7 days without use. Use `--no-ui` for API-only operat
 a table of contents, interactive figures and media, source copying, and comments
 that carry across reports with the same project and name and can be resolved.
 Artifact/run pages include lineage, records, files, editable tags for one version
-or all versions, and click-to-copy IDs.
+or all versions, and click-to-copy IDs. The project Workspace displays scalar,
+image, and Plotly cards directly from run records, with comparisons, galleries,
+axis sliders, resizable sections, and browser-local saved layouts. See the
+[training card tour](examples/training/README.md#workspace-card-tour).
 
 The UI source lives in [ui/](ui/README.md). Rebuild the bundled assets after
 changes with `npm ci --prefix ui && npm run build --prefix ui`.

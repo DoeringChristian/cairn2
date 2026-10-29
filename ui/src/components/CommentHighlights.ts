@@ -50,8 +50,11 @@ export function useCommentHighlights(container:RefObject<HTMLElement>,comments:A
     const observer=new MutationObserver(()=>{if(!frame)frame=requestAnimationFrame(refresh);});
     observer.observe(article,{childList:true,subtree:true});
     const showComment=(event:MouseEvent)=>{
+      if(event.detail>1)return;
       if(window.getSelection()?.toString().trim())return;
       for(const [id,range] of matches){if(comments.find(c=>c.id===id)?.anchor.media_key)continue;if(Array.from(range.getClientRects()).some(r=>event.clientX>=r.left&&event.clientX<=r.right&&event.clientY>=r.top&&event.clientY<=r.bottom)){
+        // Keep the opening click from also dismissing this thread as an outside click.
+        event.stopPropagation();
         window.dispatchEvent(new CustomEvent('cairn:show-comment',{detail:id}));break;
       }}
     };

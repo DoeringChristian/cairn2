@@ -1,0 +1,19 @@
+.rail-fold,.rail-project-icon,.rail-outline-icon{display:none;align-items:center;justify-content:center;width:36px;height:36px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--muted);cursor:pointer;flex-shrink:0}
+.rail-fold:hover,.rail-project-icon:hover,.rail-outline-icon:hover{color:var(--accent);background:var(--card);border-color:var(--line)}
+.rail-links>a,.rail-links>button{display:flex;align-items:center;gap:7px}
+@media(min-width:761px){
+  body:has(.rail.collapsed){grid-template-columns:72px minmax(0,1fr)}
+  .rail .rail-fold{display:flex;position:absolute;top:29px;right:12px}
+  .rail.expanded .brand{padding-right:32px}
+  .rail.collapsed{padding:24px 18px;align-items:center}
+  .rail.collapsed .site-title,.rail.collapsed .rail-item-label,.rail.collapsed .rail-project-picker,.rail.collapsed .rail-note>p,.rail.collapsed #report-toc-slot{display:none}
+  .rail.collapsed .rail-fold{position:static;margin-top:12px}
+  .rail.collapsed .workspace-navigation{margin:18px 0 0;width:36px}
+  .rail.collapsed .rail-project-icon{display:flex}
+  .rail.collapsed .workspace-navigation nav{display:grid;gap:7px;margin-top:16px}
+  .rail.collapsed .workspace-navigation nav a{display:flex;align-items:center;justify-content:center;width:36px;height:36px;padding:0;gap:0}
+  .rail.collapsed .rail-links{display:flex;flex-direction:column;gap:8px}
+  .rail.collapsed .rail-links>a,.rail.collapsed .rail-links>button{width:36px;height:36px;justify-content:center;padding:0;border-radius:8px}
+  .rail.collapsed .rail-links>a:hover,.rail.collapsed .rail-links>button:hover{background:var(--card)}
+  .rail.collapsed:has(#report-toc-slot:not(:empty)) .rail-outline-icon{display:flex;margin-top:20px}
+}

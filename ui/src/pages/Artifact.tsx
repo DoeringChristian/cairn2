@@ -7,10 +7,11 @@ import { CheckCheck, RefreshCw, Trash2 } from 'lucide-react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useRefreshMode } from '../refresh';
 import { Graph } from '../components/Graph';
-import { api, post, envelope, projectPath, artifactPath, when, type Artifact, type BlobRef, type Json } from '../api';
+import { api, post, envelope, projectPath, artifactPath, runWorkspacePath, when, type Artifact, type BlobRef, type Json } from '../api';
 import { ActionIcon, BlobTable, Button, Crumbs, DataTable, DocumentReader, ErrorNote, Hero, Hint, JsonBlock, KeyValueTable, LinkButton, Loading, Pill, Section, Select, StatusPill, Tabs, ValueView } from '../components';
 import { RecordsPanel } from './Records';
 import { ConsolePanel } from './Console';
+import { Workspace } from '../workspace/Workspace';
 
 type Detail = { target: string; selected: Artifact; history: Artifact[] };
 /** Soft removal behind a confirmation dialog; artifacts that still depend on it keep it readable by ID. */
@@ -51,7 +52,7 @@ export function ArtifactPage() {
     async function load() {
       try {
         const [selected] = await post<Artifact[]>('/v1/resolutions', {refs:[target],project}, controller.signal);
-        if (!selected) throw new Error('Artifact not found');
+        if (!selected || selected.project !== project) throw new Error('Artifact not found in this project');
         if (!controller.signal.aborted) {
           finished = selected.state === 'finished';
           const cached = readView<Artifact>(cacheKey);
@@ -92,7 +93,7 @@ export function ArtifactPage() {
   if (!choices.some(c => c.value === selected.id)) choices.unshift({ value: selected.id, label: selected.number ? `v${selected.number} · ${selected.manifest?.outcome || selected.state}` : `${selected.state} · ${selected.id.slice(0, 12)}` });
   const captures = Object.entries(manifest?.captures || {}).filter(([name]) => !name.startsWith('console/'));
   const showConsole = run && (live || captures.length < Object.keys(manifest?.captures || {}).length);
-  const tabs = [{ value: 'overview', label: report ? 'Report' : 'Overview' }, { value: 'records', label: 'Records' }, ...(showConsole ? [{ value: 'console', label: 'Console' }] : []), { value: 'files', label: 'Files' }, { value: 'lineage', label: 'Lineage' }, { value: 'versions', label: 'History', count: history.length }, { value: 'metadata', label: 'Metadata' }];
+  const tabs = [{ value: 'overview', label: report ? 'Report' : 'Overview' }, ...(run ? [{ value: 'workspace', label: 'Workspace' }] : []), { value: 'records', label: 'Records' }, ...(showConsole ? [{ value: 'console', label: 'Console' }] : []), { value: 'files', label: 'Files' }, { value: 'lineage', label: 'Lineage' }, { value: 'versions', label: 'History', count: history.length }, { value: 'metadata', label: 'Metadata' }];
   const namedBlobs: BlobRef[] = [];
   const visit = (v: unknown) => {
     if (!v || typeof v !== 'object') return;
@@ -104,10 +105,10 @@ export function ArtifactPage() {
   const unique = new Map<string, BlobRef>();
   for (const blob of [...namedBlobs, ...(manifest?.blobs || [])]) if (!unique.has(blob.digest)) unique.set(blob.digest, blob);
 
-  return <main>
+  return <main className={report ? 'report-page' : undefined}>
     <Hero eyebrow={<Crumbs items={[{ label: 'Projects', to: '/' }, { label: selected.project, to: projectPath(selected.project) }, { label: selected.namespace }]}/>} title={typeof metadata.title === 'string' ? metadata.title : selected.name} subtitle={typeof metadata.description === 'string' ? metadata.description : undefined} status={<StatusPill status={manifest?.outcome || selected.state}/>}/>
     {error && <ErrorNote error={error}/>}
-    <div className="detail-bar"><code className="wrap-any">{ref}</code><Select label="Artifact version" value={selected.id} choices={choices} onChange={target => navigate(artifactPath(selected.project, target))}/><ActionIcon label="Refresh" onClick={() => setRefresh(n => n + 1)}><RefreshCw size={17} aria-hidden="true"/></ActionIcon><RemoveArtifact key={selected.id} artifact={selected} reference={ref}/></div>
+    <div className="detail-bar"><code className="wrap-any">{ref}</code><Select label="Artifact version" value={selected.id} choices={choices} onChange={target => navigate(run && tab === 'workspace' ? runWorkspacePath(selected.project,target) : artifactPath(selected.project, target))}/><ActionIcon label="Refresh" onClick={() => setRefresh(n => n + 1)}><RefreshCw size={17} aria-hidden="true"/></ActionIcon><RemoveArtifact key={selected.id} artifact={selected} reference={ref}/></div>
     <div className="detail-facts"><span>{live ? 'Started' : 'Finished'} {when(selected.finished_at || selected.created_at)}</span><span>{selected.cutoff} entries</span><CopyId value={selected.id} short/></div>
     <ArtifactTags key={`tags:${selected.id}`} artifact={selected} scopes onChange={()=>setRefresh(n=>n+1)}/>
     {live && <Hint>This artifact is {selected.state}. Its ID stays the same when it finishes.</Hint>}
@@ -120,6 +121,7 @@ export function ArtifactPage() {
       {metadata.config !== undefined && <Section title="Configuration"><JsonBlock value={metadata.config}/></Section>}
       {captures.length > 0 && <Section title="Captures">{captures.map(([name, value]) => <Section key={name} title={name}><ValueView value={value}/></Section>)}</Section>}
     </>}
+    {tab === 'workspace' && run && <Workspace key={selected.id} project={selected.project} runId={selected.id}/>}
     {tab === 'records' && <RecordsPanel key={`records:${selected.id}`} reference={selected.id} project={selected.project} run={false} live={live} refresh={refresh}/>}
     {tab === 'console' && <ConsolePanel key={`console:${selected.id}`} reference={selected.id} project={selected.project} live={live}/>}
     {tab === 'files' && <Section title="Files"><BlobTable blobs={[...unique.values()]}/>{live && <Hint>Captured values are available in the capture records while this artifact is live. Finished artifacts collect them here.</Hint>}</Section>}

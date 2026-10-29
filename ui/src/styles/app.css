@@ -226,3 +226,12 @@ body > #root main, #root main { margin: 0 auto; align-self: start; }
 .palette-dark { display: flex; gap: 10px; padding: 16px; border-radius: 10px; background: #0c110ff2; color: white; }
 .palette-dark button.icon { position: static; }
 .palette-form { margin-top: 0; }
+
+/* Share workspace spacing across explorer pages; reports keep their reading column. */
+#content > main:not(.report-page) {
+  width: 100%;
+  max-width: 1900px;
+  padding: 36px clamp(16px, 2.8vw, 48px) 70px;
+  padding-right: max(clamp(16px, 2.8vw, 48px), env(safe-area-inset-right));
+  padding-left: max(clamp(16px, 2.8vw, 48px), env(safe-area-inset-left));
+}

@@ -2,6 +2,7 @@ import {test,expect} from '@playwright/test';
 
 test('project switcher and category links use the selected project',async({page})=>{
   await page.goto('/p/neural-rendering?view=runs');
+  await page.getByRole('button',{name:'Choose project',exact:true}).click();
   const rail=page.locator('.rail');
   await expect(rail.getByRole('button',{name:'Project',exact:true})).toContainText('neural-rendering');
   await expect(rail.getByRole('link',{name:'Runs',exact:true})).toHaveAttribute('aria-current','page');

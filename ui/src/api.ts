@@ -41,6 +41,7 @@ export function useResource<T>(path: string | null, revision = 0, cache = false,
   return state;
 }
 export const projectPath = (project: string) => `/p/${encodeURIComponent(project)}`;
+export const runWorkspacePath = (project:string,id:string) => `${artifactPath(project,id)}?tab=workspace`;
 export const artifactPath = (project: string, id: string) => `${projectPath(project)}/a/${encodeURIComponent(id)}`;
 
 export const when = (value: string) => new Date(value).toLocaleString(undefined, {dateStyle: 'medium', timeStyle: 'short'});

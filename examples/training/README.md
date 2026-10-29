@@ -68,3 +68,25 @@ the home folder, which is a network filesystem on most clusters.
 
 Runs show up in the server's UI while they log, with their console output, so
 the scheduler's log files only matter for jobs that fail before Cairn starts.
+
+## Workspace card tour
+
+With the server running on port 8765, from the repository root:
+
+```sh
+uv run --extra all python examples/training/workspace_demo.py
+```
+
+This adds three synthetic `workspace-demo/*` runs to `training-example`, using
+only the existing logging API. Each includes scalar loss/validation records,
+blob-backed reconstruction images at two camera angles, and interactive Plotly
+fits. Step, elapsed time, camera angle, and quality are ordinary record fields.
+One image observation is deliberately absent so exact and previous-value
+comparison can be explored. Re-running the script creates new run versions.
+Use `--repo` and `--project` to choose another destination.
+
+Open [the card tour](http://127.0.0.1:8765/p/training-example/workspace?example=cards)
+for scalar plots, image comparisons, a quality-sorted gallery, an elapsed-time
+slider, and Plotly comparisons/galleries. Use card settings to change fields and
+ordering. Save keeps the layout in this browser; the logged records stay in the
+Cairn repository.
