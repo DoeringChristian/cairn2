@@ -227,11 +227,14 @@ body > #root main, #root main { margin: 0 auto; align-self: start; }
 .palette-dark button.icon { position: static; }
 .palette-form { margin-top: 0; }
 
-/* Share workspace spacing across explorer pages; reports keep their reading column. */
-#content > main:not(.report-page) {
+/* Page headers and controls share workspace spacing, including reports. */
+#content > main {
   width: 100%;
   max-width: 1900px;
   padding: 36px clamp(16px, 2.8vw, 48px) 70px;
   padding-right: max(clamp(16px, 2.8vw, 48px), env(safe-area-inset-right));
   padding-left: max(clamp(16px, 2.8vw, 48px), env(safe-area-inset-left));
 }
+
+/* Only the report body keeps the narrower reading column. */
+.report-page .report-reader-layout { width: min(100%, var(--column)); margin-inline: auto; }
