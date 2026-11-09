@@ -389,6 +389,35 @@ def test_reads_renew_a_low_lease_and_passive_reads_take_none(pair):
         pass
 
 
+def test_identical_uploads_never_wait_for_an_abandoned_upload_or_cleanup(pair):
+    source, _ = pair
+    content = b"provenance shared by every run"
+    digest = hashlib.sha256(content).hexdigest()
+    assert not source._reserve_blob(digest, len(content), f"{digest[:2]}/{digest}/abandoned")
+    started = time.monotonic()
+    assert source.put_blob(content)["digest"] == digest
+    assert time.monotonic() - started < 5
+    with source._transaction(write=True) as conn:
+        conn.execute(blobs.update().values(state="deleting", lease_until=time.time() + 3600))
+    assert source.put_blob(content)["digest"] == digest
+    assert collect_garbage(source, grace_seconds=0, dry_run=False)["removed"] == []
+    with source.open_blob(digest) as stream:
+        assert stream.read() == content
+
+
+def test_concurrent_identical_uploads_all_succeed_and_keep_one_copy(pair):
+    source, _ = pair
+    content = b"checkpoint" * 100_000
+    digest = hashlib.sha256(content).hexdigest()
+    with ThreadPoolExecutor(4) as pool:
+        stored = list(pool.map(lambda _: source.put_blob(content), range(8)))
+    assert {blob["digest"] for blob in stored} == {digest}
+    copies = [item for item in source.objects.inventory() if digest in item["key"]]
+    assert len(copies) == 1
+    with source.open_blob(digest) as stream:
+        assert stream.read() == content
+
+
 @pytest.mark.parametrize("dependency", ["blob", "version"])
 def test_pending_finalization_intent_retains_its_payload_dependencies(pair, dependency):
     source, _ = pair

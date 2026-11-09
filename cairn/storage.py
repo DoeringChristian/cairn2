@@ -1,5 +1,6 @@
 """One transactional repository for direct callers and the HTTP adapter."""
 
+import contextlib
 import hashlib
 import io
 import os
@@ -1467,7 +1468,11 @@ class Repository:
             }
 
     def _reserve_blob(self, sha, length, key):
-        """Return True when the content is stored, else reserve it for this upload."""
+        """Return True when the content is stored, else reserve it unless another upload has.
+
+        Identical uploads never wait for each other: each stores its own copy and the
+        first to finish registers it (see _register_blob).
+        """
         with self._transaction(write=True) as conn:
             existing = _row(
                 conn.execute(sa.select(blobs).where(blobs.c.digest == sha).with_for_update())
@@ -1482,7 +1487,7 @@ class Repository:
                 )
                 return True
             if existing and existing["lease_until"] > time.time():
-                raise Pending("Another upload or cleanup owns this content")
+                return False
             values = {
                 "digest": sha,
                 "size": length,
@@ -1497,9 +1502,45 @@ class Repository:
                 try:
                     with conn.begin_nested():
                         conn.execute(blobs.insert().values(**values))
-                except SQLIntegrityError as exc:
-                    raise Pending("Another upload reserved this content") from exc
+                except SQLIntegrityError:
+                    pass
         return False
+
+    def _register_blob(self, sha, length, key):
+        """Make key the stored copy unless one is ready; return whether key is redundant.
+
+        A reservation of another upload, alive or dead, or a cleanup in progress yields:
+        cleanup removes only the key it marked, so a new key survives it.
+        """
+        with self._transaction(write=True) as conn:
+            stored = _row(
+                conn.execute(sa.select(blobs).where(blobs.c.digest == sha).with_for_update())
+            )
+            if stored and stored["state"] == "ready":
+                if stored["size"] != length:
+                    raise IntegrityError("Conflicting digest length")
+                conn.execute(
+                    blobs.update()
+                    .where(blobs.c.digest == sha)
+                    .values(lease_until=time.time() + 3600)
+                )
+                return stored["key"] != key
+            values = {
+                "size": length,
+                "key": key,
+                "state": "ready",
+                "lease_until": time.time() + 3600,
+            }
+            if stored:
+                conn.execute(blobs.update().where(blobs.c.digest == sha).values(**values))
+                return False
+            try:
+                with conn.begin_nested():
+                    conn.execute(blobs.insert().values(digest=sha, created_at=now(), **values))
+                return False
+            except SQLIntegrityError:
+                pass
+        return self._register_blob(sha, length, key)
 
     def put_blob(self, source, *, digest=None, size=None):
         if digest is not None:
@@ -1527,38 +1568,13 @@ class Repository:
                 if (digest is not None and digest != sha) or (size is not None and size != length):
                     raise IntegrityError("Blob digest or length does not match")
                 key = f"{sha[:2]}/{sha}/{new_id('o')}"
-                deadline = time.monotonic() + 10
-                while True:
-                    try:
-                        ready = self._reserve_blob(sha, length, key)
-                        break
-                    except Pending:
-                        # Concurrent writers often store identical content, such as provenance.
-                        if time.monotonic() > deadline:
-                            raise
-                        time.sleep(0.05)
-                if ready:
+                if self._reserve_blob(sha, length, key):
                     return {"digest": sha, "size": length}
                 stage.seek(0)
                 self.objects.put(key, stage, digest=sha, size=length)
-                with self._transaction(write=True) as conn:
-                    stored = _row(
-                        conn.execute(
-                            sa.select(blobs).where(blobs.c.digest == sha).with_for_update()
-                        )
-                    )
-                    if (
-                        not stored
-                        or stored["key"] != key
-                        or stored["state"] != "uploading"
-                        or stored["lease_until"] <= time.time()
-                    ):
-                        raise Conflict("Upload reservation expired; retry the upload")
-                    conn.execute(
-                        blobs.update()
-                        .where(blobs.c.digest == sha)
-                        .values(state="ready", lease_until=time.time() + 3600)
-                    )
+                if self._register_blob(sha, length, key):
+                    with contextlib.suppress(OSError):
+                        self.objects.delete(key)
                 return {"digest": sha, "size": length}
         finally:
             if opened:
@@ -1608,8 +1624,6 @@ class Repository:
             )
             if existing and existing["state"] == "ready":
                 return {"digest": sha, "size": length}
-            if existing and existing["lease_until"] > time.time():
-                raise Pending("Another upload or cleanup owns this content")
             values = {
                 "digest": sha,
                 "size": length,
