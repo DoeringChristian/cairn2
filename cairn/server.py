@@ -155,6 +155,19 @@ class Resolution(RequestID):
     by: str | None = None
 
 
+class NewReport(RequestID):
+    project: str = "default"
+    name: str
+    body: str = ""
+    author: str | None = None
+
+
+class ReportPart(RequestID):
+    source: str
+    expected_revision: int | None = None
+    author: str | None = None
+
+
 class GarbageCollection(StrictBody):
     grace_seconds: int = 3600
     dry_run: bool = True
@@ -238,6 +251,8 @@ def _queries(request: Request):
         allowed = ("project", "namespace", "where", "state", "limit", "cursor")
     elif path == "/v1/blobs" and request.method == "PUT":
         allowed = ("digest", "size")
+    elif path == "/v1/reports" and request.method == "GET":
+        allowed = ("project",)
     elif path == "/v1/comments" and request.method == "GET":
         allowed = ("pattern", "project", "include_resolved", "limit", "cursor")
     elif path.endswith("/comments") and request.method == "GET":
@@ -325,8 +340,10 @@ def create_app(
                 "comment_threads",
                 "annotations",
                 "streaming_blobs",
+                "paged_datasets",
                 "search",
                 "links",
+                "reports",
             ],
         }
 
@@ -510,6 +527,34 @@ def create_app(
     def delete_comment(comment_id: str, request: Request, body: RequestID | None = None):
         repository.delete_comment(comment_id, request_id=body.request_id if body else None)
         return Response(status_code=204)
+
+    @app.post("/v1/reports")
+    def create_report(body: NewReport):
+        return repository.create_report(**body.model_dump())
+
+    @app.get("/v1/reports")
+    def reports(request: Request, project: str = "default"):
+        return repository.reports(project=project)
+
+    @app.get("/v1/reports/{report_id}")
+    def report(report_id: str, request: Request):
+        return repository.report(report_id)
+
+    @app.put("/v1/reports/{report_id}/parts/{part}")
+    def write_report(report_id: str, part: str, body: ReportPart):
+        return repository.write_report(report_id, part, **body.model_dump())
+
+    @app.delete("/v1/reports/{report_id}")
+    def delete_report(report_id: str, body: RequestID):
+        return repository.delete_report(report_id, **body.model_dump())
+
+    @app.post("/v1/reports/{report_id}/comments")
+    def add_report_comment(report_id: str, body: Comment):
+        return repository.add_report_comment(report_id, **body.model_dump())
+
+    @app.get("/v1/reports/{report_id}/comments")
+    def report_comments(report_id: str, request: Request, include_resolved: bool = True):
+        return repository.report_comments(report_id, include_resolved=include_resolved)
 
     if ui:
         from .webui import install

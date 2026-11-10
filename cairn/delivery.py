@@ -507,6 +507,10 @@ class Delivery:
             acknowledged = response["acknowledged"]
             if acknowledged < entries[-1]["sequence"]:
                 raise IntegrityError("Repository did not acknowledge the complete atomic batch")
+            from .datasets import retire
+
+            with self._request_timeout(deadline):
+                retire(self.backend, entries)
             with self._transaction():
                 self._db.execute(
                     "DELETE FROM entries WHERE writer_id=? AND sequence<=?",
@@ -547,6 +551,10 @@ class Delivery:
                 if not isinstance(exc, Pending):
                     raise
             else:
+                from .datasets import retire
+
+                with self._request_timeout(deadline):
+                    retire(self.backend, args)
                 with self._transaction():
                     self._budget(len(canonical(result)))
                     self._db.execute(

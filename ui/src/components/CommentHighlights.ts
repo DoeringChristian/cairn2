@@ -53,8 +53,8 @@ export function useCommentHighlights(container:RefObject<HTMLElement>,comments:A
       if(event.detail>1)return;
       if(window.getSelection()?.toString().trim())return;
       for(const [id,range] of matches){if(comments.find(c=>c.id===id)?.anchor.media_key)continue;if(Array.from(range.getClientRects()).some(r=>event.clientX>=r.left&&event.clientX<=r.right&&event.clientY>=r.top&&event.clientY<=r.bottom)){
-        // Keep the opening click from also dismissing this thread as an outside click.
-        event.stopPropagation();
+        // Keep the opening click from also dismissing this thread as an outside click, or editing the text.
+        event.stopPropagation();event.preventDefault();
         window.dispatchEvent(new CustomEvent('cairn:show-comment',{detail:id}));break;
       }}
     };

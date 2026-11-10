@@ -2,9 +2,8 @@
 
 | Example | Shows |
 | --- | --- |
-| [`minimal-report/`](minimal-report/) | A minimal report |
-| [`report-showcase/`](report-showcase/) | A run and a tour of every report feature |
-| [`training/`](training/) | A Hydra project: a dataset, one run per configuration and seed, sweeps, a report that finds and compares them, and the same sweep submitted with Slurm, PBS, submitit and HyperQueue |
+| [`report-showcase/`](report-showcase/) | A run with media and a report that plans it and shows its results |
+| [`training/`](training/) | A Hydra project: a dataset, one run per configuration and seed, sweeps, and the same sweep submitted with Slurm, PBS, submitit and HyperQueue |
 | [`pipeline/`](pipeline/) | Stages that pass exact artifact versions to each other, run by Make or Snakemake |
 
 Each folder is a project with a `.cairn.toml`, keeping its repository in its own

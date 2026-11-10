@@ -1,18 +1,9 @@
 # The same pipeline as the Makefile: snakemake --cores 1
 
 
-rule report:
+rule all:
     input:
-        "report.qmd",
-        points="build/points.id",
-        fit="build/fit.id",
-        evaluation="build/evaluate.id",
-    output:
-        "build/report.json",
-    shell:
-        "rm -rf build/report && cairn report build report.qmd --output build/report --publish"
-        " dataset=$(cat {input.points}) fit=$(cat {input.fit})"
-        " evaluation=$(cat {input.evaluation}) > {output}"
+        "build/evaluate.id",
 
 
 rule prepare:

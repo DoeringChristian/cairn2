@@ -213,6 +213,22 @@ def test_comment_cli_replies_and_watches_sent_threads(tmp_path, capsys, monkeypa
     assert main([*base, "list"]) == 0
     assert "↳ " + question["id"] in capsys.readouterr().out
 
+    checks.clear()
+
+    def resend(seconds):
+        checks.append(seconds)
+        with closing(Repository(path)) as repo:
+            repo.update_comment(question["id"], "Why, in v2?")
+            repo.send_comment(question["id"])
+
+    monkeypatch.setattr("time.sleep", resend)
+    assert main([*base, "watch", "--json", "--once", "--interval", "0.1"]) == 0
+    [batch] = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert len(checks) == 1
+    assert [[c["body"] for c in thread] for thread in batch] == [
+        ["Why, in v2?", "More detail", "Done in v2"]
+    ]
+
 
 def test_comment_listings_cover_a_project_and_name_patterns_in_pages(repo):
     for name in ("training", "eval/a", "eval/b"):
@@ -296,7 +312,7 @@ def test_explicit_migration_from_schema_6(request, backend_fixture, tmp_path, ca
         reopen()
     if direct.path:
         assert main(["--repo", str(direct.path), "repo", "migrate"]) == 0
-        assert json.loads(capsys.readouterr().out) == {"schema_version": 7}
+        assert json.loads(capsys.readouterr().out) == {"schema_version": 8}
     else:
         reopen(migrate=True).close()
     with closing(reopen()) as repo:

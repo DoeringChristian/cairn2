@@ -2,8 +2,8 @@
 
 `cairn/contract.py` declares `RepositoryProtocol` and JSON result shapes. The direct
 repository and HTTP adapter implement the same methods. Protocol version **4**,
-repository schema **7**, durable outbox schema **3**. Other schemas are rejected;
-schema 6 repositories convert only through the explicit `cairn repo migrate`.
+repository schema **8**, durable outbox schema **3**. Other schemas are rejected;
+schema 6 and 7 repositories convert only through the explicit `cairn repo migrate`.
 
 ## One artifact lifecycle
 
@@ -16,7 +16,8 @@ accepted work, but new producers cannot join.
 Every start creates a new artifact, even under an existing name. An identical
 `request_id` retries that creation instead of creating another artifact. A name
 is scoped by `(project, namespace, name)`. Namespaces are arbitrary conventions:
-`runs`, `datasets`, `reports`, and `viewers` have no special backend behavior.
+`runs`, `datasets`, and `viewers` have no special backend behavior. Reports are not
+artifacts (see [Reports](#reports)).
 
 On finish, the artifact receives the next `vN` label for its name and becomes
 that name's `latest`. Concurrent finishes receive distinct numbers; the last
@@ -70,6 +71,13 @@ UTC ISO strings; errors have a stable code, message and details.
 | `update_comment(comment_id, body, *, expected_revision=None, for_agent=None, request_id=None)` | Replaces the body and the agent mark; a change to either clears `sent_at`. A stale revision raises Conflict. |
 | `resolve_comment(comment_id, *, resolved=True, note=None, by=None, request_id=None)` | Sets or clears `resolved_at` and `resolution: {note, by}` on a thread's first comment; its replies follow its `resolved_at`. Deleting the first comment deletes its replies. |
 | `delete_comment(comment_id, *, request_id=None)` | `{id, deleted}`; an unknown ID raises NotFound. |
+| `create_report(project, name, *, body='', author=None, request_id=None)` | `{id, project, name, created_at, updated_at}`; a second report with the name raises Conflict. |
+| `reports(*, project='default')` | The project's reports without their parts, most recently changed first. |
+| `report(report_id)` | The report with `parts`: each part's latest `{source, revision, author, updated_at}`. |
+| `write_report(report_id, part, source, *, expected_revision=None, author=None, request_id=None)` | `{report_id, part, revision}`; saves a new revision unless the text is unchanged. A part not at `expected_revision` (0 before its first write) raises Conflict with the current `revision`. |
+| `delete_report(report_id, *, request_id=None)` | `{id, deleted}`; removes the report with every revision and comment. |
+| `add_report_comment(report_id, anchor, body, *, author=None, for_agent=False, request_id=None)` | A comment on a report, otherwise as `add_comment`. |
+| `report_comments(report_id, *, include_resolved=True)` | The report's comments, oldest first. |
 | `collect_garbage(*, grace_seconds=3600, dry_run=True)` | `{dry_run, pinned, artifacts, candidates, removed, orphans}`. Purges artifacts deleted before the grace period that only other purged artifacts reference, then unreferenced content. |
 
 There is no snapshot operation. A separate finished checkpoint must be a separate
@@ -92,11 +100,23 @@ Queries use JSON-pointer field paths and structured predicates:
 Missing and type-incompatible values do not match comparisons. Record pages
 are in ordinal order. Live queries freeze the first page's cutoff.
 
-Typed values use `{$cairn:1, format, version:1, data, blobs, refs}`. Here `version`
+Typed values use `{$cairn:1, format, version, data, blobs, refs}`. Codecs normally
+use version 1; `file` and `directory` also support version 2. Here `version`
 is a codec-format version, not an artifact identity. Blob descriptors contain
 `digest`, `size`, and optional `name`/`media_type`; refs contain `artifact_id` and
 optional `role`. Only finished artifact dependencies are accepted. No arbitrary
 pickle deserialization is performed.
+
+Version 2 directories contain `{name, node, count, size}`; files contain
+`{name, size, sha256, media_type}` and either one matching blob or a `node` for
+their chunk index. Every node is retained by an explicit artifact reference.
+Index parts are ordinary finished artifacts with version 1 `cairn/files`,
+`cairn/chunks`, or `cairn/index` values. Their `data.entries` are ordered inclusive
+`first`/`last` ranges. Leaf entries contain `value`; branch entries contain a
+`cairn/index-ref` value in `child`, with `data.id` and an explicit reference.
+Directory ranges compare path components; chunk ranges compare byte offsets.
+The HTTP capability `paged_datasets` advertises support. See
+[large datasets](datasets.md) for transfer, checkpoint, cache and cleanup behavior.
 
 A finished artifact's manifest contains `metadata`, `value`, `captures`, `blobs`,
 `dependencies`, and `outcome`. Its data and records cannot change after finish.
@@ -121,11 +141,13 @@ exact retry intent. The 8 MiB final manifest bound is a defensive check.
 Routes are named REST resources: `POST /v1/artifacts`, artifact-scoped writers,
 entries, finalization, aliases, annotations and comments; `GET /v1/comments`, `PUT /v1/comments/{id}`,
 `POST /v1/comments/{id}/replies`, `POST /v1/comments/{id}/sending`
-and `PUT /v1/comments/{id}/resolution`; `POST /v1/resolutions`, `POST /v1/searches`, `POST /v1/links`,
+and `PUT /v1/comments/{id}/resolution`; `GET`/`POST /v1/reports`, `GET`/`DELETE
+/v1/reports/{id}`, `PUT /v1/reports/{id}/parts/{part}` and `GET`/`POST
+/v1/reports/{id}/comments`; `POST /v1/resolutions`, `POST /v1/searches`, `POST /v1/links`,
 `POST /v1/records/query`, `GET /v1/history?ref=...&project=...`,
 `DELETE /v1/artifacts/{id}`, and `POST /v1/maintenance/gc`.
 Blob uploads/downloads stream bytes. There are no revision, snapshot or separate
-version resources, and no server report execution/editing routes.
+version resources, and no code execution.
 
 `Client(path)` calls SQLite/files directly. `Client(url)` calls the selected
 server. Remote writing uses a durable outbox; read-only clients never start or
@@ -137,11 +159,11 @@ writes into server results.
 and captures. Unless `capture_output=False`, they also store the process's stdout and
 stderr as `console/NNNNNN.log` file captures until the run finishes or closes.
 Capture names under `provenance/` and `console/` are reserved for Cairn. `finish()` returns the finished descriptor; `.id` stays unchanged.
-On a run, artifact or report, `find(pattern, where=, order=, limit=)` returns
+On a run or artifact, `find(pattern, where=, order=, limit=)` returns
 `Reader`s for finished artifacts and records each with role `input`;
 `use(ref, role=)` returns one and records it with the role. Each artifact and
 role is recorded once per run; recording after finish raises Conflict. The top-level
-`cairn.find` and `cairn.use` require a run or report. `Client.get(ref)` and
+`cairn.find` and `cairn.use` require a run. `Client.get(ref)` and
 `Client.find(...)` read without recording. `Reader.dependencies` lists an
 artifact's inputs and `Reader.inputs(role=...)` those recorded with one role. Patterns are references with
 shell-style wildcards: `*` matches within one level of the name and `**` across
@@ -161,19 +183,6 @@ The Python `add()` method replaces `capture()` without an alias; the persisted
 `cairn.run(...)` takes `init()`'s arguments and decorates a function: each call runs
 inside its own `init()` context and restores the previous default handle afterwards.
 Without `config=`, an OmegaConf `DictConfig` first argument becomes the resolved config.
-Report build/publish may inherit the context's client configuration (including
-after finish); explicit clients take precedence. Without a context, publish
-uses ordinary discovery, while build retains its explicit-client requirement
-for declared inputs.
-
-Reports execute QMD locally, record the exact finished artifact IDs they read
-(declared `cairn.inputs`, and `cairn.find` and `cairn.use` with the
-rules above, each reference resolved once per build), capture source, outputs and
-package information, then upload an ordinary report artifact. Rebuilds resolve
-references and searches again. `cairn.Client()` in a cell opens the build's
-repository; independent Python clients are not recorded. Reports are not a Python security sandbox. A
-front-matter `config` is composed with Hydra and build `overrides`; cells see it
-as `cfg`, and the resolved config is the manifest's and artifact metadata's `config`.
 
 Repository export/import preserves artifact IDs, labels, records and retained
 bytes. Imported producer handles are closed; live artifacts can register a new
@@ -206,15 +215,17 @@ Annotation objects are capped at 1 MiB and their scalar array membership index a
 10,000 entries; a name-level patch must keep every version within these limits.
 Updates, projections, ETags and index rows commit or roll back together.
 
-Comments always anchor to an exact finished artifact and carry its `number`,
-`artifact_deleted`, `author`, `revision`, `resolved_at`, `resolution`, `reply_to`,
-`for_agent` and `sent_at`. They are
+Comments anchor to an exact finished artifact or to a report and carry `artifact_id`,
+`report_id`, `number` (null on reports), `artifact_deleted`, `author`, `revision`,
+`resolved_at`, `resolution`, `reply_to`, `for_agent` and `sent_at`. Comments on a report
+carry the namespace `reports` and its name, so name patterns such as `reports/**` list
+them with comments on artifacts. They are
 not part of the projected `annotations` and do not count toward its limits.
 
-UI figure anchors may include an optional `media_id` string distinguishing outputs
-within a report. New code-output anchors use the source path, cell label (or source
-line when unlabelled), and output position. Readers match this identifier when
-present and fall back to existing `media_key`/source-line anchors otherwise.
+UI figure anchors may include an optional `media_id` string distinguishing figures
+within a report; on reports it is the figure's `cairn:` reference. Text anchors on
+reports name the part as `path`. Readers match this identifier when present and fall
+back to existing `media_key`/source-line anchors otherwise.
 Existing comments remain readable without migration; older readers ignore the
 optional field and may still conflate outputs sharing the same legacy key.
 
@@ -237,56 +248,45 @@ layers. `GET /v1/artifacts/{id}/comments` accepts `scope` and `include_resolved`
 `/v1/capabilities` lists the `search` feature, which `find` requires, the `links`
 feature, which `link_blob` requires, the `comment_listing` feature, which
 `list_comments` requires, the `comment_threads` feature, which replies, sending
-and `for_agent` require, and the
-`annotations` feature; clients check it before using
+and `for_agent` require, the `reports` feature, which the report operations require,
+and the `annotations` feature; clients check it before using
 name targets, layers, comment authors, scopes, edits or resolution. Discovery passes
 JSON `where` and optional `state` to `GET /v1/artifacts`. Python exposes
 `Client.annotate`, `Client.find`, `Client.comments`, `Client.resolve_comment` and
 `Client.reopen_comment`; the CLI exposes `artifact annotate [--name]`,
-`artifact list --where` and `comments list|resolve|reopen`.
+`artifact list --where` and `comments list|resolve|reopen`. `Client.reports`, `report`,
+`create_report`, `write_report`, `delete_report` and `comment_report` address reports
+by name; the CLI exposes `report list|show|new|write|comment|delete|watch`. `report
+watch` waits until the body passes a revision and has rested, or a thread on the
+report has a comment sent after its last reply, prints the report with those threads
+as one JSON line and exits.
 
 Export/import preserves the annotation store and validates projections, ETags and
 the membership index against it. Purge removes an artifact's exact annotations,
 including comments, and its index rows; name-level annotations remain. Annotation writes are
 synchronous and do not enter a writer's record-upload journal.
 
-### Native report document versions
+## Reports
 
-New builds write `cairn/document` version **4** in `document.json`. Version 4
-is version 3 with all Markdown parsed at build, so readers never parse Markdown:
-the asset reference of a `text/markdown` output also carries `nodes`, and code
-blocks with `fig-cap`/`tbl-cap` or `fig-subcap` carry `caption_nodes` and
-`subcaption_nodes` (one list per subcaption). Nodes have the shape of Markdown
-block nodes, with cross references resolved and the source range of their block;
-fenced div nodes carry parsed `attributes` with `class` as a space-separated
-string. `index.html` renders the same parse. Version 3
-is version 2 plus fenced divs: blocks of kind `open` (with `attributes`: `id`,
-`class` list and key/value pairs, and an optional layout `grid` of cell widths
-in percent) and `close` nest the blocks between them. Markdown blocks may be
-marked `caption`, code blocks may carry `caption_prefix` and `embed`, and
-labels may be lettered subfigures. Markdown,
-source locations, code, labels, and output metadata remain in the document.
-Each code-cell MIME value in `outputs[].data` is an asset reference:
+A report is a mutable Markdown document of a project, outside the artifact lifecycle:
+it has a random `report_` ID, a name unique in its project, and no versions, outputs
+or lineage. It runs no code. It references artifacts by `cairn:` links, which readers
+resolve when they display it, so `@latest` follows new versions.
 
-```json
-{"image/png": {"asset": "assets/<sha256>.png", "mime": "image/png", "encoding": "binary"}}
-```
+A report has parts. `body` is its author's text; every other part is a slot an agent
+fills, named by a fenced div `::: {.agent #slot}` in the body. Parts are identifiers of
+1–64 characters and hold at most 1 MiB of text. Every saved text is kept as a new
+revision of its part, numbered from 1; writing unchanged text keeps the revision.
+`expected_revision` makes a write conditional, so two editors never overwrite each
+other silently. Browser sessions write only `body` and comments; agents write slots
+with the server token.
 
-`encoding` is `binary` for decoded images/audio/video, `utf-8` for textual MIME
-values (including SVG, HTML and Markdown), and `json` for structured values such
-as Plotly. Stream output `text` is likewise a `text/plain`, `utf-8` reference.
-All MIME alternatives are retained. Asset paths are relative to the report bundle,
-content-addressed, and included in its file inventory and published blobs. Identical
-payloads with the same extension reuse one file. Report bundle data advertises
-`document_version`; absent means version 1.
+Readers support these Markdown references:
 
-Readers support all versions: version 1 retains inline notebook MIME payloads;
-versions 2 to 4 load referenced assets as needed. Existing reports are not migrated:
-the UI server's `preview.json` parses what versions 1 to 3 left as Markdown into
-the version 4 node shapes, so its `ui` extra includes the Markdown packages.
-Older readers that only understand version 1 cannot read new native documents,
-and readers that only understand versions 1 to 3 cannot read version 4.
-The `report/bundle` envelope remains version 1; exports remain complete bundles,
-and `document.json` is served byte-for-byte. The archived `executed.ipynb` remains
-standard nbformat with its original outputs, including Jupyter's base64 encoding;
-it is not part of the native UI's report-loading path.
+- `![caption](cairn:REF#CAPTURE)`: the file captured as `CAPTURE`, or a file of that
+  name, of the artifact `REF` resolves to; images, video and audio display inline.
+- `![caption](cairn:REF)`: the artifact's value.
+
+Export/import, integrity checks and the migration from schema 7 cover reports, their
+revisions and comments. Earlier report artifacts (`report/bundle`) remain ordinary
+artifacts with their files and comments; nothing renders them as reports.

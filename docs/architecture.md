@@ -1,14 +1,15 @@
 # Architecture
 
 Cairn stores artifacts. Every artifact has one permanent ID and is writable until
-finished, then immutable. Runs, reports, datasets, models and custom viewers use
-that same lifecycle; namespaces and typed payload formats provide their meaning.
+finished, then immutable. Runs, datasets, models and custom viewers use that same
+lifecycle; namespaces and typed payload formats provide their meaning. Reports are
+mutable documents beside the artifacts that only reference them.
 
 ```mermaid
 flowchart LR
     Python[Python SDK] --> Client
     CLI --> Client
-    Reports[Local QMD builder] --> Client
+    UI[Browser UI and report editor] --> HTTP
     Client -->|local path| Repository
     Client -->|server URL| HTTP[HTTP adapter]
     HTTP --> Server
@@ -19,8 +20,8 @@ flowchart LR
 
 The server implements the same `RepositoryProtocol` as local storage. It validates
 requests and routes them to the repository. Type-specific behavior belongs in
-clients and viewers: environment capture in Python, report execution in the local
-builder, media interpretation in codecs and UI components.
+clients and viewers: environment capture in Python, Markdown rendering and media
+interpretation in codecs and UI components.
 
 ## Identity and naming
 
@@ -73,7 +74,7 @@ acknowledged cutoff, including for live reads. Finished readers and dependencies
 pin exact IDs. Retention protects every referenced blob and finished artifact,
 including references in pending finalization intents.
 
-## Provenance and reports
+## Provenance
 
 Run helpers capture config, Python/platform/process information, package inventory,
 Git state, dirty source changes, a bounded source archive and dependency files.
@@ -84,14 +85,15 @@ output is a terminal, and stored in bounded chunks as `console/` captures while 
 run is live. Generic artifact creation performs no automatic capture. See README for
 provenance and console opt-outs.
 
-The QMD builder captures source/includes/resources, resolves declared finished
-inputs, records every further artifact cells read, composes an optional front-matter Hydra config with the build's overrides,
-executes a fresh local kernel and packages outputs plus source mappings.
-Its explicit report reader avoids global backend monkeypatches. HTML viewers in
-reports run with an opaque origin and read their report's files through a
-signed, expiring link instead of the reader's session. A report is an
-ordinary artifact containing the completed bundle. Editing and execution are local;
-the server stores, queries and serves data only.
+## Reports
+
+A report holds its author's Markdown body and one part per agent slot. Each save
+appends a revision of that part; conditional writes refuse edits made against an
+older revision, so the author and agents never overwrite each other. Reports run no
+code: the browser parses their Markdown and resolves `cairn:` references to artifact
+captures and values when it displays them. Computation and its lineage stay in runs.
+Comments on reports share the annotation store, threads and agent sending with
+comments on artifacts.
 
 ## Maintenance and boundaries
 

@@ -45,7 +45,7 @@ from .model import (
 )
 from .objects import Files, ensure_directory
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 BUSY_SECONDS = 30
 schema = sa.MetaData()
 NAME_KEYS = ("project", "namespace", "name")
@@ -166,7 +166,30 @@ requests = sa.Table(
     sa.Column("hash", sa.String, nullable=False),
     sa.Column("result", JSON),
 )
+# Mutable documents outside the artifact lifecycle; they only reference artifacts.
+reports = sa.Table(
+    "cairn_reports",
+    schema,
+    sa.Column("id", sa.String, primary_key=True),
+    sa.Column("project", sa.String, nullable=False),
+    sa.Column("name", sa.String, nullable=False),
+    sa.Column("created_at", sa.String, nullable=False),
+    sa.Column("updated_at", sa.String, nullable=False),
+    sa.UniqueConstraint("project", "name"),
+)
+# Every saved revision of a part: the author's "body" and one part per agent slot.
+report_parts = sa.Table(
+    "cairn_report_parts",
+    schema,
+    sa.Column("report_id", sa.ForeignKey(reports.c.id), primary_key=True),
+    sa.Column("part", sa.String, primary_key=True),
+    sa.Column("revision", sa.Integer, primary_key=True),
+    sa.Column("source", sa.Text, nullable=False),
+    sa.Column("author", sa.String),
+    sa.Column("created_at", sa.String, nullable=False),
+)
 # Mutable properties and comments; artifact_id NULL targets every version of the name.
+# Comments on a report carry its report_id, the namespace "reports" and its name.
 annotations_table = sa.Table(
     "cairn_annotations",
     schema,
@@ -175,6 +198,7 @@ annotations_table = sa.Table(
     sa.Column("namespace", sa.String, nullable=False),
     sa.Column("name", sa.String, nullable=False),
     sa.Column("artifact_id", sa.ForeignKey(artifacts.c.id)),
+    sa.Column("report_id", sa.ForeignKey(reports.c.id)),
     sa.Column("kind", sa.String, nullable=False),
     sa.Column("key", sa.String),
     sa.Column("value", JSON, nullable=False),
@@ -203,6 +227,7 @@ for _label, _columns, _target in (
     )
 sa.Index("cairn_annotation_names", *(annotations_table.c[key] for key in NAME_KEYS))
 sa.Index("cairn_annotation_targets", annotations_table.c.artifact_id, annotations_table.c.kind)
+report_comments = sa.Index("cairn_report_comments", annotations_table.c.report_id)
 # Schema 6 comments, read only by the explicit migration.
 legacy_comments = sa.Table(
     "cairn_comments",
@@ -381,10 +406,12 @@ class Repository:
                 version = conn.execute(
                     sa.select(meta.c.value).where(meta.c.key == "schema_version")
                 ).scalar()
-                upgrade = migrate and version == 6
+                upgrade = migrate and version in (6, 7)
                 if version != SCHEMA_VERSION and not upgrade:
                     hint = (
-                        "; export a backup, then run `cairn repo migrate`" if version == 6 else ""
+                        "; export a backup, then run `cairn repo migrate`"
+                        if version in (6, 7)
+                        else ""
                     )
                     raise Unsupported(
                         f"Repository schema {version!r}; this client requires {SCHEMA_VERSION}{hint}",
@@ -411,7 +438,7 @@ class Repository:
                     # Without ICU, names sort by code point instead.
                     self.natural = False
             if upgrade:
-                self._upgrade(conn)
+                self._upgrade(conn, version)
             if not conn.execute(sa.select(meta.c.key).limit(1)).first():
                 conn.execute(
                     meta.insert(),
@@ -421,8 +448,22 @@ class Repository:
                     ],
                 )
 
-    def _upgrade(self, conn):
-        """Schema 6 to 7: inline annotations become exact properties and comments move along."""
+    def _upgrade(self, conn, version):
+        """Schema 6 to 8: inline annotations become exact properties and comments move along.
+
+        Schema 7 to 8 adds reports, whose comments live in the annotation store too."""
+        if version == 7:
+            conn.execute(
+                sa.text(
+                    "ALTER TABLE cairn_annotations "
+                    "ADD COLUMN report_id VARCHAR REFERENCES cairn_reports (id)"
+                )
+            )
+            report_comments.create(conn)
+            conn.execute(
+                meta.update().where(meta.c.key == "schema_version").values(value=SCHEMA_VERSION)
+            )
+            return
         stamp, rows = now(), []
         columns = (
             artifacts.c.id,
@@ -1745,7 +1786,7 @@ class Repository:
                 artifacts.c.number,
                 artifacts.c.deleted_at.label("artifact_deleted_at"),
             )
-            .join(artifacts, artifacts.c.id == annotations_table.c.artifact_id)
+            .outerjoin(artifacts, artifacts.c.id == annotations_table.c.artifact_id)
             .where(annotations_table.c.kind == "comment", *conditions)
             .order_by(annotations_table.c.created_at, annotations_table.c.id)
         )
@@ -1771,12 +1812,12 @@ class Repository:
         return found[0]
 
     def _insert_comment(self, conn, target, value, author, for_agent):
+        """Insert a comment whose target names its project, namespace, name and owner."""
         identifier, stamp = new_id("c"), now()
         conn.execute(
             annotations_table.insert().values(
-                **{key: target[key] for key in NAME_KEYS},
+                **target,
                 id=identifier,
-                artifact_id=target["id"],
                 kind="comment",
                 value={**value, "for_agent": True} if for_agent else value,
                 author=author,
@@ -1787,9 +1828,8 @@ class Repository:
         )
         return self._comment(conn, identifier)
 
-    def add_comment(
-        self, artifact_id, anchor, body, *, author=None, for_agent=False, request_id=None
-    ):
+    @staticmethod
+    def _validate_comment(anchor, body, author, for_agent):
         if not isinstance(anchor, dict) or len(canonical(anchor)) > 65536:
             raise ValidationError("Comment anchor must be a bounded object")
         _text(body, "Comment body", 65536)
@@ -1797,12 +1837,20 @@ class Repository:
         if type(for_agent) is not bool:
             raise ValidationError("for_agent must be a boolean")
 
+    def add_comment(
+        self, artifact_id, anchor, body, *, author=None, for_agent=False, request_id=None
+    ):
+        self._validate_comment(anchor, body, author, for_agent)
+
         def add():
             target = self._artifact(conn, artifact_id)
             if target["state"] != "finished":
                 raise ValidationError("Comments require a finished artifact")
             value = {"anchor": anchor, "body": body}
-            return self._insert_comment(conn, target, value, author, for_agent)
+            owner = {key: target[key] for key in NAME_KEYS}
+            return self._insert_comment(
+                conn, {**owner, "artifact_id": target["id"]}, value, author, for_agent
+            )
 
         payload = [artifact_id, anchor, body] + ([author] if author is not None else [])
         payload += [True] if for_agent else []
@@ -1821,7 +1869,7 @@ class Repository:
             root = self._comment(conn, parent["reply_to"]) if parent["reply_to"] else parent
             if root["resolved_at"]:
                 raise Conflict("Reopen the comment before replying")
-            target = self._artifact(conn, root["artifact_id"], deleted=True)
+            target = {key: root[key] for key in (*NAME_KEYS, "artifact_id", "report_id")}
             value = {"anchor": {}, "body": body, "reply_to": root["id"]}
             return self._insert_comment(conn, target, value, author, for_agent)
 
@@ -1839,7 +1887,10 @@ class Repository:
             selected = (
                 [annotations_table.c.artifact_id == artifact_id]
                 if scope == "artifact"
-                else [annotations_table.c[key] == target[key] for key in NAME_KEYS]
+                else [
+                    *(annotations_table.c[key] == target[key] for key in NAME_KEYS),
+                    annotations_table.c.report_id.is_(None),
+                ]
             )
             if not include_resolved:
                 selected.append(annotations_table.c.resolved_at.is_(None))
@@ -1973,6 +2024,191 @@ class Repository:
 
         with self._transaction(write=True) as conn:
             return self._once(conn, request_id, "delete_comment", comment_id, remove)
+
+    @staticmethod
+    def _validate_part(part, source, author):
+        if not isinstance(part, str) or not re.fullmatch(r"[A-Za-z][\w-]{0,63}", part):
+            raise ValidationError("Report parts are identifiers of 1–64 characters")
+        if not isinstance(source, str):
+            raise ValidationError("Report source must be text")
+        if len(source.encode()) > 1024 * 1024:
+            raise CapacityError("Report parts must not exceed 1 MiB")
+        _text(author, "Report author", 256, optional=True)
+
+    @staticmethod
+    def _report_parts(conn, report_id):
+        """The latest revision of each part."""
+        latest = (
+            sa.select(report_parts.c.part, sa.func.max(report_parts.c.revision).label("revision"))
+            .where(report_parts.c.report_id == report_id)
+            .group_by(report_parts.c.part)
+            .subquery()
+        )
+        rows = conn.execute(
+            sa.select(report_parts)
+            .join(
+                latest,
+                sa.and_(
+                    report_parts.c.part == latest.c.part,
+                    report_parts.c.revision == latest.c.revision,
+                ),
+            )
+            .where(report_parts.c.report_id == report_id)
+            .order_by(report_parts.c.part)
+        ).mappings()
+        return {
+            row["part"]: {
+                "source": row["source"],
+                "revision": row["revision"],
+                "author": row["author"],
+                "updated_at": row["created_at"],
+            }
+            for row in rows
+        }
+
+    def create_report(self, project, name, *, body="", author=None, request_id=None):
+        """Create a report whose body holds the author's text; agents write the other parts."""
+        validate_name(project)
+        validate_name(name)
+        self._validate_part("body", body, author)
+
+        def create():
+            identifier, stamp = new_id("report"), now()
+            try:
+                with conn.begin_nested():
+                    conn.execute(
+                        reports.insert().values(
+                            id=identifier,
+                            project=project,
+                            name=name,
+                            created_at=stamp,
+                            updated_at=stamp,
+                        )
+                    )
+            except SQLIntegrityError:
+                raise Conflict(f"Report already exists: {name}") from None
+            conn.execute(
+                report_parts.insert().values(
+                    report_id=identifier,
+                    part="body",
+                    revision=1,
+                    source=body,
+                    author=author,
+                    created_at=stamp,
+                )
+            )
+            return self._get(conn, reports, identifier)
+
+        payload = [project, name, body, author]
+        with self._transaction(write=True) as conn:
+            return self._once(conn, request_id, "create_report", payload, create)
+
+    def reports(self, *, project="default"):
+        """Reports of a project, most recently changed first, without their parts."""
+        with self._transaction() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    sa.select(reports)
+                    .where(reports.c.project == project)
+                    .order_by(reports.c.updated_at.desc(), reports.c.id)
+                ).mappings()
+            ]
+
+    def report(self, report_id):
+        with self._transaction() as conn:
+            return {
+                **self._get(conn, reports, report_id),
+                "parts": self._report_parts(conn, report_id),
+            }
+
+    def write_report(
+        self, report_id, part, source, *, expected_revision=None, author=None, request_id=None
+    ):
+        """Save a new revision of one part; unchanged text keeps the current revision."""
+        self._validate_part(part, source, author)
+        if expected_revision is not None and (
+            type(expected_revision) is not int or expected_revision < 0
+        ):
+            raise ValidationError("Expected revision must be a nonnegative integer")
+
+        def write():
+            self._get(conn, reports, report_id, lock=True)
+            current = conn.execute(
+                sa.select(report_parts.c.revision, report_parts.c.source)
+                .where(report_parts.c.report_id == report_id, report_parts.c.part == part)
+                .order_by(report_parts.c.revision.desc())
+                .limit(1)
+            ).first()
+            revision = current.revision if current else 0
+            if expected_revision is not None and expected_revision != revision:
+                raise Conflict(
+                    "Report part changed since it was read", details={"revision": revision}
+                )
+            stamp = now()
+            if current is None or current.source != source:
+                revision += 1
+                conn.execute(
+                    report_parts.insert().values(
+                        report_id=report_id,
+                        part=part,
+                        revision=revision,
+                        source=source,
+                        author=author,
+                        created_at=stamp,
+                    )
+                )
+                conn.execute(
+                    reports.update().where(reports.c.id == report_id).values(updated_at=stamp)
+                )
+            return {"report_id": report_id, "part": part, "revision": revision}
+
+        payload = [report_id, part, source, expected_revision, author]
+        with self._transaction(write=True) as conn:
+            return self._once(conn, request_id, "write_report", payload, write)
+
+    def delete_report(self, report_id, *, request_id=None):
+        """Remove a report with every revision and comment."""
+
+        def remove():
+            self._get(conn, reports, report_id, lock=True)
+            conn.execute(
+                annotations_table.delete().where(annotations_table.c.report_id == report_id)
+            )
+            conn.execute(report_parts.delete().where(report_parts.c.report_id == report_id))
+            conn.execute(reports.delete().where(reports.c.id == report_id))
+            return {"id": report_id, "deleted": True}
+
+        with self._transaction(write=True) as conn:
+            return self._once(conn, request_id, "delete_report", report_id, remove)
+
+    def add_report_comment(
+        self, report_id, anchor, body, *, author=None, for_agent=False, request_id=None
+    ):
+        self._validate_comment(anchor, body, author, for_agent)
+
+        def add():
+            report = self._get(conn, reports, report_id)
+            target = {
+                "project": report["project"],
+                "namespace": "reports",
+                "name": report["name"],
+                "report_id": report_id,
+            }
+            value = {"anchor": anchor, "body": body}
+            return self._insert_comment(conn, target, value, author, for_agent)
+
+        payload = [report_id, anchor, body, author, for_agent]
+        with self._transaction(write=True) as conn:
+            return self._once(conn, request_id, "add_report_comment", payload, add)
+
+    def report_comments(self, report_id, *, include_resolved=True):
+        with self._transaction() as conn:
+            self._get(conn, reports, report_id)
+            selected = [annotations_table.c.report_id == report_id]
+            if not include_resolved:
+                selected.append(annotations_table.c.resolved_at.is_(None))
+            return self._comments(conn, *selected)
 
     def collect_garbage(self, *, grace_seconds=3600, dry_run=True):
         from .ops import collect_garbage

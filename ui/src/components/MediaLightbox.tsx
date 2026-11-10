@@ -836,7 +836,7 @@ export function MediaLightbox({
             {referenceControls}
           </div>
           <small>
-            {natural ? natural.w + " × " + natural.h : "Loading dimensions"}
+            {natural ? natural.w + " × " + natural.h : failure ? "Dimensions unavailable" : "Loading dimensions"}
             {isVideo && !item.fps ? " · frame step uses chosen FPS" : ""}
           </small>
         </footer>}

@@ -1,23 +1,22 @@
 # Cairn2
 
-Cairn stores experiments, files, datasets, models, and reports using one artifact
-lifecycle. Choose one repository: a local SQLite database with files, or an HTTP
+Cairn stores experiments, files, datasets and models using one artifact
+lifecycle, and reports that plan and explain them. Choose one repository: a local SQLite database with files, or an HTTP
 server backed by SQLite or PostgreSQL and a filesystem or S3 object store.
 An artifact keeps one ID throughout its lifetime: writable while live, immutable
 once finished. Version labels and aliases point directly to artifacts.
 
 References use `namespace/name@selector`: `runs/training@latest`,
-`artifacts/model@v3`, or `reports/summary@v2`. The prefix is an arbitrary namespace,
-not an object type. All top-level objects are artifacts; typed value formats
+`artifacts/model@v3`, or `datasets/shapes@v2`. The prefix is an arbitrary namespace,
+not an object type. All of them are artifacts; typed value formats
 determine how their contents are interpreted and rendered. Names can include
 further slashes, as in `models/training/checkpoint@latest`.
 
 This repository contains the Python API, storage implementation, authenticated
-HTTP API, CLI, and a client-side executable report builder. Report execution happens on the client, not on the server.
+HTTP API, CLI, and the browser UI with its report editor.
 
 [`examples/`](examples/) has small projects: a Hydra training sweep submitted
-with Slurm, PBS, submitit or HyperQueue, a Make/Snakemake pipeline, a minimal report and a
-report tour.
+with Slurm, PBS, submitit or HyperQueue, a Make/Snakemake pipeline, and a report tour.
 
 ## Install
 
@@ -34,8 +33,7 @@ uv run --extra all cairn server --host 0.0.0.0
 ```
 
 Or install only the extras you need. The base package requires SQLAlchemy and
-HTTPX. `server` adds FastAPI/Uvicorn; `reports` adds the Markdown and Jupyter
-execution stack; `media` adds NumPy, Pillow, Arrow, Plotly, and Matplotlib;
+HTTPX. `server` adds FastAPI/Uvicorn; `ui` adds the browser UI; `media` adds NumPy, Pillow, Arrow, Plotly, and Matplotlib;
 `postgres` adds Psycopg; `s3` adds Boto3. The command is `cairn`, and the Python
 module is `cairn`.
 
@@ -123,10 +121,6 @@ warning. Treat linked files as read-only: reading a changed or missing one raise
 `IntegrityError`, `cairn repo check` lists them, and garbage collection never
 deletes them. Export copies their bytes.
 
-After `cairn.init()`, report `build()` and `publish()` can omit `client=`:
-they inherit that run's repository and project even after the run finishes.
-Explicit clients remain supported.
-
 An artifact context finishes on normal exit and requests a failed outcome when
 its body raises. A successfully finished `cairn.init()` handle closes the client
 it created. For explicit clients, `Client.close()` releases connections and stops
@@ -174,7 +168,7 @@ run-specific storage table.
 
 ## Find and read artifacts
 
-Whatever a run or report finds or uses becomes its input, so a downstream run can
+Whatever a run finds or uses becomes its input, so a downstream run can
 discover everything it depended on. Searches run in the repository's database, so
 only their results travel.
 
@@ -220,7 +214,7 @@ asked for.
 Whatever `find` returns is recorded, because whatever the code learns from it can
 shape the result; artifacts a `where` or `order` only compared in the database
 are not. Like `cairn.log`, `cairn.find` and `cairn.use` belong to
-the current run, artifact or report and raise without one; a run's own
+the current run or artifact and raise without one; a run's own
 `run.find` and `run.use` record to that run. A finished run can no longer record
 and raises `Conflict`. To read without recording, use a `Client`, with
 `client.get(ref)` and `client.find(pattern, ...)`:
@@ -237,7 +231,7 @@ with Client("./results") as client:
 ```
 
 Readers pin the exact finished artifact. Direct IDs are stable before and after
-finish. Live inspection/querying uses the backend; SDK readers and report inputs
+finish. Live inspection/querying uses the backend; SDK readers and run inputs
 require finished artifacts. There is no revision or snapshot API. Starting again
 under the same name creates a new artifact ID; finishing assigns the next label.
 
@@ -256,6 +250,14 @@ it. Added items keep their names; final-value files sit at the top level. Withou
 else `$XDG_CACHE_HOME/cairn` or `~/.cache/cairn`. Content is fetched once into
 `<cache>/blobs/<sha256>`, verified, made read-only and hard-linked (or copied
 across filesystems) into the target; copy a file before editing it.
+
+Large path-backed files and directories use [paged datasets](docs/datasets.md)
+automatically: bounded chunk uploads, durable resume checkpoints, and selective
+reads on other machines. A directory's `value.iter_files()` lists its files
+lazily; `reader.file("images/frame.png")` reads one file from an `images` capture.
+Chunked downloads use a separate, evictable cache and assemble verified files in
+the destination. Both client and server must support `paged_datasets`; existing
+artifacts and shared-path `link=True` captures keep their existing representation.
 
 Names under `provenance/` and `console/` are reserved for Cairn and rejected by
 `add()`. They are not in `reader.files` or a whole-artifact download;
@@ -302,7 +304,7 @@ artifact's `annotations` are its name's properties overlaid key by key by its ow
 so removing a version's key shows the name's value again:
 
 ```python
-client.annotate("reports/direction", {"tags": ["paper"]}, target="name")
+client.annotate("runs/training", {"tags": ["paper"]}, target="name")
 client.backend.annotation_layers(artifact["id"])  # {"name": ..., "artifact": ..., ...}
 ```
 
@@ -329,17 +331,16 @@ cairn --repo ./results --project study artifact list --namespace runs --state fi
 
 ## Comments
 
-Comments made in the UI anchor to an exact report version (source path, lines,
-quote or media position) and show on every version of that report. An agent or
-script can pull the open ones, address them and mark them resolved:
+Comments made in the UI anchor to a report passage (part, lines, quote) or a
+figure, or to an exact artifact version. An agent or script can pull the open ones,
+answer, address them and mark them resolved:
 
 ```sh
-cairn comments list reports/direction           # open comments on every version
-cairn comments list reports/direction --json    # full anchors for agents
 cairn comments list 'reports/**'                # open comments on every report
+cairn comments list 'reports/**' --json         # full anchors for agents
 cairn comments list                             # open comments in the whole project
-cairn comments reply c_123 "Rewrote §3, see v5" --by agent
-cairn comments resolve c_123 --note "Rewrote report.qmd:42-44" --by agent
+cairn comments reply c_123 "Narrowed the sweep" --by agent
+cairn comments resolve c_123 --note "Now 5 learning rates" --by agent
 cairn comments reopen c_123
 cairn comments watch 'reports/**'               # threads as they are sent to an agent
 ```
@@ -350,7 +351,8 @@ inserts a newline. Clicking away saves an editable draft without sending it,
 including for replies. Sent messages are read-only in the floating conversation.
 `cairn comments watch` prints each open thread whenever a comment in it is sent,
 so an agent running it in the background is woken by every comment you finish;
-`--json` prints each batch as one line.
+`--json` prints each batch as one line. `--once` waits for threads with a comment sent after
+their last reply, prints them and exits, for agents that are woken when a command ends.
 
 `--all` includes resolved comments and `--exact` limits the list to the referenced
 version. Python offers `client.comments(ref=None, scope="name", include_resolved=False)`,
@@ -404,7 +406,9 @@ containing credentials, query parameters, or fragments. HTTPS termination and
 service supervision are deployment responsibilities.
 
 Remote Python writers stage immutable bytes and ordered events in a durable
-outbox before `log()` returns. The default location is
+outbox before `log()` returns. Large path-backed dataset values instead upload
+bounded chunks synchronously before queuing their small reference; they do not
+stage the whole dataset in the outbox. The default outbox location is
 `<state>/outbox/<repo-hash>`. `<state>` is `$CAIRN_STATE_DIR`, else
 `$XDG_STATE_HOME/cairn` or `~/.local/state/cairn`. Keep it apart from the
 disposable download cache: it may hold the only copy of unsent results.
@@ -484,7 +488,7 @@ cairn --repo ./results query runs/trial@latest --kind record \
 ```
 
 `cairn init` defaults to the `runs` namespace; `artifact start` defaults to
-`artifacts`. Both accept `--namespace`, and report publication uses `reports`.
+`artifacts`. Both accept `--namespace`.
 These are client conventions rather than reserved object types. Other lifecycle commands
 include `artifact update`, `writer`, `close-writer`, and `versions`.
 Use explicit `--sequence` when retrying a CLI log with the same event; changed
@@ -503,150 +507,96 @@ cairn --repo ./results server
 
 The server serves the bundled React UI and prints an immediate login link.
 Browser sessions end after 7 days without use. Use `--no-ui` for API-only operation or
-`--no-auth` for local development without a token. Reports open directly with
-a table of contents, interactive figures and media, source copying, and comments
-that carry across reports with the same project and name and can be resolved.
+`--no-auth` for local development without a token. Reports are the project's
+start page: Markdown you edit in place, where only the block under the cursor shows its source, with the agent's answers, figures
+and media from artifacts, a table of contents, source copying, and comments.
 Artifact/run pages include lineage, records, files, editable tags for one version
 or all versions, and click-to-copy IDs. The project Workspace displays scalar,
-image, and Plotly cards directly from run records, with comparisons, galleries,
+image, video, and Plotly cards directly from run records, with comparisons, galleries,
 axis sliders, resizable sections, and browser-local saved layouts. See the
 [training card tour](examples/training/README.md#workspace-card-tour).
 
 The UI source lives in [ui/](ui/README.md). Rebuild the bundled assets after
 changes with `npm ci --prefix ui && npm run build --prefix ui`.
 
-## Build a report locally
+## Reports
 
-```sh
-cairn report new analysis.qmd --title 'Analysis'
-cairn --repo ./results report build analysis.qmd --output ./build/analysis
-cairn --repo ./results report publish ./build/analysis --name analysis
-cairn --repo ./results report export reports/analysis@latest ./exported-analysis
-cairn --repo ./results report copy reports/analysis@latest ./editable-analysis
+A report is where you write down a project: its goal, the direction, the
+experiments to run and what to show. It is Markdown, edited in the browser beside its
+rendering, and it runs no code. You leave the agent room with fenced divs; the agent
+answers in its own block below your text, never in it:
+
+```markdown
+# Thin-shell SDF
+
+Goal: beat the baseline on thin features without losing training speed.
+
+::: {.agent #baseline}
+Train the baseline at 3 learning rates. Report final Chamfer and wall time.
+:::
 ```
 
-`report new` defaults to `NewReport.qmd`. `report build --publish` combines the
-build and publication steps. Outputs must use a new or empty directory.
+Figures, video, audio and values come from artifacts, never from the report:
+`![Error on the test mesh](cairn:runs/train@latest#plots/err.png)` shows the file
+captured as `plots/err.png` by the latest `runs/train`, and `![](cairn:runs/train@v3)`
+shows that version's value. Reports also render tables, math, callouts
+(`::: {.callout-warning}`), code and footnotes.
 
-A report reads artifacts like a run does, and every artifact it reads becomes
-an input in its lineage:
+A viewer is an artifact's HTML file; agents write them, for example a three.js mesh
+viewer published as `viewers/mesh` with its libraries beside `index.html`. A `view`
+block shows one with settings:
 
 ````markdown
----
-title: Baseline analysis
----
-
-## Results {#sec-results}
-
-```{python}
-import cairn
-
-baseline = cairn.use("runs/baseline")
-print(baseline.value)
+```view
+viewer: cairn:viewers/mesh@v1#index.html
+caption: Lucy decimated to 250k and 50k triangles
+up: z
+meshes:
+  - label: 250k triangles
+    file: cairn:datasets/lucy@v2#lucy-250k.obj
+  - label: 50k triangles
+    file: cairn:datasets/lucy@v2#lucy-50k.obj
 ```
 ````
 
-`cairn.find` and `cairn.use` read the repository the report is built
-from and record inputs as in a run. A reference resolves once per build, so
-`@latest` gives the same version throughout a build. The manifest lists every
-artifact the report read with the reference or pattern that found it. A rebuild runs the
-code again and resolves again; write `@vN` or an ID to always read one version.
-Front-matter `cairn.inputs` (`baseline: runs/baseline@latest`) resolves several
-inputs together before any cell executes and exposes them as `inputs["baseline"]`.
+`viewer` and `caption` are reserved; every other key is the viewer's own setting. The
+viewer runs in a sandboxed frame that cannot reach the report or the session, and
+reads its settings as JSON from its URL fragment
+(`JSON.parse(decodeURIComponent(location.hash.slice(1)))`), each `cairn:REF#file`
+string replaced by a link to that file. It loads its own files by relative path and
+may post `{type: "cairn-html-size", height}` to its parent. Without settings,
+`![](cairn:viewers/mesh@v1#index.html)` shows a viewer directly, and a workspace
+Viewer card takes the same YAML, so a figure and a card are interchangeable.
 
-A report can be configured with Hydra. The front matter `config` is the primary
-config, `cairn.config_path` optionally names a folder of config groups, and the
-build's overrides apply on top:
+Each agent block shows only the agent's result; its request and a conversation with
+the agent fold away below it. That conversation is the block's comments without a
+quote: `cairn report comment study "…" --part baseline` adds to it, `report watch`
+wakes on what you send there, and `cairn comments reply` answers.
 
-````markdown
----
-title: Ablation
-config:
-  defaults:
-    - model: resnet
-    - _self_
-  alpha: 0.1
-cairn:
-  config_path: conf
----
-
-```{python}
-print(cfg.model.name, cfg.alpha)
-```
-````
+A report is not an artifact: it has no versions or lineage, but every saved text of
+each part is kept as a revision, and an edit made against an older revision is
+refused instead of overwriting. Agents work on reports by name:
 
 ```sh
-cairn report build ablation.qmd model=vit alpha=0.5
-cairn report build ablation.qmd --publish -m alpha=0.1,0.2,0.3
+cairn report list
+cairn report new study body.md                  # or create it in the UI
+cairn report show study                         # every part with its revision
+cairn report write study baseline answer.md --by agent   # or - for standard input
+cairn report comment study "Three rates may miss the optimum" \
+  --quote "Train the baseline at 3 learning rates" --by agent
+cairn report watch study --after 4              # wait for edits or sent comments
+cairn report delete study
 ```
 
-Cells see the composed config as `cfg`. The resolved config is stored in the
-manifest and in the published artifact's metadata `config`, like a run's config,
-and the config folder is captured with the sources. `-m` builds once per
-combination of Hydra sweep values (`a=1,2`, `range()`, `choice()`), into
-numbered subfolders of `--output`; with `--publish` each becomes a version.
-Hydra's runtime (the `hydra:` node, output directories, logging, `${hydra:...}`)
-and sweeper plugins are not used.
-
-The builder
-captures source/includes and declared local resources, starts a fresh Python
-kernel, and emits HTML, native document JSON, an executed notebook, assets,
-source mappings, and a manifest with exact dependency IDs and package versions.
-The default `python3` kernel uses the builder's Python environment; `--kernel`
-selects another installed kernel. Code runs locally in a copy of captured files.
-It is trusted Python code, not a security sandbox.
-
-The implemented QMD/Markdown subset covers:
-
-- **Markdown:** tables, footnotes, dollar math rendered as MathML, sub- and
-  superscript (`H~2~O`, `x^2^`), definition and task lists, and attributes
-  (`![A](a.png){width=50% .wide}`, `[text]{.class}`, `` `code`{.py} ``).
-- **Python:** `{python}` cells with the options `label`, `fig-cap`, `tbl-cap`,
-  `fig-subcap`, `echo`, `eval`, `output`, `layout-ncol`, `column` and
-  `cap-location`; `execute.echo`/`execute.eval` in the front matter; and inline
-  expressions `` `{python} f"{loss:.3f}"` ``, evaluated in document order.
-- **Labels and references:** `{#sec-name}`, `{#fig-name}`, `{#tbl-name}` and
-  `$$...$$ {#eq-name}`, referenced as `@fig-name`. `@reports/baseline#fig-loss`
-  (or `@reports/baseline@v3#fig-loss`) refers to a label in another published
-  report, and `{{< embed reports/baseline#fig-loss >}}` shows that report's
-  labelled cell outputs. Both resolve once per build and become inputs.
-- **Fenced divs,** which may contain Python cells: callouts
-  (`::: {.callout-note}`), `.columns` with `.column width="40%"`,
-  `.panel-tabset` (one tab per heading), `.column-margin`, `.column-page`,
-  `.column-screen`, and figures `::: {#fig-name layout-ncol=2}` or
-  `layout="[[2,1],[1]]"` whose last paragraph is the caption. Images and cells
-  inside are lettered subfigures, so a labelled `{#fig-left}` inside reads
-  "Figure 1(a)".
-- **Citations:** `bibliography: refs.bib` (a file or a list) and `[@key]`,
-  `[see @a; @b, p. 3]`, `[-@key]` or `@key`. `citation-style` is `author-year`
-  (default) or `numeric`. Cited entries are listed under "References" at the
-  end, or inside `::: {#refs}`.
-- **Viewers:** `![Scene](viewer.html){#fig-scene height=480}` embeds an HTML
-  file of the report as an interactive viewer. It may load scripts from https
-  URLs (three.js, WebGL, WebGPU, WebAssembly, workers) and fetch the report's
-  other files by relative path, such as `fetch("mesh.glb")` for a file listed
-  in `cairn.resources`. In the UI it runs in a sandbox without access to Cairn
-  or the reader's session, and reads files through a signed link scoped to
-  that report.
-
-`cairn.resources` lists additional relative files/directories. Includes use
-`{{< include relative.qmd >}}`. See [the example](examples/minimal-report/report.qmd).
-
-This is a QMD subset, not full Quarto. It does not implement CSL styles,
-arbitrary Quarto extensions, other shortcodes, other execution languages, or
-Markdown raw HTML; `<!-- -->` comments are hidden and other raw HTML shows as
-text. Rich HTML output of cells is placed in an iframe without
-scripts or external resource access. External image URLs and source paths
-escaping the report directory are rejected. Reading a live artifact fails.
-`cairn.Client()` opens the repository the report is built from; explicit clients
-are not recorded, and inside a run started by a cell, reads record to that run. Report Python is trusted local code, not
-a sandbox; external I/O is outside this reproducibility policy.
-
-Failed builds keep their notebook and diagnostics and cannot be published.
-Publication uses an ordinary `report/bundle` artifact value. Export preserves the
-complete bundle, and copy extracts its editable source unchanged. Rebuilding
-either resolves inputs again. Neither path requires server-side execution or
-editing.
+`report watch` prints the report and its waiting threads as one JSON line and
+exits when the body passes revision `--after` (by default the current one) and has
+rested for `--settle` seconds (30), or when a thread has a comment sent after its
+last reply, so an agent running it in the background is woken by both. Python
+offers the same through `client.reports()`, `client.report(name)`,
+`client.create_report(name, body)`, `client.write_report(name, part, source,
+expected_revision=..., by=...)`, `client.comment_report(name, body, quote=...)` and
+`client.delete_report(name)`. Analyses that used to run inside a report are runs
+now: they record what they read and log their figures, which the report references.
 
 ## Transfer and maintain a repository
 
@@ -730,10 +680,10 @@ against an existing service.
 The API provides one artifact lifecycle, multiple producers, alias compare-and-swap,
 typed values, comments, SQL-filtered record queries, streaming blobs and explicit
 transfer/maintenance. Runs automatically capture client-side provenance and console output. The
-backend has one shared token and ordinal query ordering; no server report executor
-or AI integration. Unknown schemas fail explicitly: repository schema **7**, HTTP
+backend has one shared token and ordinal query ordering; no code execution
+or AI integration. Unknown schemas fail explicitly: repository schema **8**, HTTP
 protocol **4**, durable outbox schema **3**. Typed-value codec envelopes remain
-version 1. A schema 6 repository opens again after `cairn repo export` (a backup)
+version 1. A schema 6 or 7 repository opens again after `cairn repo export` (a backup)
 and `cairn --repo PATH repo migrate`, which converts it in one transaction; use
 `--database-url` with `--objects` or `--s3-bucket` for PostgreSQL. Names use
 slash-separated namespaces; colon-style references are unsupported.

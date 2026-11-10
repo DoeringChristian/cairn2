@@ -286,6 +286,50 @@ class RepositoryProtocol(Protocol):
         self, comment_id: str, *, request_id: str | None = None
     ) -> dict[str, JSONValue]: ...
 
+    def create_report(
+        self,
+        project: str,
+        name: str,
+        *,
+        body: str = "",
+        author: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, JSONValue]: ...
+
+    def reports(self, *, project: str = "default") -> list[dict[str, JSONValue]]: ...
+
+    def report(self, report_id: str) -> dict[str, JSONValue]: ...
+
+    def write_report(
+        self,
+        report_id: str,
+        part: str,
+        source: str,
+        *,
+        expected_revision: int | None = None,
+        author: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, JSONValue]: ...
+
+    def delete_report(
+        self, report_id: str, *, request_id: str | None = None
+    ) -> dict[str, JSONValue]: ...
+
+    def add_report_comment(
+        self,
+        report_id: str,
+        anchor: JSONValue,
+        body: str,
+        *,
+        author: str | None = None,
+        for_agent: bool = False,
+        request_id: str | None = None,
+    ) -> dict[str, JSONValue]: ...
+
+    def report_comments(
+        self, report_id: str, *, include_resolved: bool = True
+    ) -> list[dict[str, JSONValue]]: ...
+
     def collect_garbage(
         self, *, grace_seconds: int = 3600, dry_run: bool = True
     ) -> dict[str, JSONValue]: ...

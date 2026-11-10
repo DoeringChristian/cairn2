@@ -1,18 +1,21 @@
+import { readFileSync } from 'node:fs';
 import { test, expect, type Page, type Locator } from '@playwright/test';
 
 const project='workspace-test';
 const artifact=(id:string,name:string,number:number,created_at:string)=>({id,project,namespace:'runs',entity:'artifact',name,number,state:'finished',created_at,finished_at:created_at,metadata:{config:{seed:number}},annotations:{},manifest:{outcome:'completed'},annotations_etag:'x'});
 const runs=[artifact('old','workspace-demo/a',1,'2026-01-01'),artifact('a','workspace-demo/a',2,'2026-01-02'),artifact('b','workspace-demo/b',1,'2026-01-02')];
 const image={$cairn:1,format:'image',version:1,data:{name:'test.png'},blobs:[{digest:'test-png',media_type:'image/png',size:1}],refs:[]};
+const video={$cairn:1,format:'file',version:1,data:{name:'clip.mp4',media_type:'video/mp4'},blobs:[{digest:'test-mp4',media_type:'video/mp4',size:1}],refs:[]};
 const figure={$cairn:1,format:'figure/plotly',version:1,data:{data:[{x:[0,1],y:[0,1],type:'scatter'}],layout:{}},blobs:[],refs:[]};
-async function fixture(page:Page){
+async function fixture(page:Page,projects=[project]){
   await page.route('**/ui-api/session',r=>r.fulfill({json:{authenticated:true,no_auth:true,repository_id:'workspace-tests'}}));
-  await page.route('**/ui-api/projects',r=>r.fulfill({json:[{name:project,runs:3,reports:0,artifacts:3}]}));
+  await page.route('**/ui-api/projects',r=>r.fulfill({json:projects.map(name=>({name,runs:name===project?3:0,reports:0,artifacts:name===project?3:0}))}));
   await page.route('**/ui-api/artifacts?*',r=>{const offset=Number(new URL(r.request().url()).searchParams.get('offset'));return r.fulfill({json:{items:runs.slice(offset,offset+2),total:runs.length}});});
   await page.route('**/ui-api/artifacts/*/history',r=>r.fulfill({json:runs.filter(a=>a.name===runs.find(item=>r.request().url().includes(`/artifacts/${item.id}/`))?.name)}));
   await page.route('**/v1/resolutions',r=>r.fulfill({json:runs.filter(a=>r.request().postDataJSON().refs.includes(a.id))}));
-  await page.route('**/v1/records/query',r=>{const body=r.request().postDataJSON(),id=body.ref;const values=body.cursor?[{step:2,loss:1,quality:10,elapsed:20,camera:'front',camera_angle:0,image,figure}]:[{step:0,loss:3,quality:30,elapsed:0,camera:'front',camera_angle:0,image,figure},...(id==='b'?[]:[{step:1,loss:2,quality:20,elapsed:10,camera:'front',camera_angle:0,image,figure}])];return r.fulfill({json:{artifact_id:id,cutoff:3,next_cursor:body.cursor?null:'page2',items:values.map((data,i)=>({artifact_id:id,ordinal:body.cursor?3:i+1,sequence:i,writer_id:'w',kind:'record',data,created_at:'2026-01-01'}))}});});
+  await page.route('**/v1/records/query',r=>{const body=r.request().postDataJSON(),id=body.ref;const values=body.cursor?[{step:2,loss:1,quality:10,elapsed:20,camera:'front',camera_angle:0,image,video,figure}]:[{step:0,loss:3,quality:30,elapsed:0,camera:'front',camera_angle:0,image,video,figure},...(id==='b'?[]:[{step:1,loss:2,quality:20,elapsed:10,camera:'front',camera_angle:0,image,video,figure}])];return r.fulfill({json:{artifact_id:id,cutoff:3,next_cursor:body.cursor?null:'page2',items:values.map((data,i)=>({artifact_id:id,ordinal:body.cursor?3:i+1,sequence:i,writer_id:'w',kind:'record',data,created_at:'2026-01-01'}))}});});
   await page.route('**/v1/blobs/test-png',r=>r.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64')}));
+  await page.route('**/v1/blobs/test-mp4',r=>r.fulfill({contentType:'application/octet-stream',body:readFileSync(new URL('../../examples/report-showcase/assets/wave-evolution.mp4',import.meta.url))}));
   await page.goto(`/p/${project}/workspace?example=cards`);
   await expect(page.locator('.workspace-data-status')).toContainText('2 runs · 5 records');
 }
@@ -61,6 +64,23 @@ test('mobile cards and modal controls stay inside the viewport',async({page})=>{
   await page.getByRole('button',{name:'Settings for Compare reconstructions'}).click();await page.getByRole('dialog').getByRole('tab',{name:'Mapping'}).click();expect(await overflow()).toBe(false);await page.getByRole('dialog').getByRole('button',{name:'Done'}).click();await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
+test('workspace SVG blobs decode in thumbnails and lightboxes despite an untyped HTTP response',async({page})=>{
+  const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await fixture(page);
+  const svg={$cairn:1,format:'figure/svg',version:1,data:{},blobs:[{digest:'test-svg',media_type:'image/svg+xml',size:150,name:'figure.svg'}],refs:[]};
+  await page.route('**/v1/blobs/test-svg',r=>r.fulfill({contentType:'application/octet-stream',body:'<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect width="120" height="80" fill="teal"/></svg>'}));
+  await page.route('**/v1/records/query',r=>{const body=r.request().postDataJSON();return r.fulfill({json:{artifact_id:body.ref,cutoff:1,next_cursor:null,items:[{artifact_id:body.ref,ordinal:1,sequence:1,writer_id:'w',kind:'record',data:{step:0,image:svg},created_at:'2026-01-01'}]}});});
+  await page.getByRole('button',{name:'Refresh workspace',exact:true}).click();
+  const comparison=card(page,'Compare reconstructions');
+  await expect.poll(()=>comparison.locator('img').evaluateAll(nodes=>nodes.map(n=>(n as HTMLImageElement).naturalWidth))).toEqual([120,120]);
+  await comparison.getByRole('button',{name:'Enlarge image',exact:true}).first().click();
+  const dialog=page.getByRole('dialog');await expect(dialog.getByText('120 × 80',{exact:true})).toBeVisible();
+  await expect(dialog.getByText('This image format could not be decoded by the browser.')).toHaveCount(0);
+  expect(await dialog.locator('img').evaluate((n:HTMLImageElement)=>n.naturalWidth)).toBe(120);
+  await dialog.getByRole('button',{name:'Close media viewer'}).click();
+  await comparison.getByRole('button',{name:'Enlarge image',exact:true}).first().click();await expect(page.getByRole('dialog').getByText('120 × 80',{exact:true})).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 test('record filters support nested configuration and splitting never aggregates',async({page})=>{
   await fixture(page);await page.getByRole('button',{name:'Settings for Loss over training'}).click();const dialog=page.getByRole('dialog');
   await dialog.getByRole('tab',{name:'Mapping'}).click();await dialog.getByRole('button',{name:'Remove grouping @run',exact:true}).click();await dialog.getByRole('button',{name:'Done'}).click();
@@ -74,6 +94,26 @@ test('a failed later record page never leaves a partial plot',async({page})=>{
   await page.route('**/v1/records/query',async r=>{if(r.request().postDataJSON().cursor)return r.fulfill({status:503,json:{error:{message:'Record stream temporarily unavailable'}}});await r.fallback();});
   await page.getByRole('button',{name:'Refresh workspace',exact:true}).click();await expect(page.getByRole('alert')).toContainText('Record stream temporarily unavailable');await expect(card(page,'Loss over training').locator('.workspace-scalar-plot')).toHaveCount(0);
   await expect(card(page,'Loss over training')).toContainText('Data could not be loaded');
+});
+
+for(const scenario of [{name:'50,000 records',perRun:26001,padding:0},{name:'32 MiB',perRun:2000,padding:9000}])test(`complete selections above ${scenario.name} remain inspectable`,async({page})=>{
+  const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await fixture(page);
+  await page.getByRole('button',{name:'Save',exact:true}).click();
+  // Keep one scalar card so the assertion measures complete data, not duplicate renderers.
+  await page.evaluate(()=>{const key='cairn:workspace:v1:workspace-tests:workspace-test',saved=JSON.parse(localStorage.getItem(key)!);saved.layouts[0].cards=saved.layouts[0].cards.slice(0,1);localStorage.setItem(key,JSON.stringify(saved));});
+  let pages=0,bytes=0;
+  await page.route('**/v1/records/query',async route=>{
+    const body=route.request().postDataJSON(),start=Number(body.cursor||0),end=Math.min(start+1000,scenario.perRun);pages++;
+    const items=Array.from({length:end-start},(_,i)=>{const step=start+i;return {artifact_id:body.ref,ordinal:step+1,sequence:step,writer_id:'w',kind:'record',created_at:'2026-01-01',data:{step,loss:scenario.perRun-step,...(scenario.padding?{detail:'x'.repeat(scenario.padding)}:{})}};});
+    const response=JSON.stringify({artifact_id:body.ref,cutoff:scenario.perRun,next_cursor:end<scenario.perRun?String(end):null,items});bytes+=Buffer.byteLength(response);
+    await route.fulfill({contentType:'application/json',body:response});
+  });
+  await page.reload();
+  await expect(page.locator('.workspace-data-status')).toContainText(`${(2*scenario.perRun).toLocaleString()} records`,{timeout:20000});
+  const plot=card(page,'Loss over training').locator('.workspace-scalar-plot');
+  await expect.poll(()=>plot.evaluate((n:any)=>n.uplot?.data.slice(1).map((series:any)=>({count:series[0].length,first:series[0][0],last:series[0].at(-1),lastY:series[1].at(-1)})))).toEqual(Array(2).fill({count:scenario.perRun,first:0,last:scenario.perRun-1,lastY:1}));
+  expect(pages).toBe(2*Math.ceil(scenario.perRun/1000));if(scenario.padding)expect(bytes).toBeGreaterThan(32*1024*1024);
+  await expect(page.getByRole('alert')).toHaveCount(0);expect(errors).toEqual([]);
 });
 
 test('pointer resize and reordering remain undoable; saved demo reloads',async({page})=>{
@@ -103,12 +143,52 @@ test('run sidebar, section sizes and cross-section moves stay consistent',async(
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });
 
+test('full-width sections resize by pointer and keyboard and survive saving',async({page})=>{
+  await page.setViewportSize({width:1440,height:1000});await fixture(page);
+  const loss=card(page,'Loss over training'),section=page.locator('.workspace-section').first(),grid=section.locator('.workspace-grid');
+  const handle=loss.getByRole('button',{name:'Resize Loss over training'});
+  const grip=(await handle.boundingBox())!,bounds=(await grid.boundingBox())!;
+  await page.mouse.move(grip.x+8,grip.y+8);await page.mouse.down();await page.mouse.move(bounds.x+bounds.width-4,grip.y+8,{steps:8});await page.mouse.up();
+  for(const item of await section.locator('article').all())expect((await item.boundingBox())!.width).toBeCloseTo(bounds.width,0);
+  await handle.press('ArrowDown');await expect(loss).toHaveCSS('height','380px');
+  expect((await loss.boundingBox())!.width).toBeCloseTo(bounds.width,0);
+  for(const span of [6,4,3,3]){await handle.press('ArrowLeft');expect(await loss.evaluate(n=>n.style.getPropertyValue('--card-span'))).toBe(String(span));}
+  for(const span of [4,6,12,12]){await handle.press('ArrowRight');expect(await loss.evaluate(n=>n.style.getPropertyValue('--card-span'))).toBe(String(span));}
+  await page.getByRole('button',{name:'Save',exact:true}).click();await page.reload();
+  await expect(loss).toHaveCSS('height','380px');
+  for(const item of await section.locator('article').all())expect((await item.boundingBox())!.width).toBeCloseTo((await grid.boundingBox())!.width,0);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});
+
 test('legacy mixed card sizes load without rewriting the saved layout',async({page})=>{
   await fixture(page);await page.getByRole('button',{name:'Save',exact:true}).click();
   const original=await page.evaluate(()=>{const key='cairn:workspace:v1:workspace-tests:workspace-test',saved=JSON.parse(localStorage.getItem(key)!);saved.layouts[0].cards[0].width=8;saved.layouts[0].cards[1].width=3;saved.layouts[0].cards[1].height=800;const raw=JSON.stringify(saved);localStorage.setItem(key,raw);return raw;});
   await page.reload();await expect(card(page,'Loss over training')).toHaveCSS('height','360px');await expect(card(page,'Quality by camera angle')).toHaveCSS('height','360px');
   expect(await card(page,'Quality by camera angle').evaluate(n=>n.style.getPropertyValue('--card-span'))).toBe('6');
   expect(await page.evaluate(()=>localStorage.getItem('cairn:workspace:v1:workspace-tests:workspace-test'))).toBe(original);
+});
+
+test('saved workspaces stay separate across projects and repositories',async({page})=>{
+  const other='another-project';await fixture(page,[project,other]);
+  await page.route('**/ui-api/artifacts?*',async r=>{if(new URL(r.request().url()).searchParams.get('project')===other)return r.fulfill({json:{items:[],total:0}});await r.fallback();});
+  const rename=async(from:string,to:string)=>{await page.getByRole('button',{name:`Settings for ${from}`,exact:true}).click();const dialog=page.getByRole('dialog');await dialog.getByLabel('Card title').fill(to);await dialog.getByRole('button',{name:'Done',exact:true}).click();};
+  await rename('Loss over training','Project A loss');
+  const keyA=`cairn:workspace:v1:workspace-tests:${project}`,keyB=`cairn:workspace:v1:workspace-tests:${other}`;
+  const savedA=await page.evaluate(key=>localStorage.getItem(key),keyA);
+  await page.getByRole('button',{name:'Choose project',exact:true}).click();
+  const switchProject=async(name:string)=>{await page.getByRole('button',{name:'Project',exact:true}).click();await page.getByRole('listbox',{name:'Project',exact:true}).getByText(name,{exact:true}).click();await expect(page).toHaveURL(new RegExp(`/p/${name}/workspace$`));};
+  await switchProject(other);await expect(card(page,'Project A loss')).toHaveCount(0);await expect(page.locator('.workspace-data-status')).toContainText('0 runs');
+  await rename('Loss over training','Project B loss');
+  expect(await page.evaluate(key=>localStorage.getItem(key),keyA)).toBe(savedA);
+  const savedB=await page.evaluate(key=>localStorage.getItem(key),keyB);
+  await switchProject(project);await expect(card(page,'Project A loss')).toBeVisible();await expect(card(page,'Project B loss')).toHaveCount(0);
+  await switchProject(other);await expect(card(page,'Project B loss')).toBeVisible();
+  // A different repository with the same project name has its own layout.
+  await page.route('**/ui-api/session',r=>r.fulfill({json:{authenticated:true,no_auth:true,repository_id:'another-repository'}}));
+  await page.reload();await expect(card(page,'Project B loss')).toHaveCount(0);await rename('Loss over training','Other repository loss');
+  expect(await page.evaluate(key=>localStorage.getItem(key),keyB)).toBe(savedB);
+  await page.route('**/ui-api/session',r=>r.fulfill({json:{authenticated:true,no_auth:true,repository_id:'workspace-tests'}}));
+  await page.reload();await expect(card(page,'Project B loss')).toBeVisible();await expect(card(page,'Other repository loss')).toHaveCount(0);
 });
 
 test('one eye control drives run visibility without reshuffling colors',async({page})=>{
@@ -201,6 +281,14 @@ test('uPlot supports point inspection, drag zoom, reset, legend visibility and r
   for(const name of ['workspace-demo/a · v2','workspace-demo/b · v1'])await loss.getByRole('button',{name,exact:true}).click();await expect(loss.locator('canvas')).toBeVisible();await loss.getByRole('button',{name:'workspace-demo/a · v2',exact:true}).click();
   await loss.getByRole('button',{name:'Resize Loss over training'}).press('ArrowDown');await expect.poll(()=>plot.evaluate((n:any)=>n.uplot.height===n.clientHeight)).toBe(true);
   expect(errors).toEqual([]);
+});
+
+test('video fields become video cards that play inline and enlarge',async({page})=>{
+  await fixture(page);await page.getByRole('button',{name:'Add card',exact:true}).click();const dialog=page.getByRole('dialog');
+  await dialog.getByRole('button',{name:'Video',exact:true}).click();await expect(dialog.getByRole('button',{name:'Video field',exact:true})).toHaveText('video');
+  await dialog.getByRole('button',{name:'Add card',exact:true}).click();const videos=card(page,'Videos');await videos.scrollIntoViewIfNeeded();
+  await expect.poll(()=>videos.locator('video').first().evaluate((v:HTMLVideoElement)=>v.readyState)).toBeGreaterThan(0);
+  await videos.getByRole('button',{name:'Enlarge video',exact:true}).first().click();await expect(page.getByRole('dialog').locator('video')).toBeVisible();
 });
 
 test('palette menus work in media cards and no workspace selector uses native controls',async({page})=>{

@@ -82,16 +82,19 @@ class Directory(TypedValue):
         root = Path(source)
         if not root.is_dir():
             raise ValidationError("Directory source must be a directory")
-        files = []
-        blobs = []
-        for path in sorted(root.rglob("*")):
-            if path.is_symlink():
-                raise ValidationError(f"Directory captures do not follow symlinks: {path}")
-            if path.is_file():
-                name = safe_path(path.relative_to(root).as_posix())
+        from .datasets import INLINE_BYTES, PAGE_ITEMS, walk
+
+        self.source = root.absolute()
+        files, blobs, size, large = [], [], 0, False
+        for name, path in walk(root):
+            size += path.stat().st_size
+            if size > INLINE_BYTES or len(files) >= PAGE_ITEMS:
+                large = True
+            if not large:
                 files.append(name)
                 blobs.append(Blob(path, name, mimetypes.guess_type(name)[0]))
-        super().__init__("directory", {"name": root.name, "files": files}, blobs)
+        self.large = large
+        super().__init__("directory", {"name": root.name, "files": files}, [] if large else blobs)
 
 
 class Image(TypedValue):
@@ -213,8 +216,17 @@ def _blob_descriptor(blob):
     return dict(blob)
 
 
-def encode(value, put_blob):
+def encode(value, put_blob, *, large=None):
     """Convert Python values to JSON, committing immutable bytes through put_blob."""
+    if isinstance(value, Directory) and value.large:
+        if large is None:
+            raise Unsupported("Large directories must be uploaded through a Cairn client")
+        return large(value)
+    if isinstance(value, File) and isinstance(value.blobs[0].source, (str, os.PathLike)):
+        from .datasets import INLINE_BYTES
+
+        if Path(value.blobs[0].source).stat().st_size > INLINE_BYTES and large is not None:
+            return large(value)
     if isinstance(value, StoredValue):
         for kind, dependency in references(value.envelope):
             if kind == "blob":
@@ -224,7 +236,7 @@ def encode(value, put_blob):
     if isinstance(value, TypedValue):
         if not isinstance(value.format, str) or not value.format:
             raise ValidationError("A typed value format must be a non-empty string")
-        data = encode(value.data, put_blob)
+        data = encode(value.data, put_blob, large=large)
         blobs = []
         for blob in value.blobs:
             if isinstance(blob, dict):
@@ -258,7 +270,7 @@ def encode(value, put_blob):
     elif isinstance(value, dict):
         if not all(isinstance(key, str) for key in value):
             raise ValidationError("JSON object keys must be strings")
-        result = {key: encode(item, put_blob) for key, item in value.items()}
+        result = {key: encode(item, put_blob, large=large) for key, item in value.items()}
         if "$cairn" in value:
             dependencies = [
                 dependency for item in result.values() for dependency in references(item)
@@ -272,7 +284,7 @@ def encode(value, put_blob):
                 "refs": [d for kind, d in dependencies if kind == "ref"],
             }
     elif isinstance(value, (list, tuple)):
-        result = [encode(item, put_blob) for item in value]
+        result = [encode(item, put_blob, large=large) for item in value]
     elif value is None or isinstance(value, (str, int, float, bool)):
         result = value
     else:
@@ -308,7 +320,41 @@ class StoredValue:
     def refs(self):
         return self.envelope["refs"]
 
+    def file(self, name):
+        if self.format == "directory" and self.version == 2:
+            from .datasets import file_value
+
+            return file_value(self, name)
+        matches = [b for b in self.blobs if b.get("name") == safe_path(name)]
+        if len(matches) != 1:
+            raise NotFound(f"No file named {name!r}")
+        return StoredValue(
+            {
+                "$cairn": 1,
+                "format": "file",
+                "version": 1,
+                "data": {"name": name},
+                "blobs": matches,
+                "refs": [],
+            },
+            self.backend,
+        )
+
+    def iter_files(self):
+        if self.format == "directory" and self.version == 2:
+            from .datasets import entries
+
+            yield from (e["first"] for e in entries(self.backend, self.data["node"]))
+        else:
+            yield from (b.get("name", b["digest"]) for b in self.blobs)
+
     def open(self, name=None):
+        if self.format == "directory" and name is not None:
+            return self.file(name).open()
+        if self.format == "file" and self.version == 2:
+            from .datasets import ChunkStream
+
+            return io.BufferedReader(ChunkStream(self))
         matches = [blob for blob in self.blobs if name is None or blob.get("name") == name]
         if len(matches) != 1:
             raise NotFound("Select exactly one blob by its name")
@@ -344,6 +390,19 @@ class StoredValue:
         return self.data
 
     def download(self, to=None, *, name=None):
+        if self.version == 2 and self.format in {"directory", "file"}:
+            from .datasets import download_file
+
+            if to is None:
+                to = cache_root() / "values" / hashlib.sha256(canonical(self.envelope)).hexdigest()
+            if self.format == "file":
+                return download_file(self, to, name or self.data["name"])
+            if name is not None:
+                return download_file(self.file(name), to, name)
+            for filename in self.iter_files():
+                download_file(self.file(filename), to, filename)
+            Path(to).mkdir(parents=True, exist_ok=True)
+            return Path(to)
         selected = [blob for blob in self.blobs if name is None or blob.get("name") == name]
         if not selected:
             raise NotFound("No matching downloadable blobs")

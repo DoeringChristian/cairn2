@@ -27,8 +27,11 @@ def _json(value: str):
         raise argparse.ArgumentTypeError(f"Invalid JSON: {exc}") from exc
 
 
-def _watch_comments(client, reference, interval, as_json):
-    """Open threads with comments sent to an agent, printed again whenever one is (re)sent."""
+def _watch_comments(client, reference, interval, as_json, once=False):
+    """Open threads with comments sent to an agent, printed again whenever one is (re)sent.
+
+    With ``once``, wait for threads with a comment sent after their last reply, print them and stop.
+    """
     import time
 
     import httpx
@@ -49,6 +52,7 @@ def _watch_comments(client, reference, interval, as_json):
             thread
             for thread in threads.values()
             if any(c["sent_at"] and (c["id"], c["sent_at"]) not in seen for c in thread)
+            and (not once or _unanswered(thread))
         ]
         seen.update((c["id"], c["sent_at"]) for thread in batch for c in thread if c["sent_at"])
         if batch:
@@ -56,7 +60,54 @@ def _watch_comments(client, reference, interval, as_json):
                 print(json.dumps(batch, ensure_ascii=False), flush=True)
             else:
                 print("\n".join(_comment_line(c) for thread in batch for c in thread), flush=True)
+            if once:
+                return 0
         time.sleep(interval)
+
+
+def _watch_report(client, name, after, settle, interval):
+    """Wait for body edits past revision ``after`` that rested ``settle`` seconds, or for threads
+    with a comment sent after their last reply; print the report with them and stop."""
+    import time
+    from datetime import UTC, datetime
+
+    import httpx
+
+    from .model import Pending
+
+    report_id = client._report_id(name)
+    while True:
+        try:
+            report = client.backend.report(report_id)
+            found = client.backend.report_comments(report_id, include_resolved=False)
+        except (Pending, httpx.TransportError) as exc:
+            print(f"cairn: {exc}; retrying", file=sys.stderr)
+            time.sleep(interval)
+            continue
+        body = report["parts"]["body"]
+        after = body["revision"] if after is None else after
+        rested = datetime.now(UTC) - datetime.fromisoformat(body["updated_at"])
+        edited = body["revision"] > after and rested.total_seconds() >= settle
+        threads = {}
+        for comment in found:
+            threads.setdefault(comment["reply_to"] or comment["id"], []).append(comment)
+        waiting = [thread for thread in threads.values() if _unanswered(thread)]
+        if edited or waiting:
+            print(
+                json.dumps({"report": report, "edited": edited, "threads": waiting}),
+                flush=True,
+            )
+            return 0
+        time.sleep(interval)
+
+
+def _unanswered(thread):
+    answered = max((c["created_at"] for c in thread if not c["for_agent"]), default="")
+    return any(c["sent_at"] and c["sent_at"] > answered for c in thread)
+
+
+def _source(path):
+    return sys.stdin.read() if path == "-" else Path(path).read_text("utf-8")
 
 
 def _print(value):
@@ -68,7 +119,8 @@ def _comment_line(comment):
     if "line_start" in anchor:
         end = anchor.get("line_end", anchor["line_start"])
         where += f":{anchor['line_start']}" + (f"-{end}" if end != anchor["line_start"] else "")
-    parts = [comment["id"], f"{comment['namespace']}/{comment['name']}@v{comment['number']}", where]
+    target = f"{comment['namespace']}/{comment['name']}"
+    parts = [comment["id"], target + (f"@v{comment['number']}" if comment["number"] else ""), where]
     if comment.get("reply_to"):
         parts[1:] = [f"↳ {comment['reply_to']}"]
     if comment.get("author"):
@@ -133,7 +185,7 @@ def _storage_arguments(parser):
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(
-        prog="cairn", description="Versioned artifacts, Python runs, and local executable reports."
+        prog="cairn", description="Versioned artifacts, Python runs, and reports."
     )
     root.add_argument(
         "--repo", metavar="PATH|URL", help="Repository path or server URL (otherwise discovery)"
@@ -195,6 +247,9 @@ def parser() -> argparse.ArgumentParser:
     watch.add_argument("reference", nargs="?", help="A reference or name pattern; default all")
     watch.add_argument("--interval", type=float, default=5.0, help="Seconds between checks")
     watch.add_argument("--json", action="store_true", help="Print each batch as one JSON line")
+    watch.add_argument(
+        "--once", action="store_true", help="Stop after the first batch of unanswered threads"
+    )
     watch.set_defaults(action="comment-watch")
     resolve = comments.add_parser("resolve", help="Mark a comment as addressed")
     resolve.add_argument("comment_id")
@@ -262,42 +317,47 @@ def parser() -> argparse.ArgumentParser:
     update.set_defaults(action="log", kind="metadata", sequence=None)
 
     reports = commands.add_parser(
-        "report", help="Build a supported QMD/Markdown subset locally"
+        "report", help="Reports: the author's text with slots that agents fill"
     ).add_subparsers(dest="report_command", required=True)
-    new = reports.add_parser("new", help="Create a report source; default NewReport.qmd")
-    new.add_argument("destination", nargs="?", default="NewReport.qmd")
-    new.add_argument("--title", default="New report")
-    new.set_defaults(action="report-new")
-    build = reports.add_parser(
-        "build", help="Execute a fresh Python kernel, record inputs, and create a portable bundle"
-    )
-    build.add_argument("source")
-    build.add_argument("overrides", nargs="*", help="Hydra overrides of the front-matter config")
-    build.add_argument(
-        "--multirun", "-m", action="store_true", help="One build per combination of sweep values"
-    )
-    build.add_argument("--output", "-o")
-    build.add_argument("--timeout", type=int, default=120)
-    build.add_argument("--kernel", default="python3")
-    build.add_argument("--publish", action="store_true")
-    build.add_argument("--name", help="Artifact name when --publish is set")
-    build.set_defaults(action="report-build")
-    publish = reports.add_parser(
-        "publish", help="Publish a verified complete build as a report artifact"
-    )
-    publish.add_argument("directory")
-    publish.add_argument("--name")
-    publish.set_defaults(action="report-publish")
-    for operation in ("copy", "export"):
-        sub = reports.add_parser(
-            operation,
-            help="Copy editable report source"
-            if operation == "copy"
-            else "Export all portable report files",
-        )
-        sub.add_argument("reference")
-        sub.add_argument("destination")
+    reports.add_parser("list", help="Reports of the project").set_defaults(action="report-list")
+    for operation, text in (
+        ("show", "Print a report's parts with their revisions"),
+        ("delete", "Remove a report with its revisions and comments"),
+    ):
+        sub = reports.add_parser(operation, help=text)
+        sub.add_argument("name")
         sub.set_defaults(action="report-" + operation)
+    new = reports.add_parser("new", help="Create a report")
+    new.add_argument("name")
+    new.add_argument("source", nargs="?", help="File with the body, or - for standard input")
+    new.add_argument("--by", help="Who writes it")
+    new.set_defaults(action="report-new")
+    write = reports.add_parser("write", help="Save a new revision of one part")
+    write.add_argument("name")
+    write.add_argument("part", help="An agent slot, or body for the author's text")
+    write.add_argument("source", nargs="?", default="-", help="File, or - for standard input")
+    write.add_argument("--revision", type=int, help="Fail unless the part is at this revision")
+    write.add_argument("--by", help="Who writes it, e.g. an agent name")
+    write.set_defaults(action="report-write")
+    comment = reports.add_parser("comment", help="Comment on a part, e.g. to flag a problem")
+    comment.add_argument("name")
+    comment.add_argument("body")
+    comment.add_argument("--quote", help="The passage the comment is about")
+    comment.add_argument("--part", default="body")
+    comment.add_argument("--by", help="Who comments, e.g. an agent name")
+    comment.set_defaults(action="report-comment")
+    watch = reports.add_parser(
+        "watch", help="Wait for edits to the body or comments sent to an agent, print them, stop"
+    )
+    watch.add_argument("name")
+    watch.add_argument(
+        "--after", type=int, help="Body revision already handled; default the current one"
+    )
+    watch.add_argument(
+        "--settle", type=float, default=30.0, help="Seconds an edit rests before it counts"
+    )
+    watch.add_argument("--interval", type=float, default=5.0, help="Seconds between checks")
+    watch.set_defaults(action="report-watch")
 
     repository_parser = commands.add_parser(
         "repo", help="Repository transfer, integrity checks and garbage collection"
@@ -309,7 +369,7 @@ def parser() -> argparse.ArgumentParser:
         sub.add_argument(argument)
         sub.set_defaults(action="repo-" + operation)
     repositories.add_parser(
-        "migrate", help="Upgrade a schema 6 repository in place; export a backup first"
+        "migrate", help="Upgrade a schema 6 or 7 repository in place; export a backup first"
     ).set_defaults(action="repo-migrate")
     check = repositories.add_parser("check")
     check.add_argument("--verify-blobs", action="store_true")
@@ -426,7 +486,7 @@ def _serve(args):
         repository = _repository(args)
         repository.link_roots = [Path(root).resolve() for root in args.link_root]
     except Unsupported as exc:
-        if exc.details.get("schema_version") != 6 or not sys.stdin.isatty():
+        if exc.details.get("schema_version") not in (6, 7) or not sys.stdin.isatty():
             raise
         print(
             f"{exc}.\nMigrate this repository to the current schema now? [y/N] ",
@@ -573,7 +633,7 @@ def _dispatch(args, client):
     if action == "comment-reply":
         return client.reply_comment(args.comment_id, args.body, by=args.by)
     if action == "comment-watch":
-        return _watch_comments(client, args.reference, args.interval, args.json)
+        return _watch_comments(client, args.reference, args.interval, args.json, args.once)
     if action == "comment-resolve":
         return client.resolve_comment(args.comment_id, note=args.note, by=args.by)
     if action == "comment-reopen":
@@ -591,35 +651,25 @@ def _dispatch(args, client):
                 _close_writer(backend, args.artifact_id, args.writer)
             kwargs.update(outcome=args.outcome)
         return getattr(backend, action)(args.artifact_id, **kwargs)
-    if action.startswith("report-"):
-        from . import reports
-
-        if action == "report-build":
-            outputs = []
-            sweeps = reports.sweep(args.overrides) if args.multirun else [args.overrides]
-            for index, overrides in enumerate(sweeps):
-                directory = args.output
-                if args.multirun and directory is not None:
-                    directory = Path(directory) / str(index)
-                result = reports.build(
-                    args.source,
-                    directory,
-                    client=client,
-                    timeout=args.timeout,
-                    kernel_name=args.kernel,
-                    overrides=overrides,
-                )
-                output = {"directory": str(result.directory), "manifest": result.manifest}
-                if args.publish:
-                    output["publication"] = reports.publish(
-                        result.directory, client=client, name=args.name
-                    )
-                outputs.append(output)
-            return outputs if args.multirun else outputs[0]
-        if action == "report-publish":
-            return reports.publish(args.directory, client=client, name=args.name)
-        operation = reports.copy if action == "report-copy" else reports.export
-        return {"path": str(operation(args.reference, args.destination, client=client))}
+    if action == "report-list":
+        return client.reports()
+    if action == "report-show":
+        return client.report(args.name)
+    if action == "report-delete":
+        return client.delete_report(args.name)
+    if action == "report-new":
+        body = _source(args.source) if args.source else ""
+        return client.create_report(args.name, body, by=args.by)
+    if action == "report-write":
+        return client.write_report(
+            args.name, args.part, _source(args.source), expected_revision=args.revision, by=args.by
+        )
+    if action == "report-comment":
+        return client.comment_report(
+            args.name, args.body, quote=args.quote, part=args.part, by=args.by
+        )
+    if action == "report-watch":
+        return _watch_report(client, args.name, args.after, args.settle, args.interval)
     if action.startswith("repo-"):
         from .ops import check_repository, export_repository, import_repository
         from .storage import Repository
@@ -647,19 +697,10 @@ def _dispatch(args, client):
 def main(argv=None) -> int:
     """Return an exit code; errors are machine-readable JSON on stderr."""
     command = parser()
-    args, extra = command.parse_known_args(argv)
-    if extra:
-        if args.action != "report-build" or any(item.startswith("-") for item in extra):
-            command.error("unrecognized arguments: " + " ".join(extra))
-        args.overrides += extra
+    args = command.parse_args(argv)
     try:
         if args.action == "server":
             _serve(args)
-            return 0
-        if args.action == "report-new":
-            from .reports import new
-
-            _print({"path": str(new(args.destination, title=args.title))})
             return 0
         from .config import resolve_project
         from .sdk import Client

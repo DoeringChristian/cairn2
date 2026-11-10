@@ -262,6 +262,45 @@ class Client:
             comment_id, resolved=False, request_id=new_id("request")
         )
 
+    def _report_id(self, name):
+        for report in self.backend.reports(project=self.project):
+            if report["name"] == name:
+                return report["id"]
+        raise NotFound(f"Unknown report: {name}")
+
+    def reports(self):
+        return self.backend.reports(project=self.project)
+
+    def report(self, name):
+        """The report's parts: the author's body and the agent's slots, each with its revision."""
+        return self.backend.report(self._report_id(name))
+
+    def create_report(self, name, body="", *, by=None):
+        return self.backend.create_report(
+            self.project, name, body=body, author=by, request_id=new_id("request")
+        )
+
+    def write_report(self, name, part, source, *, expected_revision=None, by=None):
+        """Save one part; agents write the slots the body leaves them, never the body."""
+        return self.backend.write_report(
+            self._report_id(name),
+            part,
+            source,
+            expected_revision=expected_revision,
+            author=by,
+            request_id=new_id("request"),
+        )
+
+    def delete_report(self, name):
+        return self.backend.delete_report(self._report_id(name), request_id=new_id("request"))
+
+    def comment_report(self, name, body, *, quote=None, part="body", by=None):
+        """Comment on a part, on the passage quote when given."""
+        anchor = {"path": part, **({"quote": quote} if quote else {})}
+        return self.backend.add_report_comment(
+            self._report_id(name), anchor, body, author=by, request_id=new_id("request")
+        )
+
     def flush(self, *, timeout=None):
         return self.delivery.flush(timeout=timeout) if self.delivery else {"pending": 0}
 
@@ -302,6 +341,7 @@ class Artifact:
         self._owns_client = False
         self._console = None
         self._dependencies = set()
+        self._encoded_datasets = {}
 
     def __repr__(self):
         ref = f"{self.namespace}/{self.name}"
@@ -315,14 +355,56 @@ class Artifact:
         return self.result.get("number") if self.result else None
 
     def _encode(self, value, *, describe=False, link=False):
+        def large(item):
+            from .datasets import fingerprint, upload, walk
+
+            if link:
+                # Shared-path captures keep their existing no-copy representation.
+                put = (
+                    self.client.delivery.stage_blob
+                    if self.client.delivery
+                    else self.client.backend.put_blob
+                )
+                if isinstance(item, File):
+                    return encode(item, self._linker(put))
+                blobs = [File(path, name=name).blobs[0] for name, path in walk(item.source)]
+                value = TypedValue(
+                    "directory",
+                    {"name": item.data["name"], "files": [b.name for b in blobs]},
+                    blobs,
+                )
+                return encode(value, self._linker(put))
+
+            source = item.source if isinstance(item, Directory) else item.blobs[0].source
+            key = (
+                str(Path(source).absolute()),
+                item.data["name"],
+                fingerprint(source)[0],
+                isinstance(item, Directory),
+                item.data.get("media_type"),
+            )
+            if describe and key in self._encoded_datasets:
+                return self._encoded_datasets[key]
+            encoded = upload(
+                source,
+                self.client.backend,
+                self.client.project,
+                directory=isinstance(item, Directory),
+                name=item.data["name"],
+            )
+            if isinstance(item, File):
+                encoded["data"]["media_type"] = item.data["media_type"]
+            self._encoded_datasets[key] = encoded
+            return encoded
+
         if describe:
-            return encode(value, _describe_blob)
+            return encode(value, _describe_blob, large=large)
         put_blob = (
             self.client.delivery.stage_blob
             if self.client.delivery
             else self.client.backend.put_blob
         )
-        return encode(value, self._linker(put_blob) if link else put_blob)
+        return encode(value, self._linker(put_blob) if link else put_blob, large=large)
 
     def _linker(self, put_blob):
         def store(source):
@@ -348,6 +430,9 @@ class Artifact:
                 [{"sequence": self._sequence, "kind": kind, "data": encoded}],
             )
             self._sequence += 1
+            from .datasets import retire
+
+            retire(self.client.backend, encoded)
             return result
 
     def log(self, data=None, *, step=None, **fields):
@@ -507,6 +592,10 @@ class Artifact:
                     self._finish_args = None
                     self._finish_request = new_id("request")
                 raise
+            if not self.client.delivery:
+                from .datasets import retire
+
+                retire(self.client.backend, args)
             if self._owns_client:
                 self.client.close()
             return copy.deepcopy(self.result)
@@ -678,13 +767,29 @@ class Reader:
 
     def file(self, name):
         captures = self._manifest.get("captures", {})
-        if name not in captures:
-            raise NotFound(f"No added file or folder named {name!r}")
-        return decode(captures[name], self.client.backend)
+        if name in captures:
+            return decode(captures[name], self.client.backend)
+        for prefix in sorted(captures, key=len, reverse=True):
+            if name.startswith(prefix + "/"):
+                stored = decode(captures[prefix], self.client.backend)
+                if isinstance(stored, StoredValue) and stored.format == "directory":
+                    return stored.file(name[len(prefix) + 1 :])
+        value = self.value
+        if isinstance(value, StoredValue):
+            if value.format == "directory":
+                return value.file(name)
+            if value.format == "file" and value.data.get("name") == name:
+                return value
+        raise NotFound(f"No added file or folder named {name!r}")
 
     def download(self, name=None, *, to=None):
         root = Path(to) if to is not None else cache_root() / "artifacts" / self.id
         manifest = self._manifest
+        from .datasets import download_reader
+
+        large_result = download_reader(self, name, root)
+        if large_result is not None:
+            return large_result
         if name is None:
             added, value = self.files, manifest.get("value")
         elif name in manifest.get("captures", {}):
@@ -735,7 +840,6 @@ class Reader:
 
 
 _default = contextvars.ContextVar("cairn_default_artifact", default=None)
-_report = None
 
 
 def init(
@@ -913,8 +1017,8 @@ def remove(ref, *, repo=None, project=None):
 
 
 def _reading():
-    """The run, artifact or report that records what is read."""
-    target = _default.get() or _report
+    """The run or artifact that records what is read."""
+    target = _default.get()
     if target is None:
         raise ValidationError(
             "Call cairn.init() first, or read without recording with cairn.Client()"
@@ -928,7 +1032,7 @@ def find(pattern, *, where=None, order=None, limit=None):
 
 
 def use(ref, *, role="input"):
-    """A reader recorded as an input of the current run or report."""
+    """A reader recorded as an input of the current run."""
     return _reading().use(ref, role=role)
 
 

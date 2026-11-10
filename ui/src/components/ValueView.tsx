@@ -1,27 +1,16 @@
 import { ZoomImage } from './ZoomImage';
-import { useEffect, useState } from 'react';
+import { useImageBlob } from './useBlobUrl';
 import { bytes, envelope, type BlobRef, type Json } from '../api';
 import { DataTable } from './Table';
 import { JsonBlock } from './Code';
 import { Hint, ErrorNote, Loading } from './States';
 import { LinkButton } from './Button';
 import { Pill } from './Pill';
-export function BlobTable({blobs}: {blobs: BlobRef[]}) {
-  return blobs.length ? <DataTable head={['File','Size','Content','Download']}>{blobs.map((b,i)=><tr key={`${b.digest}-${i}`}><td className="wrap-any">{b.name || b.digest.slice(0,16)}</td><td className="nowrap">{bytes(b.size)}</td><td><code title={b.digest}>{b.digest.slice(0,12)}…</code></td><td><LinkButton small href={`/v1/blobs/${b.digest}`} download={b.name || b.digest}>Download</LinkButton></td></tr>)}</DataTable> : <Hint>No files attached.</Hint>;
+export function BlobTable({blobs}: {blobs: (BlobRef & {href?: string})[]}) {
+  return blobs.length ? <DataTable head={['File','Size','Content','Download']}>{blobs.map((b,i)=><tr key={`${b.digest}-${i}`}><td className="wrap-any">{b.name || b.digest.slice(0,16)}</td><td className="nowrap">{bytes(b.size)}</td><td><code title={b.digest}>{b.digest.slice(0,12)}…</code></td><td><LinkButton small href={b.href || `/v1/blobs/${b.digest}`} download={b.name || b.digest}>Download</LinkButton></td></tr>)}</DataTable> : <Hint>No files attached.</Hint>;
 }
 export function ImagePreview({blob}: {blob: BlobRef}) {
-  const [url,setUrl] = useState<string>(), [error,setError]=useState<Error>();
-  useEffect(()=>{
-    if(blob.size>20*1024**2) return;
-    const controller = new AbortController(); let objectUrl: string | undefined;
-    setUrl(undefined); setError(undefined);
-    fetch(`/v1/blobs/${blob.digest}`,{signal:controller.signal}).then(async response=>{
-      if(!response.ok) throw new Error('Could not load image');
-      const data=await response.blob(); if(controller.signal.aborted) return;
-      objectUrl=URL.createObjectURL(new Blob([data],{type:blob.media_type || (blob.name?.endsWith('.svg')?'image/svg+xml':'image/png')})); setUrl(objectUrl);
-    }).catch(e=>{if(!controller.signal.aborted)setError(e);});
-    return ()=>{controller.abort();if(objectUrl)URL.revokeObjectURL(objectUrl);};
-  },[blob.digest,blob.size,blob.name,blob.media_type]);
+  const {url,error}=useImageBlob(blob,blob.size<=20*1024**2);
   if(blob.size>20*1024**2) return <Hint>Image exceeds the 20 MiB preview limit. Download it to view.</Hint>;
   return <>{error ? <ErrorNote error={error}/> : !url ? <Loading what="Loading image"/> : <figure className="image-preview"><ZoomImage src={url} alt={blob.name || 'Artifact image'}/><figcaption>{blob.name} · Click to enlarge and zoom</figcaption></figure>}</>;
 }

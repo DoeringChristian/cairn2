@@ -1,7 +1,6 @@
 import json
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -100,17 +99,6 @@ def test_cli_add_publishes_files_and_folders_as_the_next_version(tmp_path, capsy
     assert invoke(capsys, repo, "inspect", "datasets/shapes")["number"] == 2
 
 
-def test_report_new_default_and_machine_readable_error(tmp_path, monkeypatch, capsys):
-    monkeypatch.chdir(tmp_path)
-    assert main(["report", "new"]) == 0
-    created = json.loads(capsys.readouterr().out)
-    assert Path(created["path"]).name == "NewReport.qmd"
-    assert not (tmp_path / ".cairn/repo").exists()
-    assert main(["report", "new"]) == 1
-    error = json.loads(capsys.readouterr().err)
-    assert "already exists" in error["message"]
-
-
 def test_python_module_cli_help():
     result = subprocess.run(
         [sys.executable, "-m", "cairn", "--help"], capture_output=True, text=True, check=True
@@ -130,30 +118,6 @@ def test_cli_uses_shared_repo_discovery(tmp_path, monkeypatch, capsys):
     assert main(["info"]) == 0
     assert json.loads(capsys.readouterr().out)["repository_id"]
     assert (tmp_path / "configured-repo/metadata.sqlite3").is_file()
-
-
-def test_cli_report_build_publish_copy_export(tmp_path, capsys):
-    repo = tmp_path / "repo"
-    source = invoke(capsys, repo, "report", "new", str(tmp_path / "report.qmd"))["path"]
-    result = invoke(
-        capsys,
-        repo,
-        "report",
-        "build",
-        source,
-        "--output",
-        str(tmp_path / "build"),
-        "--publish",
-        "--name",
-        "cli-report",
-    )
-    artifact_id = result["publication"]["id"]
-    assert invoke(capsys, repo, "inspect", "reports/cli-report@latest")["id"] == artifact_id
-    assert result["manifest"]["status"] == "complete"
-    copied = invoke(capsys, repo, "report", "copy", artifact_id, str(tmp_path / "copy"))
-    assert Path(copied["path"]).is_file()
-    exported = invoke(capsys, repo, "report", "export", artifact_id, str(tmp_path / "export"))
-    assert (Path(exported["path"]) / "index.html").is_file()
 
 
 def test_cli_annotations_and_metadata_discovery(tmp_path, capsys):

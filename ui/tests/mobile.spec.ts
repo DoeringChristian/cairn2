@@ -1,4 +1,5 @@
 import {test, expect, type Page} from '@playwright/test';
+import {reportPage} from './fixtures';
 
 async function fits(page: Page, width: number) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
@@ -7,7 +8,6 @@ async function fits(page: Page, width: number) {
       test(`mobile navigation, lists, reports and lightbox ${viewport.width}`, async ({page, request}) => {
         await page.setViewportSize(viewport);
         const {items} = await (await request.get('/v1/artifacts?project=neural-rendering')).json();
-        const report = items.filter((item:any) => item.namespace === 'reports' && item.name === 'report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
         const run = items.find((item:any) => item.namespace === 'runs');
         await page.goto('/');
         await expect(page.getByRole('heading', {name:'Projects',exact:true})).toBeVisible();
@@ -29,7 +29,7 @@ async function fits(page: Page, width: number) {
           await page.getByRole('tab',{name:tab,exact:true}).tap();
           await fits(page,viewport.width);
         }
-        await page.goto(`/p/neural-rendering/a/${report.id}`);
+        await page.goto(reportPage);
         await expect(page.locator('article.native-document')).toBeVisible();
         await fits(page,viewport.width);
         if (viewport.width <= 760) {
@@ -60,7 +60,7 @@ async function fits(page: Page, width: number) {
         expect((await close.boundingBox())!.height).toBeGreaterThanOrEqual(44);
         await close.tap();
         await expect(dialog).toHaveCount(0);
-        await page.getByRole('button',{name:'Enlarge Python cell image output',exact:true}).first().tap();
+        await page.getByRole('button',{name:'Enlarge Field at the start',exact:true}).first().tap();
         await expect(dialog).toBeVisible();
         await dialog.getByRole('button',{name:'Zoom in',exact:true}).tap();
         await expect(dialog.getByLabel('Zoom level')).toHaveText('125%');

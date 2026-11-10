@@ -152,11 +152,18 @@ def dependencies(value):
                     type(item["$cairn"]) is not int
                     or item["$cairn"] != 1
                     or type(item.get("version")) is not int
-                    or item["version"] != 1
+                    or (
+                        item["version"] != 1
+                        and not (
+                            item["version"] == 2 and item.get("format") in {"file", "directory"}
+                        )
+                    )
                 ):
                     raise Unsupported("Unsupported value envelope version")
                 if not isinstance(item.get("format"), str) or not item["format"]:
                     raise ValidationError("Typed values require a format")
+                if item["version"] == 2:
+                    _dataset_value(item)
                 if not isinstance(item.get("blobs", []), list) or not isinstance(
                     item.get("refs", []), list
                 ):
@@ -190,3 +197,35 @@ def dependencies(value):
     validate_json(value)
     visit(value)
     return list(blobs.values()), list(refs.values())
+
+
+def _dataset_value(item):
+    """Version-two file/directory roots must declare their immutable dependencies."""
+    data = item.get("data")
+    if not isinstance(data, dict):
+        raise ValidationError("Dataset values require an index descriptor")
+    safe_path(data.get("name"))
+    if type(data.get("size")) is not int or data["size"] < 0:
+        raise ValidationError("Dataset size must be a nonnegative integer")
+    node = data.get("node")
+    blobs, refs = item.get("blobs", []), item.get("refs", [])
+    if not isinstance(blobs, list) or not isinstance(refs, list):
+        raise ValidationError("Dataset blobs and refs must be lists")
+    if node is not None and (
+        not isinstance(node, str)
+        or blobs
+        or not any(isinstance(r, dict) and r.get("artifact_id") == node for r in refs)
+    ):
+        raise ValidationError("Dataset root must be retained by an explicit artifact reference")
+    if item["format"] == "directory":
+        if node is None or type(data.get("count")) is not int or data["count"] < 0:
+            raise ValidationError("Dataset directories require a root and file count")
+    else:
+        validate_digest(data.get("sha256"))
+        if node is None and (
+            len(blobs) != 1
+            or not isinstance(blobs[0], dict)
+            or blobs[0].get("size") != data["size"]
+            or blobs[0].get("digest") != data["sha256"]
+        ):
+            raise ValidationError("Inline dataset files require their exact content blob")

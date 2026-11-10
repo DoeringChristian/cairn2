@@ -2,14 +2,14 @@ import { commentColumnX, selectedTextRect, useAnchoredPosition } from './comment
 import { useCommentHighlights } from './CommentHighlights';
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, CheckCheck, RotateCcw, Send, Trash2 } from 'lucide-react';
+import { Check, CheckCheck, MessageSquare, RotateCcw, Send, Trash2 } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { api, post } from '../api';
 import { useRefresh } from '../refresh';
 import { ErrorNote } from './States';
 import { MediaIconButton } from './media/MediaIconButton';
 export type CommentAnchor={quote?:string;path?:string;line_start?:number;line_end?:number;media_key?:string;media_id?:string;media?:{time?:number;clip?:{start:number;end:number};region?:{x:number;y:number;width:number;height:number;imageWidth:number;imageHeight:number}}};
-export type Comment={id:string;artifact_id:string;anchor:CommentAnchor;body:string;created_at:string;number:number;author?:string|null;revision:number;resolved_at?:string|null;resolution?:{note?:string|null;by?:string|null}|null;reply_to?:string|null;for_agent?:boolean;sent_at?:string|null};
+export type Comment={id:string;artifact_id:string;anchor:CommentAnchor;body:string;created_at:string;number:number|null;author?:string|null;revision:number;resolved_at?:string|null;resolution?:{note?:string|null;by?:string|null}|null;reply_to?:string|null;for_agent?:boolean;sent_at?:string|null};
 const changed=(id?:string)=>window.dispatchEvent(new CustomEvent('cairn:comments',{detail:id}));
 const draftRequestId=()=>globalThis.crypto?.randomUUID?.()||`ui-comment-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
@@ -73,11 +73,11 @@ export function CommentComposer({artifact,anchor,position,getAnchorRect,onClose,
 }) {
   const context=useReportComments(),[root,setRoot]=useState(initial),[local,setLocal]=useState<Comment[]>([]);
   const currentRoot=context.items.find(c=>c.id===root?.id)||root;
-  const [initialDraft]=useState(()=>initial&&!initial.sent_at?initial:context.replies.find(c=>c.reply_to===initial?.id&&c.for_agent&&!c.sent_at));
+  const [initialDraft]=useState(()=>initial?.for_agent&&!initial.sent_at?initial:context.replies.find(c=>c.reply_to===initial?.id&&c.for_agent&&!c.sent_at));
   const remember=(comment:Comment)=>{setLocal(rows=>[...rows.filter(c=>c.id!==comment.id),comment]);if(!comment.reply_to)setRoot(comment);};
-  const draft=useDraft(artifact,anchor,initialDraft,initial?.sent_at?initial.id:undefined,remember,id=>{setRoot(current=>current?.id===id?undefined:current);setLocal(rows=>rows.filter(c=>c.id!==id));});
+  const draft=useDraft(artifact,anchor,initialDraft,initial&&(initial.sent_at||!initial.for_agent)?initial.id:undefined,remember,id=>{setRoot(current=>current?.id===id?undefined:current);setLocal(rows=>rows.filter(c=>c.id!==id));});
   const messages=Array.from(new Map([...context.replies.filter(c=>c.reply_to===root?.id),...(currentRoot?[currentRoot]:[]),...local].map(c=>[c.id,c])).values())
-    .filter(c=>c.sent_at||(c.reply_to&&!c.for_agent)||(c.id===currentRoot?.id&&currentRoot.resolved_at)).sort((a,b)=>(a.created_at||'').localeCompare(b.created_at||''));
+    .filter(c=>c.sent_at||!c.for_agent||(c.id===currentRoot?.id&&currentRoot.resolved_at)).sort((a,b)=>(a.created_at||'').localeCompare(b.created_at||''));
   const field=useRef<HTMLTextAreaElement>(null),popover=useRef<HTMLDivElement>(null),history=useRef<HTMLDivElement>(null);
   const placement=useAnchoredPosition(popover,getAnchorRect,position,portalTarget);
   useEffect(()=>{if(autoFocus)field.current?.focus({preventScroll:true});},[autoFocus]);
@@ -107,7 +107,7 @@ export function CommentComposer({artifact,anchor,position,getAnchorRect,onClose,
       {currentRoot&&<MediaIconButton label={currentRoot.resolved_at?'Reopen comment':'Resolve comment'} icon={currentRoot.resolved_at?RotateCcw:CheckCheck} disabled={draft.busy} onMouseDown={e=>e.preventDefault()} onClick={()=>void resolve()}/>}
       <MediaIconButton label="Delete comment" icon={Trash2} disabled={draft.busy} onMouseDown={e=>e.preventDefault()} onClick={async()=>{if(await draft.remove(root?.id))onClose(false);}}/>
     </header>
-    {currentRoot&&<small className="comment-context">{[`v${currentRoot.number}`,currentRoot.author].filter(Boolean).join(' · ')}</small>}
+    {currentRoot&&<small className="comment-context">{[currentRoot.number&&`v${currentRoot.number}`,currentRoot.author].filter(Boolean).join(' · ')}</small>}
     {!!messages.length&&<div className="comment-messages" ref={history} role="log" aria-label="Messages">{messages.map(message=><div key={message.id} className="comment-reply"><span className="muted">{message.author||(message.for_agent?'You':'Reply')}</span><p>{message.body}</p>{message.sent_at&&<small>Sent to agent</small>}</div>)}</div>}
     {currentRoot?.resolved_at?<small>Resolved{currentRoot.resolution?.note?`: ${currentRoot.resolution.note}`:''}</small>:<div className="comment-reply-box">
       <textarea ref={field} aria-label="Comment" placeholder={messages.length?'Reply…':'Write a message…'} maxLength={65536} rows={3} value={draft.body} disabled={draft.busy} onChange={e=>draft.setBody(e.target.value)} onBlur={()=>void draft.flush()} onKeyDown={e=>{
@@ -120,6 +120,35 @@ export function CommentComposer({artifact,anchor,position,getAnchorRect,onClose,
     {draft.error&&<ErrorNote error={draft.error}/>}
   </div>;
   return createPortal(editor,portalTarget||document.body);
+}
+/** A slot's conversation with the agent: its comments without a quote, oldest first, as one thread. */
+export const slotComment=(comment:Comment,slot:string)=>comment.anchor.path===slot&&!comment.anchor.quote&&!comment.anchor.media_key;
+export function SlotDiscussion({artifact,slot,open,onToggle,meta,children}: {artifact:string;slot:string;open:boolean;onToggle:(open:boolean)=>void;meta?:ReactNode;children:ReactNode}) {
+  const {items,replies}=useReportComments();
+  const roots=items.filter(c=>slotComment(c,slot)),shown=(c:Comment)=>!!c.sent_at||!c.for_agent;
+  const messages=[...roots,...replies.filter(c=>roots.some(root=>root.id===c.reply_to))].filter(shown).sort((a,b)=>a.created_at.localeCompare(b.created_at));
+  const thread=roots.filter(shown).at(-1),last=messages.at(-1);
+  const draft=roots.find(c=>!shown(c))||replies.find(c=>c.reply_to===thread?.id&&!shown(c));
+  return <details className="agent-discussion" open={open} onToggle={event=>onToggle(event.currentTarget.open)}>
+    <summary><MessageSquare size={14} aria-hidden="true"/><span>{messages.length?`Discussion · ${messages.length}`:'Discuss'}</span>{last&&!last.for_agent&&<span className="agent-replied">Agent replied</span>}{last?.for_agent&&<span>Waiting for the agent</span>}{meta}</summary>
+    <div className="agent-thread">
+      <div className="agent-request">{children}</div>
+      {messages.map(message=><div key={message.id} className="comment-reply"><span className="muted">{message.author||(message.for_agent?'You':'Agent')}</span><p>{message.body}</p></div>)}
+      {open&&<SlotComposer key={thread?.id||'new'} artifact={artifact} slot={slot} thread={thread} draft={draft}/>}
+    </div>
+  </details>;
+}
+function SlotComposer({artifact,slot,thread,draft}: {artifact:string;slot:string;thread?:Comment;draft?:Comment}) {
+  const field=useRef<HTMLTextAreaElement>(null),message=useDraft(artifact,{path:slot},draft,thread?.id,()=>{},()=>{});
+  const send=()=>void message.send().then(()=>field.current?.focus({preventScroll:true}));
+  return <div className="comment-reply-box">
+    <textarea ref={field} aria-label={`Message the agent about ${slot}`} placeholder="Clarify what you meant…" maxLength={65536} rows={2} value={message.body} disabled={message.busy} onChange={e=>message.setBody(e.target.value)} onBlur={()=>void message.flush()} onKeyDown={e=>{
+      if(e.nativeEvent.isComposing||e.keyCode===229)return;
+      if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}
+    }}/>
+    <footer><small>{message.status||'Enter to send · Shift+Enter for a new line'}</small><MediaIconButton label="Send message" icon={Send} disabled={!message.body.trim()||message.busy} onMouseDown={e=>e.preventDefault()} onClick={send}/></footer>
+    {message.error&&<ErrorNote error={message.error}/>}
+  </div>;
 }
 const CommentsContext=createContext<{items:Comment[];replies:Comment[];saved:string;error?:Error}>({items:[],replies:[],saved:''});
 export const useReportComments=()=>useContext(CommentsContext);
@@ -157,6 +186,6 @@ export function ReportComments({artifact,container}: {artifact:string;project:st
     const observer=new ResizeObserver(schedule);observer.observe(article);place();const mutations=new MutationObserver(schedule);mutations.observe(article,{childList:true,subtree:true});window.addEventListener('scroll',schedule,{passive:true});window.addEventListener('resize',schedule);window.addEventListener('cairn:show-comment',reveal);
     return()=>{cancelAnimationFrame(frame);observer.disconnect();mutations.disconnect();window.removeEventListener('scroll',schedule);window.removeEventListener('resize',schedule);window.removeEventListener('cairn:show-comment',reveal);};
   },[container,items,ranges]);
-  const unplaced=items.filter(comment=>!comment.anchor.media_key&&!ranges.has(comment.id));
+  const unplaced=items.filter(comment=>!comment.anchor.media_key&&!ranges.has(comment.id)&&(comment.anchor.quote||comment.anchor.path==='body'));
   return <>{error&&<ErrorNote error={error}/>} {!!unplaced.length&&<details className="unplaced-comments"><summary>{unplaced.length} unplaced {unplaced.length===1?'comment':'comments'}</summary><p className="muted">These passages could not be matched in this version.</p>{unplaced.map(comment=><button type="button" key={comment.id} className="text-button" onClick={event=>{const box=event.currentTarget.getBoundingClientRect();setEditing({comment,x:box.left,y:box.top});}}>{comment.body}</button>)}</details>} {editing&&<CommentComposer autoFocus={false} dismissOnSelectionWithin={container.current} key={editing.comment.id} artifact={artifact} anchor={editing.comment.anchor} initial={editing.comment} position={editing} getAnchorRect={()=>{const range=ranges.get(editing.comment.id);return range?selectedTextRect(range,true):undefined;}} onClose={()=>setEditing(current=>current?.comment.id===editing.comment.id?undefined:current)}/>}</>;
 }

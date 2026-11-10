@@ -436,3 +436,72 @@ class HTTPRepository:
             "DELETE", f"v1/comments/{self._id(comment_id)}", json={"request_id": request_id}
         )
         return {"id": comment_id, "deleted": True}
+
+    def create_report(
+        self, project, name, *, body="", author=None, request_id=None
+    ) -> dict[str, JSONValue]:
+        self._require("reports")
+        return self._request(
+            "POST",
+            "v1/reports",
+            json={
+                "project": project,
+                "name": name,
+                "body": body,
+                "author": author,
+                "request_id": request_id,
+            },
+        )
+
+    def reports(self, *, project="default") -> list[dict[str, JSONValue]]:
+        self._require("reports")
+        return self._request("GET", "v1/reports", params={"project": project})
+
+    def report(self, report_id) -> dict[str, JSONValue]:
+        self._require("reports")
+        return self._request("GET", f"v1/reports/{self._id(report_id)}")
+
+    def write_report(
+        self, report_id, part, source, *, expected_revision=None, author=None, request_id=None
+    ) -> dict[str, JSONValue]:
+        self._require("reports")
+        return self._request(
+            "PUT",
+            f"v1/reports/{self._id(report_id)}/parts/{self._id(part)}",
+            json={
+                "source": source,
+                "expected_revision": expected_revision,
+                "author": author,
+                "request_id": request_id,
+            },
+        )
+
+    def delete_report(self, report_id, *, request_id=None) -> dict[str, JSONValue]:
+        self._require("reports")
+        return self._request(
+            "DELETE", f"v1/reports/{self._id(report_id)}", json={"request_id": request_id}
+        )
+
+    def add_report_comment(
+        self, report_id, anchor, body, *, author=None, for_agent=False, request_id=None
+    ) -> dict[str, JSONValue]:
+        self._require("reports")
+        return self._request(
+            "POST",
+            f"v1/reports/{self._id(report_id)}/comments",
+            json={
+                "anchor": anchor,
+                "body": body,
+                "author": author,
+                "for_agent": for_agent,
+                "request_id": request_id,
+            },
+        )
+
+    def report_comments(self, report_id, *, include_resolved=True) -> list[dict[str, JSONValue]]:
+        self._require("reports")
+        return self._request(
+            "GET",
+            f"v1/reports/{self._id(report_id)}/comments",
+            params={"include_resolved": str(include_resolved).lower()},
+        )

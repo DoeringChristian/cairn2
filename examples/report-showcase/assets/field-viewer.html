@@ -1,0 +1,18 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Field viewer</title>
+<!-- Settings arrive as JSON in the URL fragment: title, and images (links to the files). -->
+<style>
+body{margin:0;padding:16px;background:#fffef9;color:#202621;font:14px/1.5 system-ui}
+h3{margin:0 0 12px;font:22px Georgia}
+#images{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+img{display:block;width:100%;border-radius:8px}
+</style>
+<h3></h3>
+<div id="images"></div>
+<script>
+const settings=JSON.parse(decodeURIComponent(location.hash.slice(1))||'{}');
+document.querySelector('h3').textContent=settings.title||'Field';
+for(const src of settings.images||[])document.getElementById('images').append(Object.assign(document.createElement('img'),{src,alt:'Field'}));
+addEventListener('load',()=>parent.postMessage({type:'cairn-html-size',height:document.body.scrollHeight},'*'));
+</script>

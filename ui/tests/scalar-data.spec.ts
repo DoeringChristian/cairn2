@@ -1,8 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { scalarData } from '../src/workspace/scalarData';
-import { newCard, type Card, type Observation } from '../src/workspace/model';
+import { baseCard, type Card, type Observation } from '../src/workspace/model';
 const row=(id:string,ordinal:number,x:number,y:number|null)=>({artifact_id:id,ordinal,data:{step:x,loss:y},run:{id,name:id,number:1,metadata:{}}} as unknown as Observation);
-const card=():Card=>({...newCard('scalar','test'),split:[],aggregation:{center:'mean',band:'minmax',showMembers:false}});
+const card=():Card=>({...baseCard('scalar','test'),split:[],aggregation:{center:'mean',band:'minmax',showMembers:false}});
 
 test('uneven member sampling is bounded, duplicate Xs get one vote per run, and nulls interrupt contributions',()=>{
   const rows=[row('a',1,0,0),row('a',2,2,4),row('a',3,2,6),row('a',4,3,null),row('a',5,4,8),row('b',1,1,10),row('b',2,3,14),row('c',1,5,20)];

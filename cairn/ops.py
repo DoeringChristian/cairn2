@@ -45,6 +45,8 @@ from .storage import (
     meta,
     names,
     records,
+    report_parts,
+    reports,
     validate_annotations,
     writers,
 )
@@ -58,6 +60,8 @@ TRANSFER_TABLES = (
     blob_refs,
     artifact_refs,
     annotation_members,
+    reports,
+    report_parts,
     annotations_table,
 )
 
@@ -543,20 +547,35 @@ def _integrity_errors(conn):
     stray = conn.execute(
         sa.select(annotations_table.c.id)
         .outerjoin(artifacts, artifacts.c.id == annotations_table.c.artifact_id)
+        .outerjoin(reports, reports.c.id == annotations_table.c.report_id)
         .where(
             sa.or_(
                 ~annotations_table.c.kind.in_(["property", "comment"]),
-                ~sa.exists(
-                    sa.select(names.c.name).where(
-                        *(names.c[key] == annotations_table.c[key] for key in NAME_KEYS)
-                    )
+                sa.and_(
+                    annotations_table.c.report_id.is_(None),
+                    ~sa.exists(
+                        sa.select(names.c.name).where(
+                            *(names.c[key] == annotations_table.c[key] for key in NAME_KEYS)
+                        )
+                    ),
                 ),
                 sa.and_(
                     annotations_table.c.artifact_id.is_not(None),
                     sa.or_(*(artifacts.c[key] != annotations_table.c[key] for key in NAME_KEYS)),
                 ),
                 sa.and_(
+                    annotations_table.c.report_id.is_not(None),
+                    sa.or_(
+                        annotations_table.c.artifact_id.is_not(None),
+                        annotations_table.c.kind != "comment",
+                        annotations_table.c.namespace != "reports",
+                        reports.c.project != annotations_table.c.project,
+                        reports.c.name != annotations_table.c.name,
+                    ),
+                ),
+                sa.and_(
                     annotations_table.c.kind == "comment",
+                    annotations_table.c.report_id.is_(None),
                     sa.or_(
                         annotations_table.c.artifact_id.is_(None), artifacts.c.state != "finished"
                     ),

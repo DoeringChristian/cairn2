@@ -3,12 +3,13 @@ import { CommentButton } from './CommentButton';
 import { createPortal } from "react-dom";
 import { Check, Copy } from "lucide-react";
 import { CommentComposer, type CommentAnchor } from "./ReportComments";
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useContext, useEffect, useRef, useState, type RefObject } from 'react';
+import { ReportArtifactContext } from './ReportContext';
 /** Cairn Report's selection marker, extended with the pinned version identity. */
 export function SelectionCopy({container,version}: {container:RefObject<HTMLElement>;version:string}) {
   const [selection,setSelection]=useState<{text:string;x:number;y:number;anchor:CommentAnchor}>(),[copied,setCopied]=useState(false);
   const [composer,setComposer]=useState(false),[commented,setCommented]=useState(false);
-  const editing=useRef(false),selectedRange=useRef<Range>();
+  const editing=useRef(false),selectedRange=useRef<Range>(),artifact=useContext(ReportArtifactContext);
   useEffect(()=>{if(!copied&&!commented)return;const timer=setTimeout(()=>{setCopied(false);setCommented(false);},1400);return()=>clearTimeout(timer);},[copied,commented]);
   useEffect(()=>{
     function inspect(){if(editing.current)return;const selected=window.getSelection();if(!selected?.rangeCount||!selected.toString().trim()){setSelection(undefined);return;}
@@ -38,5 +39,5 @@ export function SelectionCopy({container,version}: {container:RefObject<HTMLElem
     <button className="image-copy" type="button" aria-label="Copy selected text and source" onMouseDown={e=>e.preventDefault()} onClick={copy}>{copied?<Check aria-hidden="true"/>:<Copy aria-hidden="true"/>}</button>
     <CommentButton saved={commented} aria-label="Comment on selected text" onMouseDown={e=>e.preventDefault()} onClick={()=>{editing.current=true;setComposer(true);}}/>
     <span className="sr-only" role="status">{copied?'Copied':commented?'Comment saved':''}</span>
-  </div>{composer&&<CommentComposer artifact={version} anchor={selection.anchor} position={selection} getAnchorRect={()=>selectedRange.current?selectedTextRect(selectedRange.current,true):undefined} onClose={saved=>{editing.current=false;setComposer(false);if(saved)setCommented(true);document.dispatchEvent(new Event('selectionchange'));}}/>}</>,document.body):null;
+  </div>{composer&&artifact&&<CommentComposer artifact={artifact} anchor={selection.anchor} position={selection} getAnchorRect={()=>selectedRange.current?selectedTextRect(selectedRange.current,true):undefined} onClose={saved=>{editing.current=false;setComposer(false);if(saved)setCommented(true);document.dispatchEvent(new Event('selectionchange'));}}/>}</>,document.body):null;
 }

@@ -22,23 +22,25 @@ and writes the packaged assets into `cairn/ui_static`.
 Build the media/report demo with:
 
 ```sh
-uv run --extra all python examples/build_report_showcase.py
-uv run --extra all cairn server --no-auth
+cd examples/report-showcase
+uv run --extra all python run.py
+uv run --extra all cairn server --no-auth --port 18765
 ```
 
-The script uses normal repository discovery, records a run, and always publishes
-the report in the `neural-rendering` project. Build files stay in
-`build/report-showcase/<run-id>/`.
+The script records a run with figure, video and audio captures in the
+`neural-rendering` project and writes the `field-guide` report, whose body and agent
+slots reference them with `cairn:` links. Rerun it to add a run version and reset
+the report.
 
-Against that running server, `npm test --prefix ui` checks native reports, plain IDs,
-image zoom, real video playback, the TOC, and lineage. `CAIRN_UI_URL` overrides the
-default test URL `http://localhost:18765`. Python integration tests are in
-`tests/test_webui.py`.
+Against that running server, `npm test --prefix ui` checks reports (editing, agent
+slots, artifact media, comments), plain IDs, image zoom, real video playback, the TOC,
+and lineage. `CAIRN_UI_URL` overrides the default test URL `http://localhost:18765`.
+Python integration tests are in `tests/test_webui.py`.
 
 ## Shared components
 
 Use `src/components` for buttons, fields, selects, cards, status, tables, metrics,
-charts and report rendering. `/palette` previews the base components. Use CSS tokens
+charts and Markdown rendering. `/palette` previews the base components. Use CSS tokens
 from Cairn Report (`--paper`, `--card`, `--ink`, `--muted`, `--line`, `--accent`) rather
 than introducing colors per viewer. Project/report card structure comes from Prism2;
 report layout and typography come from Cairn Report.
@@ -49,7 +51,22 @@ prose styles from leaking into media. Wheel/pinch zoom, bounded pan, fit, fullsc
 frame stepping, clip marking, region selection and reference copying share this viewer.
 Frame stepping uses the selected FPS and browser time-based seeking.
 
-Reports render `document.json` in normal page flow. `ReportToc` discovers rendered
+Reports (`src/report`) parse their Markdown in the browser with markdown-it and render
+it through `nodesToReact` in `components/Markdown.tsx`, which leaves images and fenced
+divs to the caller: `cairn:` references load artifact files, `.agent` divs show the
+agent's slot. `report/Editor.tsx` edits the body in CodeMirror: every top-level block
+is a rendered widget except the one under the cursor, a click places the cursor at the
+source offset its text carries (`data-offset`) while a drag selects the rendered text
+for comments, `$$` inside `$|$` opens display math, and completion offers `cairn:`
+references, their captures, agent slots and callouts. An agent slot renders its part
+with a folded `SlotDiscussion` (the slot's quote-less comments) holding the request and
+the conversation. A `view` block (and a workspace Viewer card) is YAML read by
+`readView`; `ViewerFrame` runs its HTML file sandboxed from a signed `/ui-api/viewers/`
+link that serves the artifact's other files by relative path, and passes the settings
+as JSON in the URL fragment with each `cairn:REF#file` replaced by such a link. Large
+chunked files stream through the same route. CodeMirror's print mode keeps the
+whole report laid out, so headings and comment anchors exist off screen; that flag is
+internal, hence the exact `@codemirror/view` version. `ReportToc` discovers rendered
 headings and uses the existing left rail without shrinking the report. On mobile it
 is collapsible above the report. `SelectionCopy` copies selected prose and its source
 location. Project and record views refresh every five seconds, with a global pause.
@@ -119,15 +136,16 @@ values. Home/reset ranges include padding around the data. Near-horizontal
 drags zoom X only, near-vertical drags zoom Y only (20 px tolerance), and box
 drags zoom both axes. Click points or media record numbers to inspect the original record.
 
-Image and Plotly cards offer ordered, paginated galleries, grouped comparisons,
+Image, video and Plotly cards offer ordered, paginated galleries, grouped comparisons,
 and sequences with a slider over any scalar field. Exact matching is the default;
 previous and nearest-numeric matching are explicit settings. All duplicates at the
 chosen axis value remain visible. Captions report the actual observation axis.
 Plotly figures retain their own specifications; optional linked 2D zoom assumes
-matching units. Image bytes are fetched from existing blob references.
+matching units. Image and video bytes are fetched from existing blob references; a
+video is a record field holding `cairn.File` with a `video/*` media type.
 
 Field dropdowns list keys and types discovered in the selected runs, with numeric
-fields for scalar axes and the corresponding media types for image/Plotly cards.
+fields for scalar axes and the corresponding media types for image, video and Plotly cards.
 Cards default to grouping by run. The compact **Group by** picker adds fields
 immediately; its chips remove them. Each combination identifies one series.
 **Combine filter conditions** is shown when there are multiple record filters.
@@ -161,7 +179,7 @@ The initial `/p/:project/workspace/:runId` URLs redirect to this tab.
 
 The run selector stays to the left of the card canvas (collapsible on small
 screens). Cards are always draggable and resizable, with duplication and removal
-available in their menus. Sections share one card size: widths are ½, ⅓, or ¼
+available in their menus. Sections share one card size: widths are 1, ½, ⅓, or ¼
 of the grid, and resizing any card changes all cards in its section. Cards moved
 into a section adopt its size. Card settings contain no section sizing controls; use the resize handle.
 Older saved layouts remain readable in the v1 format; the first card
@@ -173,8 +191,10 @@ origin. Card settings save automatically; other unsaved layout edits remain temp
 its preset URL parameter so reloading opens the saved view.
 
 The initial workspace loads complete, cutoff-pinned record streams for selected
-runs, with three concurrent fetches and a 50,000-record / 32-MiB response budget.
-A failed page or exceeded budget shows an error and no partial charts. Finished
+runs, with three concurrent fetches and loading progress. There is no fixed
+record-count or response-byte cutoff; complete selected records remain in browser
+memory.
+A failed page cancels the remaining requests and shows an error with no partial charts. Finished
 selections load once; selections containing live runs refresh every five seconds
 unless auto-refresh is paused. The run picker refreshes every ten seconds. Large
 selections should be narrowed using run filters; server-side workspace query and

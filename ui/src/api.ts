@@ -49,3 +49,25 @@ export const bytes = (n: number) => n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${(n/
 export function envelope(value: Json | undefined): Envelope | null {
   return value && typeof value === 'object' && !Array.isArray(value) && value.$cairn === 1 && typeof value.format === 'string' ? value as unknown as Envelope : null;
 }
+/** Every named file of an artifact: its value's and captures' typed blobs, then the manifest's. */
+export function artifactBlobs(artifact: Artifact): BlobRef[] {
+  const manifest = artifact.manifest, named: BlobRef[] = [];
+  const visit = (v: unknown) => {
+    if (!v || typeof v !== 'object') return;
+    const t = envelope(v as Json);
+    if (t) { named.push(...(t.blobs || [])); if (t.format === 'json/literal') return; }
+    for (const [key, child] of Object.entries(v)) if (key !== 'blobs' && key !== 'refs') visit(child);
+  };
+  visit(manifest?.value); visit(Object.fromEntries(Object.entries(manifest?.captures || {}).filter(([name]) => !name.startsWith('console/'))));
+  const unique = new Map<string, BlobRef>();
+  for (const blob of [...named, ...(manifest?.blobs || [])]) if (!unique.has(blob.digest)) unique.set(blob.digest, blob);
+  return [...unique.values()];
+}
+/** Captured files too large for one blob: their chunks stream from the server in order. */
+export function chunkedFiles(artifact: Artifact): (BlobRef & {href: string})[] {
+  return Object.entries(artifact.manifest?.captures || {}).flatMap(([name, value]) => {
+    const t = envelope(value), data = t?.data as {size?: number; sha256?: string} | undefined;
+    return t?.format === 'file' && t.version === 2 && data?.sha256 ? [{name, size: data.size || 0, digest: data.sha256, href: `/ui-api/artifacts/${encodeURIComponent(artifact.id)}/files/${name.split('/').map(encodeURIComponent).join('/')}`}] : [];
+  });
+}
+export const reportPath = (project: string, name: string) => `${projectPath(project)}/r/${name.split('/').map(encodeURIComponent).join('/')}`;

@@ -5,7 +5,8 @@ import { useEffect, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, useResource, artifactPath, when, type Project, type ArtifactSummary } from '../api';
-import { ActionIcon, Button, Crumbs, DataTable, ErrorNote, Hero, Hint, Loading, MetricCard, MetricGrid, Pill, ProjectCard, ReportCard, ReportGrid, SearchInput, Section, Toolbar } from '../components';
+import { ReportsPage } from '../report/ReportPage';
+import { ActionIcon, Button, Crumbs, DataTable, ErrorNote, Hero, Hint, Loading, MetricCard, MetricGrid, Pill, ProjectCard, SearchInput, Section, Toolbar } from '../components';
 export function ProjectsPage() {
   const [revision, refresh] = useState(0), [search, setSearch] = useState('');
   const pulse = useRefresh();
@@ -20,10 +21,14 @@ export function ProjectsPage() {
     {!!data?.length && !filtered?.length && <Hint>No projects match “{search}”.</Hint>}</Section></main>;
 }
 export function ProjectPage() {
+  const [params] = useSearchParams();
+  return (params.get('view') ?? 'reports') === 'reports' ? <ReportsPage/> : <ArtifactList/>;
+}
+function ArtifactList() {
   const {project = ''} = useParams();
   const paused = useRefreshMode();
   const [params, setParams] = useSearchParams();
-  const tab = params.get('view') ?? 'reports';
+  const tab = params.get('view') ?? 'runs';
   const [search, setSearch] = useState(''), [revision, refresh] = useState(0);
   const [querySearch, setQuerySearch] = useState('');
   useEffect(() => {const timer = window.setTimeout(() => setQuerySearch(search), 200); return () => clearTimeout(timer);}, [search]);
@@ -74,15 +79,11 @@ export function ProjectPage() {
   function changePage(value: number) {const next=new URLSearchParams(params);next.set('page', String(value));setParams(next);}
   const filtered = items;
   return <main><Hero eyebrow={<Crumbs items={[{label:'Projects',to:'/'},{label:project}]}/>} title={project} subtitle="Reports, experiments, and the evidence that connects them."/>
-    <Section title={tab==='reports'?'Your reports':tab==='runs'?'Experiment runs':tab==='artifacts'?'Artifact library':'Everything'} actions={<ActionIcon label="Refresh" onClick={refreshList}><RefreshCw size={17} aria-hidden="true"/></ActionIcon>}>
-    <Toolbar><SearchInput label={tab==='reports'?'Search reports':'Search artifacts'} value={search} onChange={value=>{setSearch(value);if(page)changePage(0);}}/><form onSubmit={e=>{e.preventDefault();const tag=tagDraft.trim();if(tag&&!selectedTags.includes(tag))toggleTag(tag);setTagDraft('');}}><SearchInput label="Filter by tag" value={tagDraft} onChange={setTagDraft}/></form></Toolbar>
+    <Section title={tab==='runs'?'Experiment runs':tab==='artifacts'?'Artifact library':'Everything'} actions={<ActionIcon label="Refresh" onClick={refreshList}><RefreshCw size={17} aria-hidden="true"/></ActionIcon>}>
+    <Toolbar><SearchInput label="Search artifacts" value={search} onChange={value=>{setSearch(value);if(page)changePage(0);}}/><form onSubmit={e=>{e.preventDefault();const tag=tagDraft.trim();if(tag&&!selectedTags.includes(tag))toggleTag(tag);setTagDraft('');}}><SearchInput label="Filter by tag" value={tagDraft} onChange={setTagDraft}/></form></Toolbar>
     {(!!availableTags.length||!!selectedTags.length)&&<div className="tag-filters" aria-label="Filter by tags"><span className="muted">Tags</span>{[...new Set([...availableTags,...selectedTags])].map(tag=><button type="button" className="tag-chip" key={tag} aria-pressed={selectedTags.includes(tag)} onClick={()=>toggleTag(tag)}>{tag}</button>)}{!!selectedTags.length&&<button type="button" className="tag-clear" onClick={()=>{const next=new URLSearchParams(params);next.delete('tag');next.delete('page');setParams(next);}}>Clear tags</button>}</div>}
-    {loading && !items.length && <Loading/>}{error && <ErrorNote error={error}/>}{!loading && !error && !filtered.length && <Hint>No matching {tab === 'reports' ? 'reports' : 'artifacts'} in this view.</Hint>}
-    {!!filtered.length && tab==='reports' && <ReportGrid>{filtered.map(a=>{
-      const metadata=a;
-      return <ReportCard key={a.id} to={artifactPath(project,a.number?`${a.namespace}/${a.name}@latest`:a.id)} project={project} title={typeof metadata?.title==='string'?metadata.title:a.name} description={typeof metadata?.description==='string'?metadata.description:undefined} status={a.outcome || a.state} updated={`${a.number ? 'Latest · v'+a.number+' · ' : ''}${when(a.finished_at || a.created_at)}`}/>;
-    })}</ReportGrid>}
-    {!!filtered.length && tab!=='reports' && <div className="artifact-list"><DataTable head={['Name','Namespace','State / version','Tags','Created']}>{filtered.map(a=><tr key={a.id}><td data-label="Name"><Link to={artifactPath(project,a.id)}><strong>{a.name}</strong></Link></td><td data-label="Namespace"><Pill tone="alias">{a.namespace}</Pill></td><td data-label="State / version"><Pill tone={a.state === 'finished' ? 'default':'pending'}>{a.number ? `v${a.number} · ${a.outcome || a.state}` : a.state}</Pill></td><td data-label="Tags"><ArtifactTags artifact={a} compact onTagClick={toggleTag} onChange={refreshList}/></td><td data-label="Created" className="muted nowrap">{when(a.created_at)}</td></tr>)}</DataTable></div>}
+    {loading && !items.length && <Loading/>}{error && <ErrorNote error={error}/>}{!loading && !error && !filtered.length && <Hint>No matching artifacts in this view.</Hint>}
+    {!!filtered.length && <div className="artifact-list"><DataTable head={['Name','Namespace','State / version','Tags','Created']}>{filtered.map(a=><tr key={a.id}><td data-label="Name"><Link to={artifactPath(project,a.id)}><strong>{a.name}</strong></Link></td><td data-label="Namespace"><Pill tone="alias">{a.namespace}</Pill></td><td data-label="State / version"><Pill tone={a.state === 'finished' ? 'default':'pending'}>{a.number ? `v${a.number} · ${a.outcome || a.state}` : a.state}</Pill></td><td data-label="Tags"><ArtifactTags artifact={a} compact onTagClick={toggleTag} onChange={refreshList}/></td><td data-label="Created" className="muted nowrap">{when(a.created_at)}</td></tr>)}</DataTable></div>}
     <div className="pagination"><Hint>{total ? `${page*50+1}–${Math.min((page+1)*50,total)} of ${total}` : '0 results'}</Hint><Button disabled={page===0||loading} onClick={()=>changePage(page-1)}>Previous</Button><Button disabled={(page+1)*50>=total||loading} onClick={()=>changePage(page+1)}>Next</Button></div>
     </Section></main>;
 }

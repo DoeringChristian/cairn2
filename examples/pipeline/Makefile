@@ -3,10 +3,7 @@ PYTHON ?= python
 
 .DELETE_ON_ERROR:
 
-build/report.json: report.qmd build/points.id build/fit.id build/evaluate.id
-	rm -rf build/report
-	cairn report build report.qmd --output build/report --publish \
-		dataset=$$(cat build/points.id) fit=$$(cat build/fit.id) evaluation=$$(cat build/evaluate.id) > $@
+all: build/evaluate.id
 
 build/points.id: prepare.py
 	mkdir -p build

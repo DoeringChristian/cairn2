@@ -1,3 +1,4 @@
+import {fieldGuide,reportPage} from './fixtures';
 import {test,expect, type Page} from '@playwright/test';
 async function openTextComment(page:Page) {
   await page.evaluate(()=>window.getSelection()?.removeAllRanges());
@@ -9,17 +10,16 @@ async function openTextComment(page:Page) {
 }
 
 
-test('plain artifact identities, native reports, media zoom and lineage',async({page,request})=>{
+test('plain artifact identities, reports, media zoom and lineage',async({page,request})=>{
   const errors:string[]=[];
   page.on('pageerror',e=>errors.push(e.message));
-  const response=await request.get('/v1/artifacts?project=neural-rendering&namespace=reports');
-  const {items}=await response.json();
-  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
-  expect(report.id).toMatch(/^[0-9a-f]{32}$/);
-  await page.goto(`/p/neural-rendering/a/${report.id}`);
+  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=runs')).json();
+  const run=items.find((a:any)=>a.name==='showcase-baseline');
+  expect(run.id).toMatch(/^[0-9a-f]{32}$/);
+  await page.goto(reportPage);
   await expect(page.locator('article.native-document')).toBeVisible();
-  await expect(page.locator('iframe:not(.native-html-viewer)')).toHaveCount(0);
-  await page.getByRole('button',{name:'Enlarge Python cell image output'}).first().click();
+  await expect(page.locator('iframe')).toHaveCount(0);
+  await page.getByRole('button',{name:'Enlarge Field at the start'}).first().click();
   const dialog=page.getByRole('dialog');
   await expect(dialog).toBeVisible();
   await expect.poll(()=>dialog.locator('img').evaluate((img:HTMLImageElement)=>img.naturalWidth)).toBeGreaterThan(0);
@@ -44,7 +44,7 @@ test('plain artifact identities, native reports, media zoom and lineage',async({
   await anchor.click();
   await expect(page).toHaveURL(new RegExp(target!+'$'));
   await expect(page.locator(target!)).toBeVisible();
-  await page.goto(`/p/neural-rendering/a/${report.id}?tab=lineage`);
+  await page.goto(`/p/neural-rendering/a/${run.id}?tab=lineage`);
   await expect(page.getByRole('img',{name:'Lineage graph'})).toBeVisible();
   await expect(page.getByText('Lineage unavailable:')).toHaveCount(0);
   expect(errors).toEqual([]);
@@ -52,11 +52,9 @@ test('plain artifact identities, native reports, media zoom and lineage',async({
 
 test('media gestures change actual geometry and copy feedback resets',async({page,context,request})=>{
   await context.grantPermissions(['clipboard-read','clipboard-write']);
-  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
-  await page.goto(`/p/neural-rendering/a/${report.id}`);
+  await page.goto(reportPage);
   for(const video of [false,true]){
-    await page.getByRole('button',{name:video?'Enlarge video':'Enlarge Python cell image output',exact:true}).first().click();
+    await page.getByRole('button',{name:video?'Enlarge video':'Enlarge Field at the start',exact:true}).first().click();
     const dialog=page.getByRole('dialog'),media=dialog.locator(video?'video':'img');
     await expect.poll(()=>media.evaluate((node:HTMLImageElement|HTMLVideoElement)=>node instanceof HTMLVideoElement?node.videoWidth:node.naturalWidth)).toBeGreaterThan(0);
     const width=await media.evaluate(node=>node.getBoundingClientRect().width);
@@ -79,9 +77,7 @@ test('media gestures change actual geometry and copy feedback resets',async({pag
 
 test('video references combine temporal and spatial selections',async({page,context,request})=>{
   await context.grantPermissions(['clipboard-read','clipboard-write']);
-  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
-  await page.goto(`/p/neural-rendering/a/${report.id}`);
+  await page.goto(reportPage);
   await page.getByRole('button',{name:'Enlarge video',exact:true}).click();
   const dialog=page.getByRole('dialog');
   await expect.poll(()=>dialog.locator('video').evaluate((v:HTMLVideoElement)=>v.duration)).toBeGreaterThan(0);
@@ -101,27 +97,10 @@ test('video references combine temporal and spatial selections',async({page,cont
   await expect(dialog.getByRole('slider',{name:'Clip start',exact:true})).toHaveCount(0);
 });
 
-test('showcase renders themed interactive Plotly output',async({page,request})=>{
-  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
-  const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
-  await page.goto(`/p/neural-rendering/a/${report.id}`);
-  const plot=page.getByRole('img',{name:'Interactive Plotly figure'}).first();
-  await plot.scrollIntoViewIfNeeded();
-  await expect(plot.locator('.scatterlayer .trace')).toHaveCount(2,{timeout:20000});
-  await expect(plot.locator('.modebar')).toBeVisible();
-  const background=await plot.locator('.main-svg').first().evaluate(el=>getComputedStyle(el).backgroundColor);
-  expect(background).toBe('rgb(255, 254, 249)');
-  await plot.locator('.legendtoggle').first().click();
-  await expect(plot.locator('.scatterlayer .trace')).toHaveCount(1);
-  expect(errors).toEqual([]);
-});
-
-test('comments autosave, highlight, reopen beside text, and delete across versions',async({page,context,request})=>{
+test('comments autosave, highlight, reopen beside text, and delete after reload',async({page,context,request})=>{
   await context.grantPermissions(['clipboard-read','clipboard-write']);
-  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const reports=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number);
-  await page.goto(`/p/neural-rendering/a/${reports[0].id}`);
+  const report=await fieldGuide(request);
+  await page.goto(reportPage);
   const paragraph=page.locator('.native-document p').filter({hasText:'This is a working tour'}).first();
   await paragraph.scrollIntoViewIfNeeded();
   await paragraph.evaluate(node=>{const range=document.createRange();range.selectNodeContents(node);const selection=window.getSelection()!;selection.removeAllRanges();selection.addRange(range);});
@@ -131,9 +110,9 @@ test('comments autosave, highlight, reopen beside text, and delete across versio
   await expect(editor.getByRole('button',{name:/save/i})).toHaveCount(0);
   await expect(editor.getByLabel('Saved',{exact:true})).toBeVisible({timeout:5000});
   await editor.getByLabel('Comment',{exact:true}).fill(body+' updated');
-  await expect.poll(async()=>{const rows=await (await request.get(`/ui-api/reports/${reports[0].id}/comments`)).json();return rows.filter((c:any)=>c.body===body+' updated').length;}).toBe(1);
+  await expect.poll(async()=>{const rows=await (await request.get(`/ui-api/reports/${report.id}/comments`)).json();return rows.filter((c:any)=>c.body===body+' updated').length;}).toBe(1);
   await expect(editor.getByRole('button',{name:/close/i})).toHaveCount(0);
-  await page.getByRole('heading',{name:'Published report',exact:true}).click();
+  await page.getByRole('heading',{name:'Report',exact:true}).click();
   await expect(editor).toHaveCount(0);
   await expect.poll(()=>page.evaluate(()=>CSS.highlights.get('cairn-comments')?.size||0)).toBeGreaterThan(0);
   await expect(page.locator('.report-comments')).toHaveCount(0);
@@ -141,23 +120,22 @@ test('comments autosave, highlight, reopen beside text, and delete across versio
   await openTextComment(page);
   await expect(editor.getByLabel('Comment',{exact:true})).toHaveValue(body+' updated');
   await editor.getByLabel('Comment',{exact:true}).fill(body+' final');
-  await page.getByRole('heading',{name:'Published report',exact:true}).click();
+  await page.getByRole('heading',{name:'Report',exact:true}).click();
   await expect(editor).toHaveCount(0);
-  await expect.poll(async()=>{const rows=await (await request.get(`/ui-api/reports/${reports[0].id}/comments`)).json();return rows.some((c:any)=>c.body===body+' final');}).toBe(true);
-  await page.goto(`/p/neural-rendering/a/${reports[1].id}`);
+  await expect.poll(async()=>{const rows=await (await request.get(`/ui-api/reports/${report.id}/comments`)).json();return rows.some((c:any)=>c.body===body+' final');}).toBe(true);
+  await page.reload();
   await page.locator('.native-document p').filter({hasText:'This is a working tour'}).first().scrollIntoViewIfNeeded();
   await expect.poll(()=>page.evaluate(()=>CSS.highlights.get('cairn-comments')?.size||0)).toBeGreaterThan(0);
   await openTextComment(page);
   await expect(editor.getByLabel('Comment',{exact:true})).toHaveValue(body+' final');
   await editor.getByRole('button',{name:'Delete comment'}).click();await expect(editor).toHaveCount(0);
-  await expect.poll(async()=>{const rows=await (await request.get(`/ui-api/reports/${reports[0].id}/comments`)).json();return rows.some((c:any)=>c.body===body+' final');}).toBe(false);
+  await expect.poll(async()=>{const rows=await (await request.get(`/ui-api/reports/${report.id}/comments`)).json();return rows.some((c:any)=>c.body===body+' final');}).toBe(false);
 });
 
 test('Enter sends immutable messages; leaving saves root and reply drafts',async({page,request})=>{
-  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
+  const report=await fieldGuide(request);
   const rows=async()=>(await (await request.get(`/ui-api/reports/${report.id}/comments`)).json()) as any[];
-  await page.goto(`/p/neural-rendering/a/${report.id}`);
+  await page.goto(reportPage);
   const paragraph=page.locator('.native-document p').filter({hasText:'This is a working tour'}).first();
   await paragraph.scrollIntoViewIfNeeded();
   await paragraph.evaluate(node=>{const range=document.createRange();range.selectNodeContents(node);const selection=window.getSelection()!;selection.removeAllRanges();selection.addRange(range);});
@@ -167,7 +145,7 @@ test('Enter sends immutable messages; leaving saves root and reply drafts',async
   try {
     await field.fill(body);
     // Click away immediately, before the autosave timer.
-    await page.getByRole('heading',{name:'Published report',exact:true}).click();
+    await page.getByRole('heading',{name:'Report',exact:true}).click();
     await expect(editor).toHaveCount(0);
     const root=(await rows()).find(c=>c.body===body);rootId=root.id;
     expect(root.sent_at).toBeNull();
@@ -180,7 +158,7 @@ test('Enter sends immutable messages; leaving saves root and reply drafts',async
     await expect.poll(async()=>(await rows()).find(c=>c.id===rootId)?.sent_at).toBeTruthy();
     await expect(editor.locator('textarea')).toHaveCount(1);
     await field.fill('A saved follow-up');
-    await page.getByRole('heading',{name:'Published report',exact:true}).click();
+    await page.getByRole('heading',{name:'Report',exact:true}).click();
     await expect(editor).toHaveCount(0);
     const reply=(await rows()).find(c=>c.reply_to===rootId);
     expect(reply.body).toBe('A saved follow-up');expect(reply.sent_at).toBeNull();
@@ -198,31 +176,17 @@ test('Enter sends immutable messages; leaving saves root and reply drafts',async
   } finally {if(rootId)await request.delete(`/ui-api/reports/${report.id}/comments/${rootId}`);}
 });
 
-test('report overview groups versions and opens latest publication',async({page,request})=>{
-  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const reports=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number);
-  expect(reports.length).toBeGreaterThan(1);
-  await page.goto('/p/neural-rendering');
-  await expect(page.locator('.report-card')).toHaveCount(new Set(items.map((a:any)=>a.name)).size);
-  const card=page.locator('.report-card').filter({hasText:'The report field guide'});
-  await expect(card).toHaveCount(1);
-  await expect(card).toHaveAttribute('href',`/p/neural-rendering/a/${encodeURIComponent('reports/report-field-guide@latest')}`);
-  await card.click();
-  await expect(page.getByRole('button',{name:'Artifact version'})).toContainText(`v${reports[0].number}`);
-});
-
-test('comments resolve, hide, show on request and reopen across versions',async({page,request})=>{
-  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const reports=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number);
+test('comments resolve, hide, show on request and reopen',async({page,request})=>{
+  const report=await fieldGuide(request);
   const body=`Resolve check ${Date.now()}`;
-  const comment=await (await request.post(`/ui-api/reports/${reports[1].id}/comments`,{data:{anchor:{quote:'This is a working tour'},body,author:'reviewer'}})).json();
-  const state=async()=>(await (await request.get(`/ui-api/reports/${reports[0].id}/comments`)).json()).find((c:any)=>c.id===comment.id)?.resolved_at??null;
+  const comment=await (await request.post(`/ui-api/reports/${report.id}/comments`,{data:{anchor:{quote:'This is a working tour'},body,author:'reviewer'}})).json();
+  const state=async()=>(await (await request.get(`/ui-api/reports/${report.id}/comments`)).json()).find((c:any)=>c.id===comment.id)?.resolved_at??null;
   try{
-    await page.goto(`/p/neural-rendering/a/${reports[0].id}`);
+    await page.goto(reportPage);
     const editor=page.getByRole('group',{name:'Add report comment'});
     await page.locator('.native-document p').filter({hasText:'This is a working tour'}).first().scrollIntoViewIfNeeded();
     await openTextComment(page);
-    await expect(editor).toContainText(`v${reports[1].number} · reviewer`);
+    await expect(editor).toContainText('reviewer');
     await editor.getByRole('button',{name:'Resolve comment'}).click();
     await expect(editor).toHaveCount(0);await expect(page.locator('.report-comment-marker')).toHaveCount(0);
     await expect.poll(state).not.toBeNull();
@@ -231,7 +195,7 @@ test('comments resolve, hide, show on request and reopen across versions',async(
     await openTextComment(page);await expect(editor).toContainText('Resolved');
     await editor.getByRole('button',{name:'Reopen comment'}).click();
     await expect.poll(state).toBeNull();
-  }finally{await request.delete(`/ui-api/reports/${reports[0].id}/comments/${comment.id}`);}
+  }finally{await request.delete(`/ui-api/reports/${report.id}/comments/${comment.id}`);}
 });
 
 test('all-versions tags reach every version of a name',async({page,request})=>{
@@ -252,11 +216,10 @@ test('all-versions tags reach every version of a name',async({page,request})=>{
 });
 
 test('media comments keep region and time and empty edits delete',async({page,request})=>{
-  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
-  await page.goto(`/p/neural-rendering/a/${report.id}`);
+  const report=await fieldGuide(request);
+  await page.goto(reportPage);
   for(const video of [false,true]){
-    await page.getByRole('button',{name:video?'Enlarge video':'Enlarge Python cell image output',exact:true}).first().click();
+    await page.getByRole('button',{name:video?'Enlarge video':'Enlarge Field at the start',exact:true}).first().click();
     const dialog=page.getByRole('dialog');
     await dialog.getByRole('button',{name:'Comment on media'}).click();
     const editor=page.getByRole('group',{name:'Add report comment'}),body=`Browser media test ${Date.now()}`;
@@ -273,7 +236,7 @@ test('media comments keep region and time and empty edits delete',async({page,re
     await expect.poll(async()=>{const rows=await (await request.get(`/ui-api/reports/${report.id}/comments`)).json();return rows.filter((c:any)=>c.anchor.media_key===comment.anchor.media_key).map((c:any)=>({id:c.id,body:c.body}));}).toEqual([{id:comment.id,body:body+' edited'}]);
     await dialog.getByRole('button',{name:'Zoom in',exact:true}).click();
     await dialog.getByRole('button',{name:'Close media viewer'}).click();
-    const shell=page.locator('[data-comment-media]').filter({has:page.getByRole('button',{name:video?'Enlarge video':'Enlarge Python cell image output',exact:true})}).first();
+    const shell=page.locator('[data-comment-media]').filter({has:page.getByRole('button',{name:video?'Enlarge video':'Enlarge Field at the start',exact:true})}).first();
     await expect(shell.locator(':scope > .output-comment-button')).toHaveCount(1);
     await shell.getByRole('button',{name:'Open comment',exact:true}).click();
     await expect(editor.getByLabel('Comment',{exact:true})).toHaveValue(body+' edited');
@@ -286,53 +249,23 @@ test('media comments keep region and time and empty edits delete',async({page,re
   }
 });
 
-test('custom HTML executes in isolation, resizes and offers WebGPU',async({page,request})=>{
-  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
-  await page.goto(`/p/neural-rendering/a/${report.id}`);
-  const htmlOutput=page.locator('[data-output-mime="text/html"]');
-  await expect(page.locator('article.native-document')).toBeVisible();
-  if(await htmlOutput.count())await htmlOutput.last().scrollIntoViewIfNeeded();
-  const frame=page.frameLocator('iframe.native-html-viewer');
-  await expect(frame.locator('#renderer')).toHaveText(/WebGPU renderer active|Canvas fallback/,{timeout:20000});
-  await expect(page.locator('iframe.native-html-viewer')).toHaveAttribute('sandbox','allow-scripts');
-  const isolation=await frame.locator('body').evaluate(()=>{try{return !!parent.document.body;}catch{return false;}});expect(isolation).toBe(false);
-  await expect.poll(()=>page.locator('iframe.native-html-viewer').evaluate(el=>el.getBoundingClientRect().height)).toBeGreaterThan(360);
-  const before=await page.locator('iframe.native-html-viewer').evaluate(el=>el.getBoundingClientRect().height);
-  await frame.getByText('About this viewer',{exact:true}).click();
-  await expect.poll(()=>page.locator('iframe.native-html-viewer').evaluate(el=>el.getBoundingClientRect().height)).toBeGreaterThan(before);
-  await frame.getByRole('slider').fill('3');
-  const surface=page.getByRole('img',{name:'Interactive Plotly figure'}).nth(1);
-  await surface.scrollIntoViewIfNeeded();
-  await expect(surface.locator('canvas').first()).toBeVisible({timeout:20000});
-});
-
-test('ordinary code fences are highlighted and remain display-only',async({page,request})=>{
-  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
-  await page.goto(`/p/neural-rendering/a/${report.id}`);
+test('ordinary code fences are highlighted and remain display-only',async({page})=>{
+  await page.goto(reportPage);
   const python=page.getByLabel('python code',{exact:true}).filter({hasText:'def summarize'});
   await expect(python.locator('.hljs-keyword').first()).toBeVisible();
-  await expect(page.getByLabel('javascript code',{exact:true}).locator('.hljs-keyword').first()).toBeVisible();
-  await expect(page.getByLabel('yaml code',{exact:true}).locator('.hljs-attr').first()).toBeVisible();
-  await expect(page.locator('.native-output').filter({hasText:'This code fence is not executed'})).toHaveCount(0);
-  await expect(page.getByLabel('text code',{exact:true})).toContainText('<script>this is displayed, not executed</script>');
   await expect(page.getByRole('button',{name:'Enlarge video',exact:true})).toHaveText('');
 });
 
-test('copy controls preserve full code and IDs, media comment controls sit right, tags filter runs',async({page,request,context})=>{
+test('copy controls preserve full code, media comment controls sit right, tags filter runs',async({page,request,context})=>{
   await context.grantPermissions(['clipboard-read','clipboard-write']);
   const {items}=await (await request.get('/v1/artifacts?project=neural-rendering')).json();
-  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
-  await page.goto(`/p/neural-rendering/a/${report.id}`);
+  await page.goto(reportPage);
   const code=page.locator('.syntax-code').filter({hasText:'def summarize'}).first();
   const original=await code.locator('code').innerText();
   await code.getByRole('button',{name:'Copy code',exact:true}).click();
   await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(original);
   await expect(code.getByRole('status')).toHaveText('Copied');
   await expect(code.getByRole('status')).toHaveText('');
-  await page.getByRole('button',{name:`Copy ID ${report.id}`,exact:true}).click();
-  await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(report.id);
   for(const selector of ['.preview-open','.prism-video-preview','audio']){
     const media=page.locator(selector).first();
     if(!await media.count())continue;
@@ -343,7 +276,7 @@ test('copy controls preserve full code and IDs, media comment controls sit right
     expect(boxes[0]!.x).toBeGreaterThanOrEqual(boxes[1]!.x+boxes[1]!.width);
     await bug.click();
     await expect(page.getByRole('group',{name:'Add report comment'})).toBeVisible();
-    await page.getByLabel('New tag').click();
+    await page.getByRole('heading',{name:'Report',exact:true}).click();
   }
   const run=items.find((a:any)=>a.namespace==='runs'),tag=`ui-check-${Date.now()}`;
   await page.goto(`/p/neural-rendering/a/${run.id}`);
@@ -446,67 +379,21 @@ test('list cache survives category navigation and reload, refresh bypasses it', 
   await page.goto('/p/cache-demo?view=runs');
   await expect(page.getByRole('link', {name:'cached-runs', exact:true})).toBeVisible();
   await page.getByRole('button', {name:'Pause auto-refresh', exact:true}).click();
-  await nav.getByRole('link', {name:'Reports', exact:true}).click();
-  await expect(page.getByText('cached-reports', {exact:true})).toBeVisible();
   await nav.getByRole('link', {name:'Artifacts', exact:true}).click();
   await expect(page.getByRole('link', {name:'cached-artifacts', exact:true})).toBeVisible();
   await nav.getByRole('link', {name:'Runs', exact:true}).click();
   await expect(page.getByRole('link', {name:'cached-runs', exact:true})).toBeVisible();
-  expect(requests).toEqual(['runs','reports','artifacts']);
+  expect(requests).toEqual(['runs','artifacts']);
   await page.reload();
   await expect(page.getByRole('link', {name:'cached-runs', exact:true})).toBeVisible();
-  expect(requests).toEqual(['runs','reports','artifacts']);
+  expect(requests).toEqual(['runs','artifacts']);
   await page.getByRole('button', {name:'Pause auto-refresh', exact:true}).click();
   await page.getByRole('button', {name:'Refresh', exact:true}).click();
-  await expect.poll(() => requests.length).toBe(4);
+  await expect.poll(() => requests.length).toBe(3);
   expect(requests.at(-1)).toBe('runs');
-  await nav.getByRole('link', {name:'Reports', exact:true}).click();
-  await expect(page.getByText('cached-reports', {exact:true})).toBeVisible();
-  expect(requests).toHaveLength(4);
-});
-
-test('report text does not wait for history or media and survives a slow reload', async ({page,request}) => {
-  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
-  let release!:()=>void;
-  const pending = new Promise<void>(resolve=>{release=resolve;});
-  await page.route('**/ui-api/artifacts/*/history', async route=>{await pending;await route.continue().catch(()=>{});});
-  await page.route('**/ui-api/reports/*/output/**', route=>route.abort());
-  try {
-    await page.goto(`/p/neural-rendering/a/${report.id}`);
-    await expect(page.locator('article.native-document')).toBeVisible({timeout:2000});
-    await expect(page.locator('article.native-document')).toContainText('report');
-    // The saved preview/descriptor render even when their revalidation cannot complete.
-    await page.route('**/v1/resolutions', route=>route.abort());
-    await page.route(/\/ui-api\/reports\/[^/]+\/(preview|document)\.json$/, route=>route.abort());
-    await page.reload();
-    await expect(page.locator('article.native-document')).toBeVisible({timeout:2000});
-  } finally {release();}
-});
-
-test('finished report polling stops and metadata refresh does not re-render prose', async ({page,request}) => {
-  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
-  let checks=0, description='Original description';
-  await page.clock.install();
-  await page.addInitScript(() => {
-    (window as any).reportHtmlParses=0;
-    const parse=DOMParser.prototype.parseFromString;
-    DOMParser.prototype.parseFromString=function(...args:Parameters<typeof parse>){(window as any).reportHtmlParses++;return parse.apply(this,args);};
-  });
-  await page.route('**/v1/resolutions', route => {checks++;return route.fulfill({json:[{...report,annotations:{...report.annotations,description}}]});});
-  await page.goto(`/p/neural-rendering/a/${report.id}`);
-  await expect(page.locator('article.native-document')).toBeVisible();
-  const parses=await page.evaluate(()=>(window as any).reportHtmlParses);
-  expect(parses).toBeGreaterThan(0);
-  const initial=checks;
-  await page.clock.fastForward(16000);
-  expect(checks).toBe(initial);
-  description='Refreshed description';
-  await page.getByRole('button',{name:'Refresh',exact:true}).click();
-  await expect(page.locator('.hero')).toContainText(description);
-  expect(checks).toBe(initial+1);
-  expect(await page.evaluate(()=>(window as any).reportHtmlParses)).toBe(parses);
+  await nav.getByRole('link', {name:'Artifacts', exact:true}).click();
+  await expect(page.getByRole('link', {name:'cached-artifacts', exact:true})).toBeVisible();
+  expect(requests).toHaveLength(3);
 });
 
 test('run console shows the output stored by the run',async({page,request})=>{
@@ -520,13 +407,13 @@ test('run console shows the output stored by the run',async({page,request})=>{
 });
 
 test('live artifact keeps polling until it finishes', async ({page,request}) => {
-  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
+  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=datasets')).json();
+  const artifact=items[0];
   let checks=0;
   await page.clock.install();
-  await page.route('**/v1/resolutions', route => {checks++;return route.fulfill({json:[{...report,state:checks<3?'live':'finished'}]});});
-  await page.goto(`/p/neural-rendering/a/${report.id}`);
-  await expect(page.locator('article.native-document')).toBeVisible();
+  await page.route('**/v1/resolutions', route => {checks++;return route.fulfill({json:[{...artifact,state:checks<3?'live':'finished'}]});});
+  await page.goto(`/p/neural-rendering/a/${artifact.id}`);
+  await expect(page.getByRole('heading',{name:'Value',exact:true})).toBeVisible();
   expect(checks).toBe(1);
   // The next check is scheduled only after a response settles; advance until it fires.
   const advanceTo=(count:number)=>expect.poll(async()=>{await page.clock.fastForward(1000);return checks;}).toBe(count);
@@ -537,53 +424,8 @@ test('live artifact keeps polling until it finishes', async ({page,request}) => 
   expect(checks).toBe(3);
 });
 
-test('v4 reports load document and output assets directly without a preview conversion', async ({page,request}) => {
-  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.find((a:any)=>a.name==='report-field-guide'&&a.manifest?.value?.data?.document_version>=4);
-  expect(report).toBeTruthy();
-  const paths:string[]=[];
-  page.on('request',r=>{paths.push(new URL(r.url()).pathname);});
-  await page.goto(`/p/neural-rendering/a/${report.id}`);
-  await expect(page.locator('article.native-document')).toBeVisible();
-  const image=page.getByRole('button',{name:'Enlarge Python cell image output',exact:true}).first().locator('img');
-  await image.scrollIntoViewIfNeeded();
-  await expect.poll(()=>image.evaluate((img:HTMLImageElement)=>img.naturalWidth)).toBeGreaterThan(0);
-  await expect(image).toHaveAttribute('src',new RegExp(`/ui-api/reports/${report.id}/assets/`));
-  expect(paths).toContain(`/ui-api/reports/${report.id}/document.json`);
-  expect(paths.some(p=>p.endsWith('/preview.json')||p.endsWith('/executed.ipynb'))).toBe(false);
-  const callout=page.locator('aside.admonition.note',{hasText:'Cells can print fenced divs'});
-  await expect(callout.locator('.admonition-title')).toHaveText('Generated callout');
-  await expect(callout.locator('a')).toHaveAttribute('href','#sec-code');
-});
-
-test('v3 reports read their Markdown output parsed by the server', async ({page,request}) => {
-  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.find((a:any)=>a.name==='report-field-guide'&&a.manifest?.value?.data?.document_version===3);
-  test.skip(!report,'Needs a report built before document version 4');
-  const paths:string[]=[];
-  page.on('request',r=>{paths.push(new URL(r.url()).pathname);});
-  await page.goto(`/p/neural-rendering/a/${report.id}`);
-  await expect(page.locator('article.native-document strong',{hasText:'Generated Markdown'})).toBeVisible();
-  expect(paths).toContain(`/ui-api/reports/${report.id}/preview.json`);
-});
-
-test('legacy v1 inline report output remains readable', async ({page,request}) => {
-  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items[0],value=report.manifest.value;
-  const source={path:'legacy.qmd',line_start:1,line_end:1};
-  await page.route('**/v1/resolutions',route=>route.fulfill({json:[{...report,manifest:{...report.manifest,value:{...value,data:{...value.data,document_version:1}}}}]}));
-  await page.route('**/preview.json',route=>route.fulfill({json:{format:'cairn/document',version:1,title:'Legacy report',labels:{},blocks:[{id:'legacy',kind:'code',source,options:{echo:false},outputs:[{output_type:'stream',text:'Legacy printed output'},{output_type:'display_data',data:{'image/png':'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='}}]}]}}));
-  await page.goto(`/p/neural-rendering/a/${report.id}`);
-  await expect(page.locator('article.native-document')).toContainText('Legacy printed output');
-  const image=page.getByRole('button',{name:'Enlarge Python cell image output',exact:true}).locator('img');
-  await image.scrollIntoViewIfNeeded();
-  await expect.poll(()=>image.evaluate((img:HTMLImageElement)=>img.naturalWidth)).toBe(1);
-});
-
 test('full paragraph selection keeps actions beside selected text',async({page,request})=>{
-  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
-  await page.goto(`/p/neural-rendering/a/${report.id}`);
+  await page.goto(reportPage);
   const paragraph=page.locator('.native-document p').filter({hasText:'This is a working tour'}).first();
   await paragraph.scrollIntoViewIfNeeded();
   // Include the next block boundary, as a browser's full-line selection can do.
@@ -601,32 +443,8 @@ test('full paragraph selection keeps actions beside selected text',async({page,r
   await chat.getByRole('button',{name:'Delete comment'}).click();
 });
 
-test('Plotly comments do not highlight chart text',async({page,request})=>{
-  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
-  let comments:any[]=[];
-  await page.route(new RegExp(`/ui-api/reports/${report.id}/comments(?:/[^/]+)?$`),async route=>{
-    const method=route.request().method();
-    if(method==='POST') {const comment={...route.request().postDataJSON(),id:'plotly-highlight-test',artifact_id:report.id};comments=[comment];return route.fulfill({json:comment});}
-    if(method==='DELETE'){comments=[];return route.fulfill({json:{}});}
-    return route.fulfill({json:comments});
-  });
-  await page.goto(`/p/neural-rendering/a/${report.id}`);
-  const shell=page.locator('.native-output-shell').filter({has:page.locator('.native-plotly-card')}).first();
-  await shell.scrollIntoViewIfNeeded();
-  await shell.getByRole('button',{name:'Comment on Plotly figure',exact:true}).click();
-  const editor=page.getByRole('group',{name:'Add report comment'});
-  await editor.getByLabel('Comment',{exact:true}).fill('Chart annotation only');
-  await expect(editor.getByLabel('Saved',{exact:true})).toBeVisible();
-  expect(await page.evaluate(()=>CSS.highlights.get('cairn-comments')?.size||0)).toBe(0);
-  await editor.getByRole('button',{name:'Delete comment'}).click();
-  await expect(editor).toHaveCount(0);
-});
-
 test('code annotations preserve syntax foreground colors and a dark background',async({page,request})=>{
-  const {items}=await (await request.get('/v1/artifacts?project=neural-rendering&namespace=reports')).json();
-  const report=items.filter((a:any)=>a.name==='report-field-guide').sort((a:any,b:any)=>b.number-a.number)[0];
-  await page.goto(`/p/neural-rendering/a/${report.id}`);
+  await page.goto(reportPage);
   const code=page.getByLabel('python code',{exact:true}).filter({hasText:'def summarize'}).locator('code');
   await code.scrollIntoViewIfNeeded();
   await code.evaluate(node=>{const range=document.createRange();range.selectNodeContents(node);const selection=window.getSelection()!;selection.removeAllRanges();selection.addRange(range);});

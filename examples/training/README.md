@@ -8,7 +8,6 @@ python data.py                                                 # publishes datas
 python train.py                                                # one run: runs/fit/linear-lr0.1/seed0
 python train.py -m model=linear,cubic learning_rate=0.03,0.3   # four runs
 python train.py -m model=cubic learning_rate=0.3 seed=1,2,3,4  # four more seeds of one of them
-cairn report build report.qmd --publish
 ```
 
 Each configuration and seed has its own run name, `fit/<model>-lr<rate>/seed<seed>`.
@@ -16,16 +15,10 @@ Running the same one again, for example after fixing a bug, publishes its next
 version, which replaces the previous one in every search. Seeds are separate runs
 side by side, not versions of one run.
 
-The report finds the latest version of every run under `runs/fit/` with
-`cairn.find("runs/fit/**")`, where `**` reaches every level below `runs/fit/`. It
-groups the runs by configuration and shows the mean and spread of the loss over
-the seeds. It picks the best single run with
-`cairn.find(..., order="/value/loss", limit=1)`, which the database evaluates, and
-compares it with a baseline it reads with `cairn.use("runs/fit/linear-lr0.03/seed0")`.
-Its last section finds the seeds of one configuration with
-`cairn.find("runs/fit/cubic-lr0.3/*")`. Every run the report found or used is
-recorded as an input. Build it for a subset with an override:
-`cairn report build report.qmd 'runs=runs/fit/cubic*/*'`.
+The Workspace compares the runs, grouped by configuration with the spread over the
+seeds. `cairn.find("runs/fit/**")` finds the latest version of every run below
+`runs/fit/`, and `cairn.find(..., order="/value/loss", limit=1)` the best one, which
+the database evaluates.
 
 The Hydra config is in `conf/`. Cairn stores the resolved config and the console
 output with every run, so Hydra writes no output folder for single runs and keeps
