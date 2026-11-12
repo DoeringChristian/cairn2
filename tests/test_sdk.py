@@ -127,6 +127,30 @@ def test_capture_consumption_download_and_generic_kind(client, tmp_path):
     assert {"artifact_id": reader.id, "role": "model"} in result["manifest"]["dependencies"]
 
 
+def test_new_files_and_folders_are_added_when_their_block_exits(client, tmp_path):
+    artifact = client.start("custom-result", "renders")
+    with artifact.new_file("plots/loss.csv") as stream:
+        stream.write("step,loss\n0,1.0\n")
+    with artifact.new_file("weights.bin", "wb") as stream:
+        stream.write(b"\x00\x01")
+    with artifact.new_dir("frames") as folder:
+        (folder / "0.txt").write_text("first")
+    with pytest.raises(RuntimeError), artifact.new_file("broken.txt") as stream:
+        stream.write("partial")
+        raise RuntimeError
+    with pytest.raises(ValidationError):
+        artifact.add(b"bytes", name="b.bin", immutable=True)
+    source = tmp_path / "kept.txt"
+    source.write_text("kept")
+    artifact.add(source, immutable=True)
+    reader = client.get(artifact.finish()["id"])
+    assert sorted(reader.files) == ["frames", "kept.txt", "plots/loss.csv", "weights.bin"]
+    assert reader.file("plots/loss.csv").load() == b"step,loss\n0,1.0\n"
+    assert reader.file("weights.bin").load() == b"\x00\x01"
+    assert (reader.download("frames") / "0.txt").read_text() == "first"
+    assert reader.file("kept.txt").load() == b"kept"
+
+
 def test_multiwriter_drain_and_exact_finalization_intent(client):
     first = client.start("run", "shared")
     second = client.attach(first.id)

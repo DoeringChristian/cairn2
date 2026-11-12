@@ -242,6 +242,16 @@ supports custom formats with explicit blob and artifact references; unknown
 formats remain inspectable through `StoredValue`. No pickle-based object codec
 is used.
 
+Files that exist only to be added need no output folder: `new_file` and `new_dir`
+yield a temporary file or folder and add it under the name when the block exits.
+
+```python
+with cairn.new_file("plots/loss.svg", "wb") as stream:
+    figure.savefig(stream, format="svg")
+with cairn.new_dir("frames") as folder:
+    render_frames(folder)
+```
+
 Readers list added names with `reader.files` and return one as a value with
 `reader.file(name)` (`.load()`, `.open()`, `.download()`). `reader.download(name=None,
 to=None)` returns one path: the artifact folder, or the named file or folder in
@@ -408,7 +418,11 @@ service supervision are deployment responsibilities.
 Remote Python writers stage immutable bytes and ordered events in a durable
 outbox before `log()` returns. Large path-backed dataset values instead upload
 bounded chunks synchronously before queuing their small reference; they do not
-stage the whole dataset in the outbox. The default outbox location is
+stage the whole dataset in the outbox. `add(path, immutable=True)` skips the staged
+copy of a smaller file or folder: the outbox records where it is and uploads it
+from there, so it must stay unchanged until the artifact finishes (`finish()` waits
+for delivery); a changed or missing file fails delivery with `IntegrityError`.
+The default outbox location is
 `<state>/outbox/<repo-hash>`. `<state>` is `$CAIRN_STATE_DIR`, else
 `$XDG_STATE_HOME/cairn` or `~/.local/state/cairn`. Keep it apart from the
 disposable download cache: it may hold the only copy of unsent results.
@@ -682,7 +696,7 @@ typed values, comments, SQL-filtered record queries, streaming blobs and explici
 transfer/maintenance. Runs automatically capture client-side provenance and console output. The
 backend has one shared token and ordinal query ordering; no code execution
 or AI integration. Unknown schemas fail explicitly: repository schema **8**, HTTP
-protocol **4**, durable outbox schema **3**. Typed-value codec envelopes remain
+protocol **4**, durable outbox schema **4**. Typed-value codec envelopes remain
 version 1. A schema 6 or 7 repository opens again after `cairn repo export` (a backup)
 and `cairn --repo PATH repo migrate`, which converts it in one transaction; use
 `--database-url` with `--objects` or `--s3-bucket` for PostgreSQL. Names use

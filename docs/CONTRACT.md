@@ -2,8 +2,9 @@
 
 `cairn/contract.py` declares `RepositoryProtocol` and JSON result shapes. The direct
 repository and HTTP adapter implement the same methods. Protocol version **4**,
-repository schema **8**, durable outbox schema **3**. Other schemas are rejected;
+repository schema **8**, durable outbox schema **4**. Other schemas are rejected;
 schema 6 and 7 repositories convert only through the explicit `cairn repo migrate`.
+A schema 3 outbox upgrades in place when opened; older clients reject schema 4.
 
 ## One artifact lifecycle
 
@@ -179,7 +180,14 @@ installs it as the default, restores the previous handle on exit, and finishes
 on normal exit or records failure on exceptional exit unless already finished;
 the same holds for `cairn.init()` contexts and `cairn.run`.
 The Python `add()` method replaces `capture()` without an alias; the persisted
-`capture` entry kind is unchanged. `cairn.init()` remains the run entry point.
+`capture` entry kind is unchanged. `add(path, immutable=True)` records the file's
+path, size and modification time in the outbox instead of staging a copy and
+uploads it from there; a file that changed or disappeared before delivery raises
+`IntegrityError`. Without an outbox it behaves like `add(path)`.
+`new_file(name, mode="w", encoding=None)` (`"w"` or `"wb"`) and `new_dir(name)`
+are context managers on artifacts and at top level that yield a temporary file or
+empty folder and add it under `name` when the block exits normally; an exception
+adds nothing. Both remove their temporary copy afterwards. `cairn.init()` remains the run entry point.
 `cairn.run(...)` takes `init()`'s arguments and decorates a function: each call runs
 inside its own `init()` context and restores the previous default handle afterwards.
 Without `config=`, an OmegaConf `DictConfig` first argument becomes the resolved config.

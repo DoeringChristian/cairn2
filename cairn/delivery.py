@@ -74,7 +74,7 @@ class Delivery:
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'"
                 ).fetchone()
                 state = dict(previous.execute("SELECT key,value FROM meta")) if exists else {}
-                if state.get("schema_version") != "3" or state.get(
+                if state.get("schema_version") not in ("3", "4") or state.get(
                     "destination"
                 ) != destination.rstrip("/"):
                     raise Conflict("Outbox schema or destination does not match")
@@ -115,6 +115,10 @@ class Delivery:
             CREATE TABLE IF NOT EXISTS blobs (
                 digest TEXT PRIMARY KEY, size INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS sources (
+                digest TEXT PRIMARY KEY, path TEXT NOT NULL,
+                size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS starts (
                 id TEXT PRIMARY KEY, method TEXT NOT NULL,
                 args TEXT NOT NULL, result TEXT
@@ -139,9 +143,10 @@ class Delivery:
                 )
             self._db.execute("INSERT OR IGNORE INTO meta VALUES ('destination',?)", (destination,))
             schema = self._meta("schema_version")
-            if schema is not None and schema != "3":
+            if schema not in (None, "3", "4"):
                 raise Conflict("Unknown outbox schema version")
-            self._db.execute("INSERT OR IGNORE INTO meta VALUES ('schema_version','3')")
+            # Schema 4 adds the sources table, which a schema 3 journal gains above.
+            self._db.execute("INSERT OR REPLACE INTO meta VALUES ('schema_version','4')")
         try:
             identity = backend.info()["repository_id"]
         except CairnError:
@@ -266,6 +271,51 @@ class Delivery:
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
+
+    def refer_blob(self, source):
+        """Hash a file in place; delivery uploads it from there instead of a staged copy.
+
+        The file must stay unchanged until it is delivered. Other sources are staged.
+        """
+        if not isinstance(source, (str, os.PathLike)):
+            return self.stage_blob(source)
+        path = Path(source).absolute()
+        before = path.stat()
+        sha = hashlib.sha256()
+        with path.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                sha.update(chunk)
+        after = path.stat()
+        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+            raise Conflict(f"File changed while it was added: {path}")
+        digest = sha.hexdigest()
+        with self._transaction():
+            self._db.execute(
+                "INSERT OR REPLACE INTO sources VALUES (?,?,?,?)",
+                (digest, str(path), after.st_size, after.st_mtime_ns),
+            )
+        return {"digest": digest, "size": after.st_size}
+
+    def _source(self, digest):
+        with self._lock:
+            row = self._db.execute("SELECT * FROM sources WHERE digest=?", (digest,)).fetchone()
+        if row is None:
+            raise IntegrityError(
+                "A required blob is absent from the repository and outbox",
+                details={"digest": digest},
+            )
+        path = Path(row["path"])
+        try:
+            state = path.stat()
+        except FileNotFoundError:
+            state = None
+        if state is None or (state.st_size, state.st_mtime_ns) != (row["size"], row["mtime_ns"]):
+            raise IntegrityError(
+                f"{path} changed or was removed before it was uploaded; a file added with "
+                "immutable=True must stay unchanged until its artifact finishes",
+                details={"digest": digest, "path": str(path)},
+            )
+        return path
 
     def _save_writer(self, response):
         writer = response["writer"]
@@ -464,16 +514,13 @@ class Delivery:
         for digest, descriptor in required.items():
             path = self.staging / digest
             if not existing.get(digest):
-                if not path.is_file():
-                    raise IntegrityError(
-                        "A required blob is absent from the repository and outbox",
-                        details={"digest": digest},
-                    )
+                source = path if path.is_file() else self._source(digest)
                 with self._request_timeout(deadline):
-                    self.backend.put_blob(path, digest=digest, size=descriptor["size"])
+                    self.backend.put_blob(source, digest=digest, size=descriptor["size"])
             # Acknowledged immutable bytes are now safely stored by this repository.
             with self._transaction():
                 self._db.execute("DELETE FROM blobs WHERE digest=?", (digest,))
+                self._db.execute("DELETE FROM sources WHERE digest=?", (digest,))
                 path.unlink(missing_ok=True)
 
     @contextlib.contextmanager

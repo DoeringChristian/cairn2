@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import copy
 import functools
 import hashlib
 import os
 import sys
+import tempfile
 import threading
 import time
 import warnings
@@ -354,17 +356,20 @@ class Artifact:
     def version(self):
         return self.result.get("number") if self.result else None
 
-    def _encode(self, value, *, describe=False, link=False):
+    def _encode(self, value, *, describe=False, link=False, immutable=False):
+        if self.client.delivery:
+            stage = (
+                self.client.delivery.refer_blob if immutable else self.client.delivery.stage_blob
+            )
+        else:
+            stage = self.client.backend.put_blob
+
         def large(item):
             from .datasets import fingerprint, upload, walk
 
             if link:
                 # Shared-path captures keep their existing no-copy representation.
-                put = (
-                    self.client.delivery.stage_blob
-                    if self.client.delivery
-                    else self.client.backend.put_blob
-                )
+                put = stage
                 if isinstance(item, File):
                     return encode(item, self._linker(put))
                 blobs = [File(path, name=name).blobs[0] for name, path in walk(item.source)]
@@ -399,12 +404,7 @@ class Artifact:
 
         if describe:
             return encode(value, _describe_blob, large=large)
-        put_blob = (
-            self.client.delivery.stage_blob
-            if self.client.delivery
-            else self.client.backend.put_blob
-        )
-        return encode(value, self._linker(put_blob) if link else put_blob, large=large)
+        return encode(value, self._linker(stage) if link else stage, large=large)
 
     def _linker(self, put_blob):
         def store(source):
@@ -417,11 +417,11 @@ class Artifact:
 
         return store
 
-    def _append(self, kind, data, *, link=False):
+    def _append(self, kind, data, *, link=False, immutable=False):
         with self._lock:
             if self._closed:
                 raise Conflict("Writer is closed")
-            encoded = self._encode(data, link=link)
+            encoded = self._encode(data, link=link, immutable=immutable)
             if self.client.delivery:
                 return self.client.delivery.append(self.writer_id, kind, encoded)
             result = self.client.backend.append_batch(
@@ -465,15 +465,39 @@ class Artifact:
             raise ValidationError("Metadata updates must be dictionaries")
         return self._append("metadata", metadata)
 
-    def add(self, source, *, name=None, link=False):
+    def add(self, source, *, name=None, link=False, immutable=False):
         """Add a file, folder, bytes or typed value under a name.
 
         link=True references files the repository can read where they are instead of
         copying them; the repository copies them when it cannot read them.
+        immutable=True promises that a path stays unchanged until this artifact
+        finishes, so a remote outbox uploads it from there instead of staging a copy.
         """
-        return self._add(source, name, reserved=False, link=link)
+        if immutable and not isinstance(source, (str, os.PathLike)):
+            raise ValidationError("immutable=True needs a file or folder path")
+        return self._add(source, name, reserved=False, link=link, immutable=immutable)
 
-    def _add(self, source, name, *, reserved=True, link=False):
+    @contextlib.contextmanager
+    def new_file(self, name, mode="w", *, encoding=None):
+        """A new file to write, added under name when the block exits without an error."""
+        if mode not in ("w", "wb"):
+            raise ValidationError('new_file mode must be "w" or "wb"')
+        with tempfile.TemporaryDirectory(prefix="cairn-") as folder:
+            path = Path(folder) / PurePosixPath(name).name
+            with path.open(mode, encoding=encoding) as stream:
+                yield stream
+            self.add(path, name=name)
+
+    @contextlib.contextmanager
+    def new_dir(self, name):
+        """A new empty folder, added under name when the block exits without an error."""
+        with tempfile.TemporaryDirectory(prefix="cairn-") as folder:
+            path = Path(folder) / PurePosixPath(name).name
+            path.mkdir()
+            yield path
+            self.add(path, name=name)
+
+    def _add(self, source, name, *, reserved=True, link=False, immutable=False):
         if isinstance(source, (str, os.PathLike)):
             path = Path(source)
             value = Directory(path) if path.is_dir() else File(path)
@@ -490,7 +514,9 @@ class Artifact:
             raise ValidationError("add() requires a name for this typed value")
         if not reserved and name.split("/", 1)[0] in SECTIONS:
             raise ValidationError(f'"{name.split("/", 1)[0]}/" is reserved for Cairn files')
-        return self._append("capture", {"name": name, "value": value}, link=link)
+        return self._append(
+            "capture", {"name": name, "value": value}, link=link, immutable=immutable
+        )
 
     def annotate(self, patch, *, expected_etag=None, target="artifact"):
         return self.client.annotate(self.id, patch, expected_etag=expected_etag, target=target)
@@ -1007,8 +1033,16 @@ def update(metadata):
     return _current().update(metadata)
 
 
-def add(source, *, name=None):
-    return _current().add(source, name=name)
+def add(source, *, name=None, immutable=False):
+    return _current().add(source, name=name, immutable=immutable)
+
+
+def new_file(name, mode="w", *, encoding=None):
+    return _current().new_file(name, mode, encoding=encoding)
+
+
+def new_dir(name):
+    return _current().new_dir(name)
 
 
 def remove(ref, *, repo=None, project=None):
