@@ -1,0 +1,34 @@
+---
+title: Line fit
+config:
+  dataset: datasets/points@latest
+  fit: runs/fit@latest
+  evaluation: runs/evaluate@latest
+---
+
+The pipeline publishes a dataset, fits a line to it and evaluates the fit.
+`make` passes the exact versions it produced as config overrides.
+
+```{python}
+#| label: fig-fit
+#| fig-cap: Samples and the fitted line.
+#| echo: false
+import cairn
+import matplotlib.pyplot as plt
+from IPython.display import display
+
+rows = cairn.use(cfg.dataset).value.load()
+model = cairn.use(cfg.fit).value
+rmse = cairn.use(cfg.evaluation).value["rmse"]
+figure, axis = plt.subplots(figsize=(7, 3.3))
+axis.scatter([row["x"] for row in rows], [row["y"] for row in rows], s=8)
+axis.axline((0, model["intercept"]), slope=model["slope"], color="black")
+axis.set(xlabel="x", ylabel="y")
+figure.tight_layout()
+display(figure)
+plt.close(figure)
+```
+
+The fitted line has slope `{python} f"{model['slope']:.2f}"` and intercept
+`{python} f"{model['intercept']:.2f}"`, with a root-mean-square error of
+`{python} f"{rmse:.3f}"` (@fig-fit).

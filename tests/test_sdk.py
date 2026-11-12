@@ -273,6 +273,24 @@ def test_artifact_failure_restores_context_and_standalone_discovery(tmp_path, mo
     contextvars.Context().run(scenario)
 
 
+def test_implicit_reports_after_finish(tmp_path):
+    from cairn.reports import build, publish
+
+    def scenario():
+        run = cairn.init(project="study", repo=tmp_path / "repo", provenance=False)
+        cairn.finish(value=1)
+        source = tmp_path / "report.qmd"
+        source.write_text("---\ncairn:\n  inputs:\n    run: " + run.id + "\n---\n# Example\n")
+        result = build(source, tmp_path / "report")
+        published = publish(result.path, name="example")
+        with Client(tmp_path / "repo", project="study") as reader:
+            report = reader.get(published["id"])
+            assert report.project == "study"
+            assert report.dependencies[0].id == run.id
+
+    contextvars.Context().run(scenario)
+
+
 def test_remove_falls_back_and_gc_purges_only_unreferenced(client):
     first = client.start("runs", "train")
     first.finish()

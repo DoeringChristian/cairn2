@@ -1,4 +1,5 @@
 import contextvars
+import json
 import os
 import uuid
 from contextlib import ExitStack
@@ -178,6 +179,39 @@ def test_top_level_reads_record_to_the_current_run(tmp_path, monkeypatch):
             assert [item.id for item in summary.dependencies] == [reader.id]
 
     contextvars.Context().run(scenario)
+
+
+def test_reports_record_found_and_read_artifacts(tmp_path):
+    from cairn import reports
+
+    with Client(tmp_path / "repo") as client:
+        ids = fits(client)
+        source = tmp_path / "study.qmd"
+        source.write_text("""---
+title: Study
+---
+
+```{python}
+import cairn
+best = cairn.find("runs/fit/*", order="/value/loss", limit=1)[0]
+listed = cairn.find("runs/fit/cubic*")
+print(best.name, len(listed), cairn.Client().project)
+```
+""")
+        result = reports.build(source, tmp_path / "build", client=client)
+        inputs = json.loads((result.path / "inputs.json").read_text())
+        assert [(item["artifact_id"], item["requested"]) for item in inputs] == [
+            (ids["cubic", 0.1, 2], "runs/fit/*"),
+            (ids["cubic", 0.3, 2], "runs/fit/cubic*"),
+        ]
+        notebook = json.loads((result.path / "executed.ipynb").read_text())
+        printed = [
+            "".join(o["text"])
+            for cell in notebook["cells"]
+            for o in cell.get("outputs", [])
+            if "text" in o
+        ]
+        assert printed == ["fit/cubic-lr0.1 2 default\n"]
 
 
 def test_finish_inside_a_run_context_and_decorator(tmp_path):

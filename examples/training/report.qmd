@@ -1,0 +1,98 @@
+---
+title: Model and learning-rate study
+config:
+  runs: runs/fit/**
+  baseline: runs/fit/linear-lr0.03/seed0
+  repeated: runs/fit/cubic-lr0.3
+---
+
+Each run fits `datasets/points` with one model, learning rate and seed, for
+example `python train.py -m model=linear,cubic learning_rate=0.03,0.3`. The report
+compares the latest version of every run matching `{python} cfg.runs`; build it
+for a subset with `cairn report build report.qmd 'runs=runs/fit/cubic*/*'`.
+
+```{python}
+#| echo: false
+import statistics
+from itertools import groupby
+
+import cairn
+import matplotlib.pyplot as plt
+from IPython.display import Markdown, display
+
+
+def configuration(run):
+    return run.config["model"]["name"], run.config["learning_rate"]
+
+
+def summary(runs):
+    losses = [run.value["loss"] for run in runs]
+    spread = statistics.stdev(losses) if len(losses) > 1 else 0.0
+    return len(losses), statistics.mean(losses), spread
+
+
+runs = sorted(cairn.find(cfg.runs), key=configuration)
+assert runs, f"No runs match {cfg.runs}; train some first (see README.md)"
+groups = {key: summary(list(group)) for key, group in groupby(runs, key=configuration)}
+favourite = min(groups, key=lambda key: groups[key][1])
+best = cairn.find(cfg.runs, order="/value/loss", limit=1)[0]
+baseline = cairn.use(cfg.baseline)
+```
+
+## Results {#sec-results}
+
+```{python}
+#| label: tbl-loss
+#| tbl-cap: Final training loss per configuration, over its seeds.
+#| echo: false
+rows = "\n".join(
+    f"| {model} | {rate} | {count} | {mean:.4f} ± {spread:.4f} |"
+    for (model, rate), (count, mean, spread) in groups.items()
+)
+display(Markdown("| Model | Learning rate | Seeds | Loss |\n| - | - | - | - |\n" + rows))
+```
+
+```{python}
+#| label: fig-loss
+#| fig-cap: Training loss per step of every run.
+#| echo: false
+figure, axis = plt.subplots(figsize=(7, 3.3))
+for run in runs:
+    records = list(run.records(fields=["/step", "/loss"]))
+    axis.plot([r["/step"] for r in records], [r["/loss"] for r in records], label=run.name)
+axis.set(xlabel="Step", ylabel="Loss", yscale="log")
+axis.legend(fontsize="small")
+figure.tight_layout()
+display(figure)
+plt.close(figure)
+```
+
+On average the `{python} favourite[0]` model with learning rate
+`{python} favourite[1]` fits best (@tbl-loss, @fig-loss). The best single run is
+`{python} best.name`, with a loss of `{python} f"{best.value['loss']:.4f}"`,
+`{python} f"{1 - best.value['loss'] / baseline.value['loss']:.0%}"` below the
+baseline `{python} str(baseline)`, finished on
+`{python} f"{baseline.finished_at:%Y-%m-%d}"`.
+
+## Repeated runs {#sec-repeated}
+
+Training `{python} cfg.repeated` with other seeds, for example
+`python train.py -m model=cubic learning_rate=0.3 seed=1,2,3,4`, publishes one run
+per seed. `{python} cfg.repeated + "/*"` finds the latest version of each.
+
+```{python}
+#| label: tbl-repeated
+#| tbl-cap: Final loss of every seed of the repeated configuration.
+#| echo: false
+repeats = sorted(cairn.find(cfg.repeated + "/*"), key=lambda run: run.config["seed"])
+rows = "\n".join(
+    f"| {run.config['seed']} | v{run.version} | {run.value['loss']:.4f} |" for run in repeats
+)
+display(Markdown("| Seed | Version | Loss |\n| - | - | - |\n" + rows))
+count, mean, spread = summary(repeats)
+luckiest = cairn.find(cfg.repeated + "/*", order="/value/loss", limit=1)[0]
+```
+
+Over `{python} count` seeds the loss is `{python} f"{mean:.4f} ± {spread:.4f}"`
+(mean ± standard deviation), and seed `{python} luckiest.config["seed"]` gave the
+lowest, `{python} f"{luckiest.value['loss']:.4f}"` (@tbl-repeated).

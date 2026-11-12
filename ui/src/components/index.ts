@@ -13,4 +13,5 @@ export * from './Select';
 export * from './Chart';
 export * from './ValueView';
 export * from './ReportCard';
+export * from './DocumentReader';
 export * from './ProjectCard';

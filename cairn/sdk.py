@@ -264,45 +264,6 @@ class Client:
             comment_id, resolved=False, request_id=new_id("request")
         )
 
-    def _report_id(self, name):
-        for report in self.backend.reports(project=self.project):
-            if report["name"] == name:
-                return report["id"]
-        raise NotFound(f"Unknown report: {name}")
-
-    def reports(self):
-        return self.backend.reports(project=self.project)
-
-    def report(self, name):
-        """The report's parts: the author's body and the agent's slots, each with its revision."""
-        return self.backend.report(self._report_id(name))
-
-    def create_report(self, name, body="", *, by=None):
-        return self.backend.create_report(
-            self.project, name, body=body, author=by, request_id=new_id("request")
-        )
-
-    def write_report(self, name, part, source, *, expected_revision=None, by=None):
-        """Save one part; agents write the slots the body leaves them, never the body."""
-        return self.backend.write_report(
-            self._report_id(name),
-            part,
-            source,
-            expected_revision=expected_revision,
-            author=by,
-            request_id=new_id("request"),
-        )
-
-    def delete_report(self, name):
-        return self.backend.delete_report(self._report_id(name), request_id=new_id("request"))
-
-    def comment_report(self, name, body, *, quote=None, part="body", by=None):
-        """Comment on a part, on the passage quote when given."""
-        anchor = {"path": part, **({"quote": quote} if quote else {})}
-        return self.backend.add_report_comment(
-            self._report_id(name), anchor, body, author=by, request_id=new_id("request")
-        )
-
     def flush(self, *, timeout=None):
         return self.delivery.flush(timeout=timeout) if self.delivery else {"pending": 0}
 
@@ -866,6 +827,7 @@ class Reader:
 
 
 _default = contextvars.ContextVar("cairn_default_artifact", default=None)
+_report = None
 
 
 def init(
@@ -1051,8 +1013,8 @@ def remove(ref, *, repo=None, project=None):
 
 
 def _reading():
-    """The run or artifact that records what is read."""
-    target = _default.get()
+    """The run, artifact or report that records what is read."""
+    target = _default.get() or _report
     if target is None:
         raise ValidationError(
             "Call cairn.init() first, or read without recording with cairn.Client()"
@@ -1066,7 +1028,7 @@ def find(pattern, *, where=None, order=None, limit=None):
 
 
 def use(ref, *, role="input"):
-    """A reader recorded as an input of the current run."""
+    """A reader recorded as an input of the current run or report."""
     return _reading().use(ref, role=role)
 
 

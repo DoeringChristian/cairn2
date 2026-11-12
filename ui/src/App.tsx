@@ -8,7 +8,6 @@ import { api, post, useResource, projectPath, type Project } from './api';
 import { Button, ErrorNote, Field, Hero, Loading, Select } from './components';
 import { ProjectsPage, ProjectPage } from './pages/Projects';
 import { ArtifactPage } from './pages/Artifact';
-import { ReportPage } from './report/ReportPage';
 import { PalettePage } from './pages/Palette';
 import { WorkspacePage, RunWorkspaceRedirect } from './workspace/Workspace';
 import { useScrollMemory } from './components/useScrollMemory';
@@ -80,7 +79,7 @@ export function App() {
   return <><a className="skip-link" href="#content">Skip to content</a><Rail authenticated={auth === true} noAuth={noAuth} logout={logout}/><div id="content" className="page-host">
     {error && <ErrorNote error={error}/>}{auth === null ? <main><Loading what="Connecting to Cairn"/></main> : auth === false ? <Login onLogin={() => {setError(undefined); setAuth(true);}}/> : <Routes>
       <Route path="/" element={<ProjectsPage/>}/><Route path="/login" element={<ProjectsPage/>}/><Route path="/p/:project" element={<ProjectPage/>}/>
-      <Route path="/p/:project/a/:id" element={<ArtifactPage/>}/><Route path="/p/:project/r/*" element={<ReportPage/>}/><Route path="/p/:project/v/:version" element={<ArtifactPage/>}/>
+      <Route path="/p/:project/a/:id" element={<ArtifactPage/>}/><Route path="/p/:project/v/:version" element={<ArtifactPage/>}/>
       <Route path="/p/:project/workspace" element={<WorkspacePage/>}/><Route path="/p/:project/workspace/:runId" element={<RunWorkspaceRedirect/>}/><Route path="/palette" element={<PalettePage/>}/><Route path="*" element={<main><Hero title="Page not found"/><Link to="/">Back to projects</Link></main>}/>
     </Routes>}</div></>;
 }

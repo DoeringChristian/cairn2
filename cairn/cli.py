@@ -65,49 +65,9 @@ def _watch_comments(client, reference, interval, as_json, once=False):
         time.sleep(interval)
 
 
-def _watch_report(client, name, after, settle, interval):
-    """Wait for body edits past revision ``after`` that rested ``settle`` seconds, or for threads
-    with a comment sent after their last reply; print the report with them and stop."""
-    import time
-    from datetime import UTC, datetime
-
-    import httpx
-
-    from .model import Pending
-
-    report_id = client._report_id(name)
-    while True:
-        try:
-            report = client.backend.report(report_id)
-            found = client.backend.report_comments(report_id, include_resolved=False)
-        except (Pending, httpx.TransportError) as exc:
-            print(f"cairn: {exc}; retrying", file=sys.stderr)
-            time.sleep(interval)
-            continue
-        body = report["parts"]["body"]
-        after = body["revision"] if after is None else after
-        rested = datetime.now(UTC) - datetime.fromisoformat(body["updated_at"])
-        edited = body["revision"] > after and rested.total_seconds() >= settle
-        threads = {}
-        for comment in found:
-            threads.setdefault(comment["reply_to"] or comment["id"], []).append(comment)
-        waiting = [thread for thread in threads.values() if _unanswered(thread)]
-        if edited or waiting:
-            print(
-                json.dumps({"report": report, "edited": edited, "threads": waiting}),
-                flush=True,
-            )
-            return 0
-        time.sleep(interval)
-
-
 def _unanswered(thread):
     answered = max((c["created_at"] for c in thread if not c["for_agent"]), default="")
     return any(c["sent_at"] and c["sent_at"] > answered for c in thread)
-
-
-def _source(path):
-    return sys.stdin.read() if path == "-" else Path(path).read_text("utf-8")
 
 
 def _print(value):
@@ -185,7 +145,7 @@ def _storage_arguments(parser):
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(
-        prog="cairn", description="Versioned artifacts, Python runs, and reports."
+        prog="cairn", description="Versioned artifacts, Python runs, and local executable reports."
     )
     root.add_argument(
         "--repo", metavar="PATH|URL", help="Repository path or server URL (otherwise discovery)"
@@ -317,47 +277,42 @@ def parser() -> argparse.ArgumentParser:
     update.set_defaults(action="log", kind="metadata", sequence=None)
 
     reports = commands.add_parser(
-        "report", help="Reports: the author's text with slots that agents fill"
+        "report", help="Build a supported QMD/Markdown subset locally"
     ).add_subparsers(dest="report_command", required=True)
-    reports.add_parser("list", help="Reports of the project").set_defaults(action="report-list")
-    for operation, text in (
-        ("show", "Print a report's parts with their revisions"),
-        ("delete", "Remove a report with its revisions and comments"),
-    ):
-        sub = reports.add_parser(operation, help=text)
-        sub.add_argument("name")
-        sub.set_defaults(action="report-" + operation)
-    new = reports.add_parser("new", help="Create a report")
-    new.add_argument("name")
-    new.add_argument("source", nargs="?", help="File with the body, or - for standard input")
-    new.add_argument("--by", help="Who writes it")
+    new = reports.add_parser("new", help="Create a report source; default NewReport.qmd")
+    new.add_argument("destination", nargs="?", default="NewReport.qmd")
+    new.add_argument("--title", default="New report")
     new.set_defaults(action="report-new")
-    write = reports.add_parser("write", help="Save a new revision of one part")
-    write.add_argument("name")
-    write.add_argument("part", help="An agent slot, or body for the author's text")
-    write.add_argument("source", nargs="?", default="-", help="File, or - for standard input")
-    write.add_argument("--revision", type=int, help="Fail unless the part is at this revision")
-    write.add_argument("--by", help="Who writes it, e.g. an agent name")
-    write.set_defaults(action="report-write")
-    comment = reports.add_parser("comment", help="Comment on a part, e.g. to flag a problem")
-    comment.add_argument("name")
-    comment.add_argument("body")
-    comment.add_argument("--quote", help="The passage the comment is about")
-    comment.add_argument("--part", default="body")
-    comment.add_argument("--by", help="Who comments, e.g. an agent name")
-    comment.set_defaults(action="report-comment")
-    watch = reports.add_parser(
-        "watch", help="Wait for edits to the body or comments sent to an agent, print them, stop"
+    build = reports.add_parser(
+        "build", help="Execute a fresh Python kernel, record inputs, and create a portable bundle"
     )
-    watch.add_argument("name")
-    watch.add_argument(
-        "--after", type=int, help="Body revision already handled; default the current one"
+    build.add_argument("source")
+    build.add_argument("overrides", nargs="*", help="Hydra overrides of the front-matter config")
+    build.add_argument(
+        "--multirun", "-m", action="store_true", help="One build per combination of sweep values"
     )
-    watch.add_argument(
-        "--settle", type=float, default=30.0, help="Seconds an edit rests before it counts"
+    build.add_argument("--output", "-o")
+    build.add_argument("--timeout", type=int, default=120)
+    build.add_argument("--kernel", default="python3")
+    build.add_argument("--publish", action="store_true")
+    build.add_argument("--name", help="Artifact name when --publish is set")
+    build.set_defaults(action="report-build")
+    publish = reports.add_parser(
+        "publish", help="Publish a verified complete build as a report artifact"
     )
-    watch.add_argument("--interval", type=float, default=5.0, help="Seconds between checks")
-    watch.set_defaults(action="report-watch")
+    publish.add_argument("directory")
+    publish.add_argument("--name")
+    publish.set_defaults(action="report-publish")
+    for operation in ("copy", "export"):
+        sub = reports.add_parser(
+            operation,
+            help="Copy editable report source"
+            if operation == "copy"
+            else "Export all portable report files",
+        )
+        sub.add_argument("reference")
+        sub.add_argument("destination")
+        sub.set_defaults(action="report-" + operation)
 
     repository_parser = commands.add_parser(
         "repo", help="Repository transfer, integrity checks and garbage collection"
@@ -651,25 +606,35 @@ def _dispatch(args, client):
                 _close_writer(backend, args.artifact_id, args.writer)
             kwargs.update(outcome=args.outcome)
         return getattr(backend, action)(args.artifact_id, **kwargs)
-    if action == "report-list":
-        return client.reports()
-    if action == "report-show":
-        return client.report(args.name)
-    if action == "report-delete":
-        return client.delete_report(args.name)
-    if action == "report-new":
-        body = _source(args.source) if args.source else ""
-        return client.create_report(args.name, body, by=args.by)
-    if action == "report-write":
-        return client.write_report(
-            args.name, args.part, _source(args.source), expected_revision=args.revision, by=args.by
-        )
-    if action == "report-comment":
-        return client.comment_report(
-            args.name, args.body, quote=args.quote, part=args.part, by=args.by
-        )
-    if action == "report-watch":
-        return _watch_report(client, args.name, args.after, args.settle, args.interval)
+    if action.startswith("report-"):
+        from . import reports
+
+        if action == "report-build":
+            outputs = []
+            sweeps = reports.sweep(args.overrides) if args.multirun else [args.overrides]
+            for index, overrides in enumerate(sweeps):
+                directory = args.output
+                if args.multirun and directory is not None:
+                    directory = Path(directory) / str(index)
+                result = reports.build(
+                    args.source,
+                    directory,
+                    client=client,
+                    timeout=args.timeout,
+                    kernel_name=args.kernel,
+                    overrides=overrides,
+                )
+                output = {"directory": str(result.directory), "manifest": result.manifest}
+                if args.publish:
+                    output["publication"] = reports.publish(
+                        result.directory, client=client, name=args.name
+                    )
+                outputs.append(output)
+            return outputs if args.multirun else outputs[0]
+        if action == "report-publish":
+            return reports.publish(args.directory, client=client, name=args.name)
+        operation = reports.copy if action == "report-copy" else reports.export
+        return {"path": str(operation(args.reference, args.destination, client=client))}
     if action.startswith("repo-"):
         from .ops import check_repository, export_repository, import_repository
         from .storage import Repository
@@ -697,10 +662,19 @@ def _dispatch(args, client):
 def main(argv=None) -> int:
     """Return an exit code; errors are machine-readable JSON on stderr."""
     command = parser()
-    args = command.parse_args(argv)
+    args, extra = command.parse_known_args(argv)
+    if extra:
+        if args.action != "report-build" or any(item.startswith("-") for item in extra):
+            command.error("unrecognized arguments: " + " ".join(extra))
+        args.overrides += extra
     try:
         if args.action == "server":
             _serve(args)
+            return 0
+        if args.action == "report-new":
+            from .reports import new
+
+            _print({"path": str(new(args.destination, title=args.title))})
             return 0
         from .config import resolve_project
         from .sdk import Client
