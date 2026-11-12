@@ -140,6 +140,9 @@ Image, video and Plotly cards offer ordered, paginated galleries, grouped compar
 and sequences with a slider over any scalar field. Exact matching is the default;
 previous and nearest-numeric matching are explicit settings. All duplicates at the
 chosen axis value remain visible. Captions report the actual observation axis.
+Moving the slider never blanks a tile: each tile keeps its frame until the next has
+loaded and decoded, neighbouring steps are prefetched, and fetched blobs are shared
+up to 256 MiB.
 Plotly figures retain their own specifications; optional linked 2D zoom assumes
 matching units. Image and video bytes are fetched from existing blob references; a
 video is a record field holding `cairn.File` with a `video/*` media type.

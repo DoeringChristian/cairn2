@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState, type ComponentType, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Pause, Play, type LucideIcon } from 'lucide-react';
 import { envelope, type BlobRef, type Envelope } from '../../api';
 import { ActionIcon } from '../../components/Button';
 import { MediaLightbox } from '../../components/MediaLightbox';
 import { Select } from '../../components/Select';
-import { useImageBlob } from '../../components/useBlobUrl';
+import { preloadBlob, useImageBlob } from '../../components/useBlobUrl';
 import { WorkspaceDialog } from '../Dialog';
 import { compare, groups, label, sorted, typeOf, valueAt, type Card, type Observation } from '../model';
 import { runColor } from '../presentation';
@@ -120,11 +120,24 @@ function MediaContent({ format, card, rows }: ContentProps & { format: MediaForm
       : shownGroups.flatMap((group) => {
           const found = pick(card, group.rows, current);
           if (!found.length) return [{ key: group.key, name: group.name }];
-          return found.map((row) => ({ key: recordId(row), name: group.name, row }));
+          return found.map((row, index) => ({ key: `${group.key}:${index}`, name: group.name, row }));
         });
   const totalPages = Math.max(1, Math.ceil(tiles.length / card.pageSize));
   const currentPage = Math.min(page, totalPages - 1);
   const visible = tiles.slice(currentPage * card.pageSize, (currentPage + 1) * card.pageSize);
+
+  useEffect(() => {
+    if (card.mode === 'gallery') return;
+    for (const step of [1, -1, 2, -2]) {
+      const near = axisValues[cursorIndex + step];
+      if (near === undefined) continue;
+      for (const group of shownGroups)
+        for (const row of pick(card, group.rows, near)) {
+          const blob = envelope(valueAt(row, card.value))?.blobs?.[0];
+          if (blob) preloadBlob(blob);
+        }
+    }
+  }, [card, axisValues, cursorIndex, shownGroups]);
 
   const emitRange = (range: Range) => {
     if (!card.linkAxes) return;
@@ -267,7 +280,14 @@ function MediaContent({ format, card, rows }: ContentProps & { format: MediaForm
                   </div>
                 </>
               ) : (
-                <div className="workspace-empty">No observation at {display(current)}</div>
+                <>
+                  <div className="workspace-empty workspace-tile-missing">No observation</div>
+                  <div className="workspace-tile-caption">
+                    <span>
+                      {card.axis}: {display(current)}
+                    </span>
+                  </div>
+                </>
               )}
             </div>
           ))}
@@ -407,6 +427,34 @@ export function mediaKind(format: MediaFormat): CardKind {
     Content: (props) => <MediaContent format={format} {...props} />,
     Settings: (props) => <MediaSettings format={format} {...props} />,
   };
+}
+
+/** Keeps the shown media on screen until the next has loaded, so sweeping a slider never blanks a tile. */
+export function Held({
+  id,
+  placeholder,
+  children,
+}: {
+  id?: string;
+  placeholder: ReactNode;
+  children: (id: string, ready: () => void) => ReactNode;
+}) {
+  const [shown, setShown] = useState<string>();
+  const latest = useRef(id);
+  latest.current = id;
+  const layers = [...new Set([shown, id])].filter((layer): layer is string => !!layer);
+  return (
+    <div className="workspace-held">
+      {!shown && placeholder}
+      {layers.map((layer) => (
+        <div key={layer} className={`workspace-held-layer ${layer === shown ? '' : 'pending'}`}>
+          {children(layer, () => {
+            if (latest.current === layer) setShown(layer);
+          })}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 /** A blob in the shared media lightbox, once its bytes have loaded. */

@@ -1,7 +1,7 @@
 import { Film } from 'lucide-react';
 import { VideoPreview } from '../../components/media/VideoPreview';
 import { useImageBlob } from '../../components/useBlobUrl';
-import { BlobLightbox, DownloadBlob, mediaKind, recordName, type TileProps } from './media';
+import { BlobLightbox, DownloadBlob, Held, mediaKind, recordName, type TileProps } from './media';
 
 function VideoTile({ value, title, onExpand }: TileProps) {
   const blob = value.blobs[0];
@@ -12,8 +12,11 @@ function VideoTile({ value, title, onExpand }: TileProps) {
         {error.message} <DownloadBlob blob={blob} />
       </div>
     );
-  if (!url) return <div className="workspace-empty">Loading video…</div>;
-  return <VideoPreview src={url} mime={mime} label={title} onEnlarge={onExpand} />;
+  return (
+    <Held id={url} placeholder={<div className="workspace-video-loading" aria-label="Loading video" />}>
+      {(src, ready) => <VideoPreview src={src} mime={mime} label={title} onEnlarge={onExpand} onLoadedData={ready} />}
+    </Held>
+  );
 }
 
 /** Records hold videos as `cairn.File` values with a `video/*` media type. */
