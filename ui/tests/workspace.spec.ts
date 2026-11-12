@@ -31,8 +31,8 @@ test('complete streams, independent scalar axes and ordering, explicit media mat
   await dialog.getByRole('tab',{name:'Mapping'}).click();await chooseField(dialog,'X field','elapsed');await chooseField(dialog,'Point order','loss');await dialog.getByRole('button',{name:'Done'}).click();
   await expect.poll(()=>scalar.locator('.workspace-scalar-plot').evaluate((node:any)=>node.uplot?.data[1][0])).toEqual([20,10,0]);
   const comparison=card(page,'Compare reconstructions');await comparison.getByRole('slider').fill('1');
-  await expect(comparison.getByText('No observation at 1',{exact:true})).toBeVisible();
-  await page.getByRole('button',{name:'Settings for Compare reconstructions'}).click();await dialog.getByRole('tab',{name:'Mapping'}).click();await chooseField(dialog,'Match observations','Previous available');await dialog.getByRole('button',{name:'Done'}).click();await comparison.getByRole('slider').fill('1');await expect(comparison.getByText('No observation at 1')).toHaveCount(0);await expect(comparison.locator('.workspace-tile-caption').filter({hasText:'step: 0'})).toHaveCount(1);
+  await expect(comparison.locator('.workspace-media-tile').filter({hasText:'No observation'})).toContainText('step: 1');
+  await page.getByRole('button',{name:'Settings for Compare reconstructions'}).click();await dialog.getByRole('tab',{name:'Mapping'}).click();await chooseField(dialog,'Match observations','Previous available');await dialog.getByRole('button',{name:'Done'}).click();await comparison.getByRole('slider').fill('1');await expect(comparison.getByText('No observation')).toHaveCount(0);await expect(comparison.locator('.workspace-tile-caption').filter({hasText:'step: 0'})).toHaveCount(1);
   const gallery=card(page,'Browse by quality');await expect(gallery.locator('.workspace-tile-caption').first()).toContainText('quality: 30');
   await expect(gallery.locator('.workspace-tile-caption').last()).toContainText('quality: 10');
   const figures=card(page,'Compare fitted curves');await figures.scrollIntoViewIfNeeded();await figures.locator('.workspace-media-tile').nth(1).scrollIntoViewIfNeeded();await expect.poll(()=>figures.locator('.js-plotly-plot').count()).toBe(2);
@@ -78,6 +78,24 @@ test('workspace SVG blobs decode in thumbnails and lightboxes despite an untyped
   expect(await dialog.locator('img').evaluate((n:HTMLImageElement)=>n.naturalWidth)).toBe(120);
   await dialog.getByRole('button',{name:'Close media viewer'}).click();
   await comparison.getByRole('button',{name:'Enlarge image',exact:true}).first().click();await expect(page.getByRole('dialog').getByText('120 × 80',{exact:true})).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('sweeping media keeps the previous frame until the next has loaded',async({page})=>{
+  const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await fixture(page);
+  const frame=(step:number)=>({$cairn:1,format:'image',version:1,data:{name:'frame.png'},blobs:[{digest:`frame-${step}`,media_type:'image/png',size:68}],refs:[]});
+  await page.route('**/v1/blobs/frame-*',async r=>{await new Promise(resolve=>setTimeout(resolve,150));await r.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64')});});
+  await page.route('**/v1/records/query',r=>{const body=r.request().postDataJSON();return r.fulfill({json:{artifact_id:body.ref,cutoff:8,next_cursor:null,items:Array.from({length:8},(_,step)=>({artifact_id:body.ref,ordinal:step+1,sequence:step,writer_id:'w',kind:'record',data:{step,image:frame(step)},created_at:'2026-01-01'}))}});});
+  await page.getByRole('button',{name:'Refresh workspace',exact:true}).click();
+  const comparison=card(page,'Compare reconstructions');await comparison.scrollIntoViewIfNeeded();
+  await expect.poll(()=>comparison.locator('.workspace-held-layer:not(.pending) img').evaluateAll(nodes=>nodes.filter(n=>(n as HTMLImageElement).complete).length)).toBe(2);
+  await comparison.evaluate(node=>{const w=window as any;w.blank=0;w.heights=new Set();w.sampling=true;const sample=()=>{for(const tile of node.querySelectorAll('.workspace-media-tile')){const img=tile.querySelector<HTMLImageElement>('.workspace-held-layer:not(.pending) img');if(!img?.complete||!img.naturalWidth)w.blank++;w.heights.add(tile.getBoundingClientRect().height);}if(w.sampling)requestAnimationFrame(sample);};sample();});
+  const slider=comparison.getByRole('slider');
+  for(const step of [1,2,3,4,5,6,7,3,0,7]){await slider.fill(String(step));await page.waitForTimeout(40);}
+  await expect(comparison.locator('.workspace-tile-caption').first()).toContainText('step: 7');
+  await expect.poll(()=>comparison.locator('.workspace-held-layer').count()).toBe(2);
+  const result=await page.evaluate(()=>{const w=window as any;w.sampling=false;return {blank:w.blank,heights:w.heights.size};});
+  expect(result).toEqual({blank:0,heights:1});
   expect(errors).toEqual([]);
 });
 

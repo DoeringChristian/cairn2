@@ -1,25 +1,33 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Image } from 'lucide-react';
 import { useImageBlob } from '../../components/useBlobUrl';
-import { BlobLightbox, DownloadBlob, mediaKind, recordName, type TileProps } from './media';
+import { BlobLightbox, DownloadBlob, Held, mediaKind, recordName, type TileProps } from './media';
 import { Choice } from './settings';
 
 function ImageTile({ card, value, title, onExpand }: TileProps) {
   const blob = value.blobs[0];
   const { url, error } = useImageBlob(blob);
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [blob.digest]);
-  if (error || failed)
+  const [failed, setFailed] = useState<string>();
+  if (error || (url && failed === url))
     return (
       <div className="workspace-empty">
         {error?.message || 'This image could not be decoded.'} <DownloadBlob blob={blob} />
       </div>
     );
-  if (!url) return <div className="workspace-empty">Loading image…</div>;
   return (
-    <button className="workspace-image-open" onClick={onExpand} aria-label="Enlarge image">
-      <img loading="lazy" src={url} alt={title} style={{ objectFit: card.fit }} onError={() => setFailed(true)} />
-    </button>
+    <Held id={url} placeholder={<div className="workspace-image-open" aria-label="Loading image" />}>
+      {(src, ready) => (
+        <button className="workspace-image-open" onClick={onExpand} aria-label="Enlarge image">
+          <img
+            src={src}
+            alt={title}
+            style={{ objectFit: card.fit }}
+            onLoad={(e) => e.currentTarget.decode().then(ready, ready)}
+            onError={() => setFailed(src)}
+          />
+        </button>
+      )}
+    </Held>
   );
 }
 

@@ -228,6 +228,7 @@ export function VideoPreview({
   videoClassName,
   reportPath,
   onEnlarge,
+  onLoadedData,
 }: {
   src: string;
   mime: string;
@@ -236,6 +237,7 @@ export function VideoPreview({
   videoClassName?: string;
   reportPath?: string;
   onEnlarge: () => void;
+  onLoadedData?: () => void;
 }) {
   const [element, setElement] = useState<HTMLVideoElement | null>(null);
   const attach = useCallback(
@@ -258,6 +260,8 @@ export function VideoPreview({
         data-report-path={reportPath}
         playsInline
         preload="metadata"
+        onLoadedData={onLoadedData}
+        onError={onLoadedData}
       >
         <source src={src} type={mime} />
       </video>
