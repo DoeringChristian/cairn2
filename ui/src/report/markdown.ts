@@ -8,6 +8,14 @@ import type { Node } from '../components/Markdown';
 
 const md=new MarkdownIt('commonmark',{html:false}).enable(['table','strikethrough']).use(footnote).use(texmath,{engine:katex,delimiters:'dollars'})
   .use(container,'div',{validate:(info:string)=>/^\s*\{/.test(info)});
+/** An agent block: `<?cairn agent SLOT?>` or `<?cairn agent SLOT "suggested request"?>` on a line of its own. */
+export const agentLine=/^<\?cairn agent ([A-Za-z][\w-]{0,63})(?: "((?:[^"\\]|\\.)*)")?\?>$/;
+md.block.ruler.before('paragraph','agent',(state,start,_end,silent)=>{
+  const line=state.src.slice(state.bMarks[start]+state.tShift[start],state.eMarks[start]),match=agentLine.exec(line);
+  if(!match||state.sCount[start]-state.blkIndent>=4)return false;
+  if(silent)return true;
+  const token=state.push('agent','',0);token.attrs=[['slot',match[1]],...(match[2]?[['prompt',JSON.parse(`"${match[2]}"`)] as [string,string]]:[])];token.map=[start,start+1];state.line=start+1;return true;
+});
 const attribute=/([#.])([^\s{}"'=]+)|([\w-]+)=(?:"([^"]*)"|'([^']*)'|([^\s{}"']+))/g;
 
 /** Pandoc attributes of a fenced div, e.g. {.agent #baseline}: id, space-separated class and key/value pairs. */

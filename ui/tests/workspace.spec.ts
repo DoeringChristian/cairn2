@@ -377,3 +377,20 @@ test('log axes render filtered tick labels, retain positive padded bounds and su
   await page.reload();await expect(plot.locator('canvas')).toBeVisible();log=await logarithmic();expect(log.x).toBe(3);expect(log.y).toBe(3);
   await loss.getByRole('button',{name:'Settings for Loss over training'}).click();await dialog.getByRole('tab',{name:'Appearance'}).click();await dialog.getByLabel('Logarithmic X').uncheck();await dialog.getByLabel('Logarithmic Y').uncheck();await dialog.getByRole('button',{name:'Done'}).click();await expect.poll(()=>plot.evaluate((n:any)=>[n.uplot.scales.x.distr,n.uplot.scales.y.distr])).toEqual([1,1]);expect(errors).toEqual([]);
 });
+
+test('each run separately shows every record card once per run, with only that run’s records',async({page})=>{
+  await fixture(page);
+  const together=await page.getByRole('article').count();
+  await page.getByRole('button',{name:'Show cards',exact:true}).click();
+  await page.getByRole('listbox',{name:'Show cards',exact:true}).getByText('Each run separately',{exact:true}).click();
+  const sections=page.getByRole('region',{name:/^Run /});
+  await expect(sections).toHaveCount(2);
+  for(const section of await sections.all()){
+    await expect(section.getByRole('article',{name:'Loss over training',exact:true})).toBeVisible();
+    await expect.poll(()=>section.getByRole('article',{name:'Loss over training',exact:true}).locator('.workspace-scalar-plot').evaluate((node:any)=>node.uplot?.data.length)).toBe(2);
+  }
+  expect(await page.getByRole('article').count()).toBeGreaterThanOrEqual(together);
+  await page.getByRole('button',{name:'Save',exact:true}).click();
+  await page.reload();
+  await expect(page.getByRole('region',{name:/^Run /})).toHaveCount(2);
+});

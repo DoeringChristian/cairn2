@@ -522,25 +522,31 @@ changes with `npm ci --prefix ui && npm run build --prefix ui`.
 ## Reports
 
 A report is where you write down a project: its goal, the direction, the
-experiments to run and what to show. It is Markdown, edited in the browser beside its
-rendering, and it runs no code. You leave the agent room with fenced divs; the agent
-answers in its own block below your text, never in it:
+experiments to run and what to show. It is a document you edit in the browser as you
+read it, and it runs no code. It edits like Obsidian: everything renders, and only what
+the cursor is in shows its Markdown, as text you edit and delete like any other. Type
+`@agent ` on a line of its own where the agent should work: an agent block appears, you
+write the request, and the agent's answer shows in that block, with your conversation
+folded below it. A new report can start blank, from a template (a research direction, an
+inspection, a comparison) or as a copy of another.
+
+Agents read and write the same document as Markdown, where an agent block is a line of
+its own:
 
 ```markdown
 # Thin-shell SDF
 
 Goal: beat the baseline on thin features without losing training speed.
 
-::: {.agent #baseline}
-Train the baseline at 3 learning rates. Report final Chamfer and wall time.
-:::
+<?cairn agent baseline?>
 ```
 
 Figures, video, audio and values come from artifacts, never from the report:
-`![Error on the test mesh](cairn:runs/train@latest#plots/err.png)` shows the file
-captured as `plots/err.png` by the latest `runs/train`, and `![](cairn:runs/train@v3)`
-shows that version's value. Reports also render tables, math, callouts
-(`::: {.callout-warning}`), code and footnotes.
+`![Error on the test mesh](cairn:runs/train@latest#plots/err.png)` on a line of its
+own shows the file captured as `plots/err.png` by the latest `runs/train`, and
+`![](cairn:runs/train@v3)` shows that version's value. Plotly figures stay interactive,
+and captured tables show as tables. Reports also have tables, math, callouts
+(`::: {.callout-warning}`) and code.
 
 A viewer is an artifact's HTML file; agents write them, for example a three.js mesh
 viewer published as `viewers/mesh` with its libraries beside `index.html`. A `view`
@@ -568,9 +574,9 @@ may post `{type: "cairn-html-size", height}` to its parent. Without settings,
 `![](cairn:viewers/mesh@v1#index.html)` shows a viewer directly, and a workspace
 Viewer card takes the same YAML, so a figure and a card are interchangeable.
 
-Each agent block shows only the agent's result; its request and a conversation with
-the agent fold away below it. That conversation is the block's comments without a
-quote: `cairn report comment study "…" --part baseline` adds to it, `report watch`
+Each agent block shows its request and the agent's result; the rest of the
+conversation folds away below it. That conversation is the block's comments without a
+quote, and its first message is the request: `cairn report comment study "…" --part baseline` adds to it, `report watch`
 wakes on what you send there, and `cairn comments reply` answers.
 
 A report is not an artifact: it has no versions or lineage, but every saved text of
@@ -579,8 +585,8 @@ refused instead of overwriting. Agents work on reports by name:
 
 ```sh
 cairn report list
-cairn report new study body.md                  # or create it in the UI
-cairn report show study                         # every part with its revision
+cairn report new study body.md                  # Markdown, or create it in the UI
+cairn report show study                         # every part; the body also as markdown
 cairn report write study baseline answer.md --by agent   # or - for standard input
 cairn report comment study "Three rates may miss the optimum" \
   --quote "Train the baseline at 3 learning rates" --by agent
@@ -681,9 +687,9 @@ The API provides one artifact lifecycle, multiple producers, alias compare-and-s
 typed values, comments, SQL-filtered record queries, streaming blobs and explicit
 transfer/maintenance. Runs automatically capture client-side provenance and console output. The
 backend has one shared token and ordinal query ordering; no code execution
-or AI integration. Unknown schemas fail explicitly: repository schema **8**, HTTP
+or AI integration. Unknown schemas fail explicitly: repository schema **9**, HTTP
 protocol **4**, durable outbox schema **3**. Typed-value codec envelopes remain
-version 1. A schema 6 or 7 repository opens again after `cairn repo export` (a backup)
+version 1. A schema 6, 7 or 8 repository opens again after `cairn repo export` (a backup)
 and `cairn --repo PATH repo migrate`, which converts it in one transaction; use
 `--database-url` with `--objects` or `--s3-bucket` for PostgreSQL. Names use
 slash-separated namespaces; colon-style references are unsupported.

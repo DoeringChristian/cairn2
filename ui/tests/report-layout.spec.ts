@@ -11,10 +11,12 @@ for(const width of [1440,900,390]){
     await page.route(`**/ui-api/reports/${report.id}/comments`,route=>route.fulfill({json:[]}));
     await page.route(`**/v1/reports/${report.id}`,async route=>{
       const response=await route.fetch(),fixture=await response.json(),finding=`::: {.finding .plain-fixture}\n**${title}**\n\n${status}\n:::\n`;
-      fixture.parts.body.source=`# Finding layout regression\n\n${finding}\n::: {.agent #finding}\n:::\n`;
+
       fixture.parts.finding={...fixture.parts.body,source:finding,author:'agent'};
       await route.fulfill({json:fixture});
     });
+    const finding=`::: {.finding .plain-fixture}\n**${title}**\n\n${status}\n:::\n`;
+    await page.route(`**/ui-api/reports/${report.id}/markdown`,route=>route.fulfill({json:{markdown:`# Finding layout regression\n\n${finding}\n<?cairn agent finding?>\n`,revision:1}}));
     await page.goto(reportPage);
     const findings=page.locator('.plain-fixture');
     await expect(findings).toHaveCount(2);

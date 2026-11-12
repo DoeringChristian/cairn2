@@ -14,6 +14,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError as SQLIntegrityError
 
+from . import documents
 from . import query as queries
 from .contract import (
     PUBLICATION_COLLECTION_LIMIT,
@@ -45,7 +46,7 @@ from .model import (
 )
 from .objects import Files, ensure_directory
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 BUSY_SECONDS = 30
 schema = sa.MetaData()
 NAME_KEYS = ("project", "namespace", "name")
@@ -406,11 +407,11 @@ class Repository:
                 version = conn.execute(
                     sa.select(meta.c.value).where(meta.c.key == "schema_version")
                 ).scalar()
-                upgrade = migrate and version in (6, 7)
+                upgrade = migrate and version in (6, 7, 8)
                 if version != SCHEMA_VERSION and not upgrade:
                     hint = (
                         "; export a backup, then run `cairn repo migrate`"
-                        if version in (6, 7)
+                        if version in (6, 7, 8)
                         else ""
                     )
                     raise Unsupported(
@@ -449,9 +450,10 @@ class Repository:
                 )
 
     def _upgrade(self, conn, version):
-        """Schema 6 to 8: inline annotations become exact properties and comments move along.
+        """Schema 6 to 9: inline annotations become exact properties and comments move along.
 
-        Schema 7 to 8 adds reports, whose comments live in the annotation store too."""
+        Schema 7 to 8 adds reports, whose comments live in the annotation store too; 8 to 9
+        turns each Markdown body revision into a document."""
         if version == 7:
             conn.execute(
                 sa.text(
@@ -460,6 +462,23 @@ class Repository:
                 )
             )
             report_comments.create(conn)
+            version = 8
+        if version == 8:
+            bodies = conn.execute(
+                sa.select(
+                    report_parts.c.report_id, report_parts.c.revision, report_parts.c.source
+                ).where(report_parts.c.part == "body")
+            ).all()
+            for body in bodies:
+                conn.execute(
+                    report_parts.update()
+                    .where(
+                        report_parts.c.report_id == body.report_id,
+                        report_parts.c.part == "body",
+                        report_parts.c.revision == body.revision,
+                    )
+                    .values(source=documents.dumps(documents.from_markdown(body.source)))
+                )
             conn.execute(
                 meta.update().where(meta.c.key == "schema_version").values(value=SCHEMA_VERSION)
             )
@@ -2033,6 +2052,8 @@ class Repository:
             raise ValidationError("Report source must be text")
         if len(source.encode()) > 1024 * 1024:
             raise CapacityError("Report parts must not exceed 1 MiB")
+        if part == "body":
+            documents.loads(source)
         _text(author, "Report author", 256, optional=True)
 
     @staticmethod
@@ -2066,8 +2087,9 @@ class Repository:
             for row in rows
         }
 
-    def create_report(self, project, name, *, body="", author=None, request_id=None):
-        """Create a report whose body holds the author's text; agents write the other parts."""
+    def create_report(self, project, name, *, body=None, author=None, request_id=None):
+        """Create a report whose body is the author's document; agents write the other parts."""
+        body = documents.dumps(documents.empty()) if body is None else body
         validate_name(project)
         validate_name(name)
         self._validate_part("body", body, author)

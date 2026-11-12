@@ -438,7 +438,7 @@ class HTTPRepository:
         return {"id": comment_id, "deleted": True}
 
     def create_report(
-        self, project, name, *, body="", author=None, request_id=None
+        self, project, name, *, body=None, author=None, request_id=None
     ) -> dict[str, JSONValue]:
         self._require("reports")
         return self._request(

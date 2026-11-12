@@ -291,7 +291,7 @@ class RepositoryProtocol(Protocol):
         project: str,
         name: str,
         *,
-        body: str = "",
+        body: str | None = None,
         author: str | None = None,
         request_id: str | None = None,
     ) -> dict[str, JSONValue]: ...

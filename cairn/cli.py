@@ -78,7 +78,7 @@ def _watch_report(client, name, after, settle, interval):
     report_id = client._report_id(name)
     while True:
         try:
-            report = client.backend.report(report_id)
+            report = client.report(name)
             found = client.backend.report_comments(report_id, include_resolved=False)
         except (Pending, httpx.TransportError) as exc:
             print(f"cairn: {exc}; retrying", file=sys.stderr)
@@ -329,12 +329,14 @@ def parser() -> argparse.ArgumentParser:
         sub.set_defaults(action="report-" + operation)
     new = reports.add_parser("new", help="Create a report")
     new.add_argument("name")
-    new.add_argument("source", nargs="?", help="File with the body, or - for standard input")
+    new.add_argument(
+        "source", nargs="?", help="Markdown file with the body, or - for standard input"
+    )
     new.add_argument("--by", help="Who writes it")
     new.set_defaults(action="report-new")
     write = reports.add_parser("write", help="Save a new revision of one part")
     write.add_argument("name")
-    write.add_argument("part", help="An agent slot, or body for the author's text")
+    write.add_argument("part", help="An agent slot, or body for the author's Markdown")
     write.add_argument("source", nargs="?", default="-", help="File, or - for standard input")
     write.add_argument("--revision", type=int, help="Fail unless the part is at this revision")
     write.add_argument("--by", help="Who writes it, e.g. an agent name")
@@ -486,7 +488,7 @@ def _serve(args):
         repository = _repository(args)
         repository.link_roots = [Path(root).resolve() for root in args.link_root]
     except Unsupported as exc:
-        if exc.details.get("schema_version") not in (6, 7) or not sys.stdin.isatty():
+        if exc.details.get("schema_version") not in (6, 7, 8) or not sys.stdin.isatty():
             raise
         print(
             f"{exc}.\nMigrate this repository to the current schema now? [y/N] ",

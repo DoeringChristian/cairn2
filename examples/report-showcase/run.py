@@ -14,7 +14,7 @@ ASSETS = Path(__file__).parent / "assets"
 RUN = "cairn:runs/showcase-baseline@latest"
 BODY = f"""# Field guide
 
-This is a working tour of a report: you write the plan, the agent answers in its own blocks.
+This is a working tour of a report: you write the plan, and type @agent where the agent should answer.
 
 ## Plan
 
@@ -64,14 +64,14 @@ images:
 
 ## Questions for the agent
 
-::: {{.agent #baseline}}
-Did the baseline converge? Show the final field.
-:::
+<?cairn agent baseline?>
 
-::: {{.agent #ablation}}
-Which ablation should run next?
-:::
+<?cairn agent ablation?>
 """
+REQUESTS = {
+    "baseline": "Did the baseline converge? Show the final field.",
+    "ablation": "Which ablation should run next?",
+}
 SLOTS = {
     "baseline": f"Converged: loss **0.018**, PSNR 34.2 dB.\n\n![Final field]({RUN}#figures/field-end.png)\n",
     "ablation": "Drop the boundary term first; it is the likeliest cause of the ringing.\n",
@@ -108,9 +108,11 @@ def main():
 
     with cairn.Client(project=project) as client:
         try:
-            client.write_report("field-guide", "body", BODY)
+            client.report("field-guide")
         except NotFound:
             client.create_report("field-guide", BODY)
+            for part, request in REQUESTS.items():
+                client.comment_report("field-guide", request, part=part)
         for part, source in SLOTS.items():
             client.write_report("field-guide", part, source, by="agent")
     print(f"Report: field-guide (project: {project})")

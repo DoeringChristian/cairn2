@@ -4,8 +4,13 @@ from contextlib import closing
 from fastapi.testclient import TestClient
 
 import cairn
+from cairn import documents
 from cairn.server import create_app
 from cairn.storage import Repository
+
+
+def doc(markdown):
+    return documents.dumps(documents.from_markdown(markdown))
 
 
 def test_browser_sessions_and_plain_artifact_identity(tmp_path):
@@ -50,16 +55,20 @@ def test_browsers_write_report_bodies_and_comments_but_not_slots(tmp_path):
     with closing(Repository(tmp_path)) as repo:
         other = repo.create_report("other", "findings")["id"]
         with TestClient(create_app(repo, token="test-token", ui=True)) as browser:
-            created = {"project": "demo", "name": "findings", "body": "# Plan"}
+            created = {"project": "demo", "name": "findings", "body": doc("# Plan")}
             assert browser.post("/ui-api/reports", json=created).status_code == 401
             browser.post("/ui-api/login", json={"token": "test-token"})
             foreign = {"origin": "https://other.test"}
             assert browser.post("/ui-api/reports", json=created, headers=foreign).status_code == 401
             report = browser.post("/ui-api/reports", json=created).json()
             path = f"/ui-api/reports/{report['id']}"
-            edit = {"source": "# Plan\n\n::: {.agent #baseline}\n:::", "expected_revision": 1}
+            edit = {"source": "# Plan\n\n<?cairn agent baseline?>", "expected_revision": 1}
             assert browser.put(f"{path}/body", json=edit).json()["revision"] == 2
             assert browser.put(f"{path}/body", json=edit).status_code == 409
+            stale = {"source": doc("# Plan"), "expected_revision": 2}
+            assert browser.put(f"{path}/body", json=stale).status_code == 400
+            markdown = browser.get(f"{path}/markdown").json()
+            assert markdown == {"markdown": "# Plan\n\n<?cairn agent baseline?>\n", "revision": 2}
             slot = f"/v1/reports/{report['id']}/parts/baseline"
             assert browser.put(slot, json=edit).status_code == 401
             repo.write_report(report["id"], "baseline", "Done.", author="agent")

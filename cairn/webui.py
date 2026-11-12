@@ -30,7 +30,7 @@ COOKIE = "cairn_browser"
 SESSION_SECONDS = 7 * 24 * 60 * 60
 RENEW_SECONDS = 60 * 60
 VIEWER_SECONDS = 12 * 60 * 60
-READ_POSTS = {"/v1/resolutions", "/v1/records/query", "/v1/blobs/availability"}
+READ_POSTS = {"/v1/resolutions", "/v1/records/query", "/v1/blobs/availability", "/ui-api/markdown"}
 
 
 def available():
@@ -480,16 +480,43 @@ def install(app, repository, token, *, no_auth=False):
         if request.headers.get("content-type", "").split(";")[0] != "application/json":
             raise ValidationError("Report edits require JSON")
 
+    from . import documents
+
+    @app.post("/ui-api/markdown")
+    def markdown(body: dict):
+        """Markdown pasted into a report, as document blocks."""
+        return documents.from_markdown(str(body.get("markdown", "")))
+
+    @app.get("/ui-api/report-templates")
+    def report_templates():
+        return documents.templates()
+
     @app.post("/ui-api/reports")
     def create_report(body: NewReport, request: Request):
         check_write(request)
         return repository.create_report(**body.model_dump())
 
+    @app.get("/ui-api/reports/{report_id}/markdown")
+    def report_markdown(report_id: str):
+        """The body as the Markdown the browser edits."""
+        body = repository.report(report_id)["parts"]["body"]
+        return {
+            "markdown": documents.to_markdown(documents.loads(body["source"])),
+            "revision": body["revision"],
+        }
+
     @app.put("/ui-api/reports/{report_id}/body")
     def write_report_body(report_id: str, body: ReportPart, request: Request):
-        # Browsers write the author's text; slots belong to agents.
+        # Browsers write the author's Markdown, stored as a document; slots belong to agents.
         check_write(request)
-        return repository.write_report(report_id, "body", **body.model_dump())
+        if body.source.lstrip().startswith('{"type":"doc"'):
+            # A page from before Markdown editing sends the document itself; saving it as text would lose the report.
+            raise ValidationError("This page is out of date. Reload it to keep editing.")
+        current = repository.report(report_id)["parts"]["body"]
+        document = documents.from_markdown(body.source, previous=documents.loads(current["source"]))
+        return repository.write_report(
+            report_id, "body", **{**body.model_dump(), "source": documents.dumps(document)}
+        )
 
     @app.delete("/ui-api/reports/{report_id}")
     def delete_report(report_id: str, request: Request):

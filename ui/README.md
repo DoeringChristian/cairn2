@@ -51,22 +51,24 @@ prose styles from leaking into media. Wheel/pinch zoom, bounded pan, fit, fullsc
 frame stepping, clip marking, region selection and reference copying share this viewer.
 Frame stepping uses the selected FPS and browser time-based seeking.
 
-Reports (`src/report`) parse their Markdown in the browser with markdown-it and render
-it through `nodesToReact` in `components/Markdown.tsx`, which leaves images and fenced
-divs to the caller: `cairn:` references load artifact files, `.agent` divs show the
-agent's slot. `report/Editor.tsx` edits the body in CodeMirror: every top-level block
-is a rendered widget except the one under the cursor, a click places the cursor at the
-source offset its text carries (`data-offset`) while a drag selects the rendered text
-for comments, `$$` inside `$|$` opens display math, and completion offers `cairn:`
-references, their captures, agent slots and callouts. An agent slot renders its part
-with a folded `SlotDiscussion` (the slot's quote-less comments) holding the request and
-the conversation. A `view` block (and a workspace Viewer card) is YAML read by
-`readView`; `ViewerFrame` runs its HTML file sandboxed from a signed `/ui-api/viewers/`
-link that serves the artifact's other files by relative path, and passes the settings
-as JSON in the URL fragment with each `cairn:REF#file` replaced by such a link. Large
-chunked files stream through the same route. CodeMirror's print mode keeps the
-whole report laid out, so headings and comment anchors exist off screen; that flag is
-internal, hence the exact `@codemirror/view` version. `ReportToc` discovers rendered
+Reports (`src/report`) store their body as a document (`cairn/documents.py`) and edit it
+as Markdown: `/ui-api/reports/{id}/markdown` serves it and a body save sends Markdown,
+which the server converts, keeping the ids of unchanged blocks. `report/Editor.tsx` edits
+it in CodeMirror like Obsidian's live preview: every block renders through `nodesToReact`
+(`components/Markdown.tsx`) except the one under the cursor, and inside that one only the
+element the cursor is in shows its syntax as real text (`**`, `*`, `~~`, backticks and link
+targets hide around the others, and `$TeX$` renders until the cursor reaches it), so
+deleting a delimiter is deleting a character. Display math being edited keeps its rendering
+beneath its source. An agent block (`<?cairn agent SLOT?>`) is always rendered, moves as
+one piece, and only its own control or undo removes it; `@agent` and a space places one.
+It renders the slot's quote-less comments as one conversation whose first message is the
+request, and the agent's Markdown answer through `report/media.tsx`, which resolves
+`cairn:` references: images, video and audio inline, Plotly figures as charts, other typed
+captures as values. A `view` block (and a workspace Viewer
+card) is YAML read by `readView`; `ViewerFrame` runs its HTML file sandboxed from a
+signed `/ui-api/viewers/` link that serves the artifact's other files by relative path,
+and passes the settings as JSON in the URL fragment with each `cairn:REF#file` replaced
+by such a link. Large chunked files stream through the same route. `ReportToc` discovers rendered
 headings and uses the existing left rail without shrinking the report. On mobile it
 is collapsible above the report. `SelectionCopy` copies selected prose and its source
 location. Project and record views refresh every five seconds, with a global pause.

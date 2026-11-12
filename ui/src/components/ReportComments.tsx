@@ -123,30 +123,38 @@ export function CommentComposer({artifact,anchor,position,getAnchorRect,onClose,
 }
 /** A slot's conversation with the agent: its comments without a quote, oldest first, as one thread. */
 export const slotComment=(comment:Comment,slot:string)=>comment.anchor.path===slot&&!comment.anchor.quote&&!comment.anchor.media_key;
-export function SlotDiscussion({artifact,slot,open,onToggle,meta,children}: {artifact:string;slot:string;open:boolean;onToggle:(open:boolean)=>void;meta?:ReactNode;children:ReactNode}) {
+/** An agent block: the request that opened its conversation, the agent's answer, then the rest of the conversation folded away. */
+export function SlotDiscussion({artifact,slot,prompt,open,onToggle,onRemove,meta,focus,children}: {artifact:string;slot:string;prompt?:string;open:boolean;onToggle:(open:boolean)=>void;onRemove?:()=>void;meta?:ReactNode;focus?:boolean;children?:ReactNode}) {
   const {items,replies}=useReportComments();
   const roots=items.filter(c=>slotComment(c,slot)),shown=(c:Comment)=>!!c.sent_at||!c.for_agent;
   const messages=[...roots,...replies.filter(c=>roots.some(root=>root.id===c.reply_to))].filter(shown).sort((a,b)=>a.created_at.localeCompare(b.created_at));
-  const thread=roots.filter(shown).at(-1),last=messages.at(-1);
+  const thread=roots.filter(shown).at(-1),[request,...rest]=messages,last=messages.at(-1);
   const draft=roots.find(c=>!shown(c))||replies.find(c=>c.reply_to===thread?.id&&!shown(c));
-  return <details className="agent-discussion" open={open} onToggle={event=>onToggle(event.currentTarget.open)}>
-    <summary><MessageSquare size={14} aria-hidden="true"/><span>{messages.length?`Discussion · ${messages.length}`:'Discuss'}</span>{last&&!last.for_agent&&<span className="agent-replied">Agent replied</span>}{last?.for_agent&&<span>Waiting for the agent</span>}{meta}</summary>
-    <div className="agent-thread">
-      <div className="agent-request">{children}</div>
-      {messages.map(message=><div key={message.id} className="comment-reply"><span className="muted">{message.author||(message.for_agent?'You':'Agent')}</span><p>{message.body}</p></div>)}
-      {open&&<SlotComposer key={thread?.id||'new'} artifact={artifact} slot={slot} thread={thread} draft={draft}/>}
-    </div>
-  </details>;
+  const header=(text:ReactNode)=><header className="agent-request"><span className="agent-label">Agent</span><div>{text}</div>{onRemove&&<MediaIconButton label="Remove agent block" icon={Trash2} onMouseDown={e=>e.preventDefault()} onClick={onRemove}/>}</header>;
+  if(!request)return <>{header(<span className="muted">What should the agent do here?</span>)}<SlotComposer key="new" artifact={artifact} slot={slot} draft={draft} suggestion={prompt} autoFocus={focus} placeholder={prompt||'Describe the task: what to run, what to show here…'}/>{children}</>;
+  return <>
+    {header(<p>{request.body}</p>)}
+    {children??<p className="agent-waiting">{last?.for_agent?'Waiting for the agent…':'The agent has not written here yet.'}</p>}
+    <details className="agent-discussion" open={open} onToggle={event=>onToggle(event.currentTarget.open)}>
+      <summary><MessageSquare size={14} aria-hidden="true"/><span>{rest.length?`Discussion · ${rest.length}`:'Discuss'}</span>{rest.length>0&&!last?.for_agent&&<span className="agent-replied">Agent replied</span>}{rest.length>0&&last?.for_agent&&<span>Waiting for the agent</span>}{meta}</summary>
+      <div className="agent-thread">
+        {rest.map(message=><div key={message.id} className="comment-reply"><span className="muted">{message.author||(message.for_agent?'You':'Agent')}</span><p>{message.body}</p></div>)}
+        {open&&<SlotComposer key={thread?.id||'new'} artifact={artifact} slot={slot} thread={thread} draft={draft} autoFocus placeholder="Clarify what you meant…"/>}
+      </div>
+    </details>
+  </>;
 }
-function SlotComposer({artifact,slot,thread,draft}: {artifact:string;slot:string;thread?:Comment;draft?:Comment}) {
+function SlotComposer({artifact,slot,thread,draft,placeholder,suggestion,autoFocus}: {artifact:string;slot:string;thread?:Comment;draft?:Comment;placeholder:string;suggestion?:string;autoFocus?:boolean}) {
   const field=useRef<HTMLTextAreaElement>(null),message=useDraft(artifact,{path:slot},draft,thread?.id,()=>{},()=>{});
+  useEffect(()=>{if(autoFocus)field.current?.focus({preventScroll:true});},[autoFocus]);
   const send=()=>void message.send().then(()=>field.current?.focus({preventScroll:true}));
   return <div className="comment-reply-box">
-    <textarea ref={field} aria-label={`Message the agent about ${slot}`} placeholder="Clarify what you meant…" maxLength={65536} rows={2} value={message.body} disabled={message.busy} onChange={e=>message.setBody(e.target.value)} onBlur={()=>void message.flush()} onKeyDown={e=>{
+    <textarea ref={field} aria-label={`Message the agent about ${slot}`} placeholder={placeholder} maxLength={65536} rows={2} value={message.body} disabled={message.busy} onChange={e=>message.setBody(e.target.value)} onBlur={()=>void message.flush()} onKeyDown={e=>{
       if(e.nativeEvent.isComposing||e.keyCode===229)return;
+      if(e.key==='Tab'&&suggestion&&!message.body){e.preventDefault();message.setBody(suggestion);return;}
       if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}
     }}/>
-    <footer><small>{message.status||'Enter to send · Shift+Enter for a new line'}</small><MediaIconButton label="Send message" icon={Send} disabled={!message.body.trim()||message.busy} onMouseDown={e=>e.preventDefault()} onClick={send}/></footer>
+    <footer><small>{message.status||(suggestion&&!message.body?'Tab uses the suggestion · Enter to send':'Enter to send · Shift+Enter for a new line')}</small><MediaIconButton label="Send message" icon={Send} disabled={!message.body.trim()||message.busy} onMouseDown={e=>e.preventDefault()} onClick={send}/></footer>
     {message.error&&<ErrorNote error={message.error}/>}
   </div>;
 }

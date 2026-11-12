@@ -131,7 +131,7 @@ button, input { font-family: inherit; }
 .native-code summary { cursor:pointer; font-size:12px; color:var(--muted); }
 .native-caption { text-align:center; color:var(--muted); font-size:13px; }
 .native-document .native-output { background:var(--accent-soft); color:var(--ink); }
-.native-math { text-align:center; margin:24px 0; }
+.native-math { text-align:center; margin:24px 0; max-width:100%; overflow-x:auto; overflow-y:hidden; }
 .native-inline-math { display:inline; }
 .native-footnotes { border-top:1px solid var(--line); padding-top:20px; color:var(--muted); font-size:13px; }
 .native-document .admonition { margin:24px 0; }
@@ -198,20 +198,12 @@ button, input { font-family: inherit; }
 /* Reports: the author's text with agent slots; the block under the cursor shows its source. */
 .report-actions { display: flex; align-items: center; gap: 8px; }
 .report-create { display: flex; align-items: end; gap: 10px; margin-bottom: 24px; }
-.report-editor .cm-editor { color: var(--ink); background: none; }
-.report-editor .cm-editor.cm-focused { outline: none; }
-.report-editor .cm-scroller { font: inherit; line-height: inherit; overflow: visible; }
-.report-editor .cm-content { padding: 0; caret-color: var(--ink); }
-.report-editor .cm-line { padding: 0; }
-.report-editor .cm-selectionBackground, .report-editor .cm-focused .cm-selectionBackground { background: var(--accent-soft); }
-.report-block { cursor: text; }
-.report-block > div > :first-child { margin-top: 0; }
+/* flow-root keeps a block's margins inside it, so CodeMirror measures the height the block takes. */
+.report-block { cursor: text; display: flow-root; }
+.report-block > div > :first-child, .report-block > div > .report-block-edit + * { margin-top: 0; }
 .report-block > div > :last-child { margin-bottom: 0; }
-.report-editor .cm-tooltip { border: 1px solid var(--line); border-radius: 8px; background: var(--card); box-shadow: var(--shadow); font: 13px/1.5 Inter, ui-sans-serif, system-ui, sans-serif; }
-.report-editor .cm-tooltip-autocomplete > ul > li[aria-selected] { color: var(--ink); background: var(--accent-soft); }
 /* An agent slot shows its result; the request and the conversation about it fold away below. */
 .agent-slot { margin: 24px 0; padding-left: 16px; border-left: 2px solid var(--accent-soft); }
-.agent-slot > .agent-request { color: var(--muted); }
 .agent-answer > :first-child { margin-top: 0; }
 .agent-answer > :last-child { margin-bottom: 0; }
 .agent-answer > header { display: flex; justify-content: space-between; gap: 12px; padding-top: 10px; font: 600 11px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); }
@@ -325,3 +317,36 @@ button.tag-chip { cursor: pointer; }
 .comment-popover header { flex-shrink: 0; }
 .comment-save-status { display: flex; align-items: center; gap: 3px; margin-right: 4px; }
 .comment-reply-box footer small { margin: 0; }
+
+.agent-request { display: flex; align-items: baseline; gap: 10px; font: 13px/1.5 Inter, ui-sans-serif, system-ui, sans-serif; color: var(--muted); }
+.agent-request > div { flex: 1; min-width: 0; }
+.agent-request p { margin: 0; white-space: pre-wrap; }
+.agent-label { padding: 0 7px; border-radius: 99px; color: var(--accent); background: var(--accent-soft); font-weight: 700; }
+.agent-waiting { color: var(--muted); font-style: italic; }
+.agent-slot .comment-reply-box textarea { box-sizing: border-box; width: 100%; margin-top: 8px; padding: 8px; font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 6px; }
+.report-editor .cm-editor { color: var(--ink); background: none; }
+.report-editor .cm-editor.cm-focused { outline: none; }
+.report-editor .cm-scroller { font: inherit; line-height: inherit; overflow: visible; }
+.report-editor .cm-content { padding: 0; caret-color: var(--ink); min-width: 0; }
+.report-editor .cm-line { padding: 0; }
+/* CodeMirror's zero-width cursor helpers beside widgets are images; the report's figure styles must not size them. */
+.report-editor img.cm-widgetBuffer { display: inline; width: 0; height: 1em; margin: 0; padding: 0; border: 0; border-radius: 0; cursor: text; }
+.report-block-body { position: relative; }
+.report-block-edit { position: absolute; left: -38px; top: 2px; z-index: 4; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--card); color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .12s; }
+.report-block-edit svg { width: 15px; height: 15px; }
+.report-block-body:hover > .report-block-edit, .report-block-edit:focus-visible { opacity: 1; }
+/* A viewer keeps the pointer, so hovering it never reaches the block: its button stays in sight. */
+.report-block-body:has(iframe) > .report-block-edit { opacity: .55; }
+.report-block-body:has(iframe) > .report-block-edit:hover { opacity: 1; }
+.report-block-edit:hover { color: var(--accent); border-color: var(--accent); }
+@media (hover: none) { .report-block-edit { opacity: .6; } }
+@media (max-width: 760px) { .report-block-edit { left: auto; right: 0; } }
+/* A figure spans the text column and centres its image, as the caption is centred. */
+.report-editor figure { margin: 16px 0; }
+.report-editor .preview-open { margin-inline: auto; }
+.report-editor .cm-selectionBackground, .report-editor .cm-focused .cm-selectionBackground { background: var(--accent-soft); }
+.report-editor .cm-tooltip { border: 1px solid var(--line); border-radius: 8px; background: var(--card); box-shadow: var(--shadow); font: 13px/1.5 Inter, ui-sans-serif, system-ui, sans-serif; }
+.report-editor .cm-tooltip-autocomplete > ul > li[aria-selected] { color: var(--ink); background: var(--accent-soft); }
+.report-editor .md-math-rendered { cursor: text; }
+.report-editor .md-math-preview { margin: 8px 0 4px; padding-top: 8px; text-align: center; border-top: 1px dashed var(--line); }
+.report-editor .md-bullet { display: inline-block; color: var(--muted); }

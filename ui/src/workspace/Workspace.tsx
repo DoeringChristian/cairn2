@@ -18,6 +18,7 @@ import { ActionIcon, Button } from '../components/Button';
 import { Select } from '../components/Select';
 import { CardEditor } from './CardEditor';
 import { CardContent } from './CardContent';
+import { ByRun } from './ByRun';
 import { CardFrame, type RecordState } from './CardFrame';
 import { newCard } from './cards';
 import { useObservations, useRun, useRuns } from './data';
@@ -59,6 +60,7 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
   const [showRuns, setShowRuns] = useState(false);
   const [editor, setEditor] = useState<Editing>();
   const [expanded, setExpanded] = useState<Card>();
+  const [expandedRun, setExpandedRun] = useState<string>();
   const [naming, setNaming] = useState<Naming>();
   const [dragged, setDragged] = useState<string>();
 
@@ -266,6 +268,20 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
         <Button small disabled={!key} onClick={() => setNaming({ kind: 'save', value: `${layout.name} copy` })}>
           Save as…
         </Button>
+        {!runId && (
+          <div className="workspace-view-select">
+            <span>Show</span>
+            <Select
+              label="Show cards"
+              value={layout.view || 'together'}
+              choices={[
+                { value: 'together', label: 'All runs together' },
+                { value: 'runs', label: 'Each run separately' },
+              ]}
+              onChange={(view) => patch({ view: view as Layout['view'] })}
+            />
+          </div>
+        )}
         <span className="workspace-toolbar-spacer" />
         {runId ? (
           addCard
@@ -325,84 +341,105 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
             <p className="workspace-empty">No runs visible. Use the eye controls to display runs.</p>
           )}
 
-          {layout.sections.map((section, index) => (
-            <section
-              className="workspace-section"
-              key={section.id}
-              onDragOver={(e) => {
-                if (dragged) e.preventDefault();
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                drop(section.id);
-              }}
-            >
-              <header className="workspace-section-heading">
-                <button
-                  className="workspace-section-toggle"
-                  aria-expanded={!section.collapsed}
-                  onClick={() => updateSection(section.id, { collapsed: !section.collapsed })}
+          {layout.view === 'runs' && !runId ? (
+            <ByRun
+              project={project}
+              layout={layout}
+              runs={selected}
+              records={records}
+              actions={(card, run) => ({
+                settings: () => setEditor({ card, creating: false }),
+                expand: () => {
+                  setExpanded(card);
+                  setExpandedRun(run.id);
+                },
+                duplicate: () =>
+                  patch({ cards: [...layout.cards, { ...card, id: uid(), title: `${card.title} copy` }] }),
+                remove: () => patch({ cards: layout.cards.filter((c) => c.id !== card.id) }),
+              })}
+            />
+          ) : (
+            <>
+              {layout.sections.map((section, index) => (
+                <section
+                  className="workspace-section"
+                  key={section.id}
+                  onDragOver={(e) => {
+                    if (dragged) e.preventDefault();
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    drop(section.id);
+                  }}
                 >
-                  {section.collapsed ? <ChevronRight size={18} /> : <ChevronDown size={18} />}
-                  <h2>{section.title}</h2>
-                  <span>{cardsOf(section.id).length}</span>
-                </button>
-                <div className="workspace-section-actions">
-                  <ActionIcon
-                    label={`Rename ${section.title}`}
-                    onClick={() => setNaming({ kind: 'rename', value: section.title, id: section.id })}
-                  >
-                    <Settings2 size={15} />
-                  </ActionIcon>
-                  <ActionIcon
-                    label={`Move ${section.title} up`}
-                    disabled={index === 0}
-                    onClick={() => raiseSection(index)}
-                  >
-                    <ArrowUp size={15} />
-                  </ActionIcon>
-                  <ActionIcon
-                    label={`Remove ${section.title}`}
-                    disabled={layout.sections.length === 1}
-                    onClick={() => removeSection(section.id)}
-                  >
-                    <Trash2 size={15} />
-                  </ActionIcon>
-                  <ActionIcon label={`Add card to ${section.title}`} onClick={() => create(section.id)}>
-                    <Plus size={16} />
-                  </ActionIcon>
-                </div>
-              </header>
-              {!section.collapsed && (
-                <div className="workspace-grid">
-                  {cardsOf(section.id).map((card) => (
-                    <CardFrame
-                      key={card.id}
-                      card={card}
-                      records={records}
-                      dragging={!!dragged}
-                      actions={{
-                        settings: () => setEditor({ card, creating: false }),
-                        expand: () => setExpanded(card),
-                        move: (delta) => move(card.id, delta),
-                        duplicate: () =>
-                          patch({ cards: [...layout.cards, { ...card, id: uid(), title: `${card.title} copy` }] }),
-                        remove: () => patch({ cards: layout.cards.filter((c) => c.id !== card.id) }),
-                        size: (width, height) => sizeSection(card.section, width, height),
-                        drag: setDragged,
-                        drop: () => drop(section.id, card.id),
-                      }}
-                    />
-                  ))}
-                  {!cardsOf(section.id).length && (
-                    <button className="workspace-empty-section" onClick={() => create(section.id)}>
-                      + Add a card to this section
+                  <header className="workspace-section-heading">
+                    <button
+                      className="workspace-section-toggle"
+                      aria-expanded={!section.collapsed}
+                      onClick={() => updateSection(section.id, { collapsed: !section.collapsed })}
+                    >
+                      {section.collapsed ? <ChevronRight size={18} /> : <ChevronDown size={18} />}
+                      <h2>{section.title}</h2>
+                      <span>{cardsOf(section.id).length}</span>
                     </button>
+                    <div className="workspace-section-actions">
+                      <ActionIcon
+                        label={`Rename ${section.title}`}
+                        onClick={() => setNaming({ kind: 'rename', value: section.title, id: section.id })}
+                      >
+                        <Settings2 size={15} />
+                      </ActionIcon>
+                      <ActionIcon
+                        label={`Move ${section.title} up`}
+                        disabled={index === 0}
+                        onClick={() => raiseSection(index)}
+                      >
+                        <ArrowUp size={15} />
+                      </ActionIcon>
+                      <ActionIcon
+                        label={`Remove ${section.title}`}
+                        disabled={layout.sections.length === 1}
+                        onClick={() => removeSection(section.id)}
+                      >
+                        <Trash2 size={15} />
+                      </ActionIcon>
+                      <ActionIcon label={`Add card to ${section.title}`} onClick={() => create(section.id)}>
+                        <Plus size={16} />
+                      </ActionIcon>
+                    </div>
+                  </header>
+                  {!section.collapsed && (
+                    <div className="workspace-grid">
+                      {cardsOf(section.id).map((card) => (
+                        <CardFrame
+                          key={card.id}
+                          card={card}
+                          records={records}
+                          dragging={!!dragged}
+                          actions={{
+                            settings: () => setEditor({ card, creating: false }),
+                            expand: () => setExpanded(card),
+                            move: (delta) => move(card.id, delta),
+                            duplicate: () =>
+                              patch({ cards: [...layout.cards, { ...card, id: uid(), title: `${card.title} copy` }] }),
+                            remove: () => patch({ cards: layout.cards.filter((c) => c.id !== card.id) }),
+                            size: (width, height) => sizeSection(card.section, width, height),
+                            drag: setDragged,
+                            drop: () => drop(section.id, card.id),
+                          }}
+                        />
+                      ))}
+                      {!cardsOf(section.id).length && (
+                        <button className="workspace-empty-section" onClick={() => create(section.id)}>
+                          + Add a card to this section
+                        </button>
+                      )}
+                    </div>
                   )}
-                </div>
-              )}
-            </section>
-          ))}
+                </section>
+              ))}
+            </>
+          )}
           <Button onClick={() => setNaming({ kind: 'section', value: 'New section' })}>
             <Plus size={16} /> Add section
           </Button>
@@ -420,9 +457,19 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
         />
       )}
       {expanded && (
-        <WorkspaceDialog title={expanded.title} onClose={() => setExpanded(undefined)} wide>
+        <WorkspaceDialog
+          title={expanded.title}
+          onClose={() => {
+            setExpanded(undefined);
+            setExpandedRun(undefined);
+          }}
+          wide
+        >
           <div className="workspace-expanded-card">
-            <CardContent card={expanded} rows={data.rows} />
+            <CardContent
+              card={expanded}
+              rows={expandedRun ? data.rows.filter((row) => row.artifact_id === expandedRun) : data.rows}
+            />
           </div>
         </WorkspaceDialog>
       )}

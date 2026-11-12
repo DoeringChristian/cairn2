@@ -5,7 +5,7 @@ import 'katex/dist/katex.min.css';
 import { SyntaxCode } from './SyntaxCode';
 export type Source={path:string;line_start:number;line_end:number};
 export type Node={source?:Source;type:string;tag:string;nesting:number;content:string;attributes?:Record<string,string>;children?:Node[];info?:string;meta?:Record<string,number>|null;hidden?:boolean;offset?:number};
-export type Render={image:(src:string,alt:string,attrs:Record<string,string>,key:number)=>ReactNode;container?:(attrs:Record<string,string>,content:ReactNode[],key:number)=>ReactNode|undefined;fence?:(info:string,content:string,key:number,source?:Source)=>ReactNode|undefined};
+export type Render={image:(src:string,alt:string,attrs:Record<string,string>,key:number)=>ReactNode;container?:(attrs:Record<string,string>,content:ReactNode[],key:number)=>ReactNode|undefined;fence?:(info:string,content:string,key:number,source?:Source)=>ReactNode|undefined;agent?:(attrs:Record<string,string>,key:number,source?:Source)=>ReactNode};
 const tags=new Set(['p','h1','h2','h3','h4','h5','h6','table','thead','tbody','tr','th','td','ul','ol','li','blockquote','strong','em','s','code','pre','a','figure','figcaption','span','div','aside','sup','sub','dl','dt','dd']);
 const callout=/^callout-(note|tip|warning|important|caution)$/;
 /** Sanitize HTML before placing it in the document flow. */
@@ -13,7 +13,7 @@ export function SafeHtml({html,inline=false}: {html:string;inline?:boolean}) {
   const clean=DOMPurify.sanitize(html,{USE_PROFILES:{html:true,mathMl:true},FORBID_TAGS:['style','form','input','button','iframe','object','embed','audio','video'],FORBID_ATTR:['style','id','name','srcset']});
   return createElement(inline?'span':'div',{className:'native-rich',dangerouslySetInnerHTML:{__html:clean}});
 }
-function MathValue({tex,block=false}: {tex:string;block?:boolean}) {
+export function MathValue({tex,block=false}: {tex:string;block?:boolean}) {
   return <span data-latex={tex}><SafeHtml inline={!block} html={katex.renderToString(tex,{displayMode:block,throwOnError:false,trust:false,output:'mathml'})}/></span>;
 }
 export const classes=(value?:string)=>value&&/^[\w -]+$/.test(value)?value:undefined;
@@ -31,6 +31,7 @@ export function nodesToReact(nodes:Node[],render:Render):ReactNode[] {
       if(node.type==='text'){out.push(node.offset===undefined?<Fragment key={key}>{node.content}</Fragment>:<span key={key} data-offset={node.offset}>{node.content}</span>);continue;}
       if(node.type==='code_inline'){out.push(<code key={key} data-offset={node.offset}>{node.content}</code>);continue;}
       if(node.type==='softbreak'||node.type==='hardbreak'){out.push(node.type==='hardbreak'?<br key={key}/>:'\n');continue;}
+      if(node.type==='agent'){out.push(render.agent?.(attrs,key,node.source));continue;}
       if(node.type==='image'){out.push(render.image(attrs.src||'',node.content,attrs,key));continue;}
       if(node.type.startsWith('math_')){out.push(<div key={key} {...sourced(node)} data-offset={node.offset} className={node.type.startsWith('math_inline')?'native-inline-math':'native-math'}><MathValue tex={node.content} block={!node.type.startsWith('math_inline')}/>{node.type==='math_block_eqno'&&<small>({node.info})</small>}</div>);continue;}
       if(node.type==='fence'){const custom=render.fence?.((node.info||'').trim(),node.content,key,node.source);if(custom!==undefined){out.push(custom);continue;}}

@@ -11,6 +11,7 @@ export function readSaved(key: string): SavedWorkspace | null {
   if (value.version !== 1 || !Array.isArray(value.layouts))
     throw new Error('Saved layouts use an unsupported format. They have not been changed.');
   for (const layout of value.layouts) {
+    if (layout.view !== undefined && !['together', 'runs'].includes(layout.view)) delete layout.view;
     if (
       layout.version !== 1 ||
       typeof layout.id !== 'string' ||

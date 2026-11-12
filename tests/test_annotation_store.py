@@ -312,7 +312,7 @@ def test_explicit_migration_from_schema_6(request, backend_fixture, tmp_path, ca
         reopen()
     if direct.path:
         assert main(["--repo", str(direct.path), "repo", "migrate"]) == 0
-        assert json.loads(capsys.readouterr().out) == {"schema_version": 8}
+        assert json.loads(capsys.readouterr().out) == {"schema_version": 9}
     else:
         reopen(migrate=True).close()
     with closing(reopen()) as repo:

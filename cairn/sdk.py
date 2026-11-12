@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
+from . import documents
 from .contract import PUBLICATION_METADATA_LIMIT, PUBLICATION_VALUE_LIMIT
 from .delivery import Delivery, _binary_source
 from .media import (
@@ -272,20 +273,34 @@ class Client:
         return self.backend.reports(project=self.project)
 
     def report(self, name):
-        """The report's parts: the author's body and the agent's slots, each with its revision."""
-        return self.backend.report(self._report_id(name))
+        """The report's parts: the author's body and the agent's slots, each with its revision.
 
-    def create_report(self, name, body="", *, by=None):
+        The body's source is its document; its markdown shows each agent block as
+        <?cairn agent SLOT?>."""
+        report = self.backend.report(self._report_id(name))
+        body = report["parts"].get("body")
+        if body:
+            body["markdown"] = documents.to_markdown(documents.loads(body["source"]))
+        return report
+
+    def create_report(self, name, body=None, *, by=None):
+        """Create a report from Markdown or a document."""
         return self.backend.create_report(
-            self.project, name, body=body, author=by, request_id=new_id("request")
+            self.project,
+            name,
+            body=None if body is None else _document(body),
+            author=by,
+            request_id=new_id("request"),
         )
 
     def write_report(self, name, part, source, *, expected_revision=None, by=None):
-        """Save one part; agents write the slots the body leaves them, never the body."""
+        """Save one part; agents write the slots the body leaves them, never the body.
+
+        The body takes Markdown or a document; slots take Markdown."""
         return self.backend.write_report(
             self._report_id(name),
             part,
-            source,
+            _document(source) if part == "body" else source,
             expected_revision=expected_revision,
             author=by,
             request_id=new_id("request"),
@@ -642,6 +657,14 @@ class Artifact:
                 exc.add_note(
                     f"Cairn cleanup also raised {type(close_error).__name__}: {close_error}"
                 )
+
+
+def _document(body):
+    """A body as stored: a document given as a dict, or Markdown."""
+    if isinstance(body, dict):
+        documents.validate(body)
+        return documents.dumps(body)
+    return documents.dumps(documents.from_markdown(body))
 
 
 def _identifier(ref):

@@ -158,7 +158,7 @@ class Resolution(RequestID):
 class NewReport(RequestID):
     project: str = "default"
     name: str
-    body: str = ""
+    body: str | None = None
     author: str | None = None
 
 

@@ -198,8 +198,12 @@ class Delivery:
             previous = self._meta("repository_id")
             if previous is not None and previous != identity:
                 raise Conflict(
-                    "The destination now points at a different repository; outbox retained",
-                    details={"expected": previous, "actual": identity},
+                    "The destination now points at a different repository; outbox retained. "
+                    f"Its unsent records are in {self.path}: deliver them by pointing the URL back at "
+                    "repository "
+                    + previous
+                    + ", or set CAIRN_STATE_DIR (or Client(outbox=...)) to use a new outbox",
+                    details={"expected": previous, "actual": identity, "outbox": str(self.path)},
                 )
             self._db.execute("INSERT OR IGNORE INTO meta VALUES ('repository_id',?)", (identity,))
 

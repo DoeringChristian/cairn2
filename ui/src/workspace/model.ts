@@ -51,6 +51,8 @@ export type Layout = {
   selected: string[] | null;
   sections: Section[];
   cards: Card[];
+  /** Cards in their sections, or every card once per run. */
+  view?: 'together' | 'runs';
 };
 export type Observation = RecordEntry & { run: Artifact };
 export type FieldInfo = { name: string; kinds: Set<string> };

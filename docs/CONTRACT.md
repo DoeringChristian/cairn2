@@ -2,8 +2,8 @@
 
 `cairn/contract.py` declares `RepositoryProtocol` and JSON result shapes. The direct
 repository and HTTP adapter implement the same methods. Protocol version **4**,
-repository schema **8**, durable outbox schema **3**. Other schemas are rejected;
-schema 6 and 7 repositories convert only through the explicit `cairn repo migrate`.
+repository schema **9**, durable outbox schema **3**. Other schemas are rejected;
+schema 6, 7 and 8 repositories convert only through the explicit `cairn repo migrate`.
 
 ## One artifact lifecycle
 
@@ -268,25 +268,48 @@ synchronous and do not enter a writer's record-upload journal.
 
 ## Reports
 
-A report is a mutable Markdown document of a project, outside the artifact lifecycle:
-it has a random `report_` ID, a name unique in its project, and no versions, outputs
-or lineage. It runs no code. It references artifacts by `cairn:` links, which readers
-resolve when they display it, so `@latest` follows new versions.
+A report is a mutable document of a project, outside the artifact lifecycle: it has a
+random `report_` ID, a name unique in its project, and no versions, outputs or lineage.
+It runs no code. It references artifacts by `cairn:` links, which readers resolve when
+they display it, so `@latest` follows new versions.
 
-A report has parts. `body` is its author's text; every other part is a slot an agent
-fills, named by a fenced div `::: {.agent #slot}` in the body. Parts are identifiers of
-1–64 characters and hold at most 1 MiB of text. Every saved text is kept as a new
-revision of its part, numbered from 1; writing unchanged text keeps the revision.
-`expected_revision` makes a write conditional, so two editors never overwrite each
-other silently. Browser sessions write only `body` and comments; agents write slots
-with the server token.
+A report has parts. `body` is its author's document; every other part is a slot an
+agent fills with Markdown. Parts are identifiers of 1–64 characters and hold at most
+1 MiB of text. Every saved text is kept as a new revision of its part, numbered from 1;
+writing unchanged text keeps the revision. `expected_revision` makes a write
+conditional, so two editors never overwrite each other silently. Browser sessions
+write only `body` and comments; agents write slots with the server token.
 
-Readers support these Markdown references:
+The body's source is a JSON document tree in ProseMirror's shape, `{"type": "doc", "content": [...]}`,
+which the repository validates (`cairn/documents.py`). Blocks are `paragraph`,
+`heading` (`level` 1–4), `bulletList`, `orderedList` (`start`), `listItem`, `blockquote`,
+`codeBlock` (`language`), `horizontalRule`, `table` with `tableRow`, `tableHeader` and
+`tableCell`, `callout` (`kind`: note, tip, warning or important), `mathBlock` (its TeX as text),
+`figure` (`src`, a `cairn:` reference, and `caption`), `view` (`source`, the YAML of a
+view block) and `agent` (`slot`, and an optional suggested `prompt`). Every block may
+carry an `id`, which stays with it across edits. Inline content is `text` with `bold`,
+`italic`, `strike`, `code`, `math` (the text is TeX) and `link` (`href`) marks, and
+`hardBreak`.
+
+An `agent` block places a slot: the agent's Markdown in the part named by `slot` shows
+there, and the slot's comments without a quote are its conversation, whose first
+message is the request. The SDK and CLI read and write the body as Markdown
+(`client.report(name)["parts"]["body"]["markdown"]`, `create_report(name, markdown)`,
+`write_report(name, "body", markdown)`), where an agent block is the line
+`<?cairn agent SLOT?>` or `<?cairn agent SLOT "suggested request"?>`, a figure is a
+paragraph holding only `![caption](cairn:REF)`, a view is a ```` ```view ```` fence and a
+callout is `::: {.callout-KIND}`. `GET /ui-api/report-templates` lists the built-in
+documents a new report can start from.
+
+Readers support these references, in figures and in agents' Markdown:
 
 - `![caption](cairn:REF#CAPTURE)`: the file captured as `CAPTURE`, or a file of that
-  name, of the artifact `REF` resolves to; images, video and audio display inline.
+  name, of the artifact `REF` resolves to; images, video and audio display inline,
+  Plotly figures as interactive charts, and other typed captures (tables, arrays) as
+  values.
 - `![caption](cairn:REF)`: the artifact's value.
 
-Export/import, integrity checks and the migration from schema 7 cover reports, their
-revisions and comments. Earlier report artifacts (`report/bundle`) remain ordinary
+Export/import, integrity checks and the migrations cover reports, their revisions and
+comments. The migration from schema 8 converts every Markdown body revision into a
+document; an agent div of schema 8 becomes its request text followed by an agent block. Earlier report artifacts (`report/bundle`) remain ordinary
 artifacts with their files and comments; nothing renders them as reports.

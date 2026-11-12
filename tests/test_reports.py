@@ -5,15 +5,19 @@ import pytest
 import sqlalchemy as sa
 from test_http import serve
 
-from cairn import CapacityError, Client, Conflict, NotFound, Unsupported, ValidationError
+from cairn import CapacityError, Client, Conflict, NotFound, Unsupported, ValidationError, documents
 from cairn.cli import main
 from cairn.ops import check_repository, export_repository, import_repository
-from cairn.storage import Repository, annotations_table
+from cairn.storage import Repository, annotations_table, report_parts
+
+
+def doc(markdown):
+    return documents.dumps(documents.from_markdown(markdown))
 
 
 def test_reports_keep_every_revision_and_separate_body_from_slots(tmp_path):
     with closing(Repository(tmp_path)) as repo:
-        report = repo.create_report("demo", "study", body="# Plan", author="ada")
+        report = repo.create_report("demo", "study", body=doc("# Plan"), author="ada")
         with pytest.raises(Conflict):
             repo.create_report("demo", "study")
         assert repo.create_report("other", "study")["id"] != report["id"]
@@ -25,18 +29,16 @@ def test_reports_keep_every_revision_and_separate_body_from_slots(tmp_path):
             "revision": 2,
         }
         with pytest.raises(Conflict) as stale:
-            repo.write_report(report["id"], "body", "# Other", expected_revision=0)
+            repo.write_report(report["id"], "body", doc("# Other"), expected_revision=0)
         assert stale.value.details == {"revision": 1}
-        for part, source in (("../x", ""), ("body", None)):
+        for part, source in (("../x", ""), ("body", None), ("body", "# Not a document")):
             with pytest.raises(ValidationError):
                 repo.write_report(report["id"], part, source)
         with pytest.raises(CapacityError):
             repo.write_report(report["id"], "big", "x" * (1024 * 1024 + 1))
         parts = repo.report(report["id"])["parts"]
-        assert {part: value["source"] for part, value in parts.items()} == {
-            "baseline": "Done.",
-            "body": "# Plan",
-        }
+        assert parts["baseline"]["source"] == "Done."
+        assert documents.to_markdown(documents.loads(parts["body"]["source"])) == "# Plan\n"
         assert parts["body"]["author"] == "ada"
         assert [item["name"] for item in repo.reports(project="demo")] == ["study"]
         assert repo.reports(project="none") == []
@@ -48,7 +50,7 @@ def test_report_comments_share_threads_and_listings_with_artifacts(tmp_path):
         repo.close_writer(started["artifact"]["id"], started["writer"]["id"], 0)
         legacy = repo.finish(started["artifact"]["id"])
         repo.add_comment(legacy["id"], {"path": "report.qmd"}, "Old report")
-        report = repo.create_report("demo", "study", body="# Plan")
+        report = repo.create_report("demo", "study", body=doc("# Plan"))
         question = repo.add_report_comment(
             report["id"], {"path": "body", "quote": "Plan"}, "Why?", for_agent=True
         )
@@ -91,18 +93,36 @@ def test_schema_7_repositories_migrate_to_reports(tmp_path):
     with pytest.raises(Unsupported, match="cairn repo migrate"):
         Repository(tmp_path)
     with closing(Repository(tmp_path, migrate=True)) as repo:
-        assert repo.info()["schema_version"] == 8
+        assert repo.info()["schema_version"] == 9
         assert repo.resolve(identifier)["id"] == identifier
         report = repo.create_report("demo", "study")
         repo.add_report_comment(report["id"], {"path": "body"}, "Works")
         assert check_repository(repo)["ok"]
 
 
+def test_schema_8_markdown_bodies_become_documents(tmp_path):
+    with closing(Repository(tmp_path)) as repo:
+        report = repo.create_report("demo", "study")
+        with repo._transaction(write=True) as conn:
+            conn.execute(
+                report_parts.update().values(
+                    source="# Plan\n\n::: {.agent #baseline}\nTrain it.\n:::\n"
+                )
+            )
+            conn.execute(sa.text("UPDATE cairn_meta SET value = '8' WHERE key = 'schema_version'"))
+    with pytest.raises(Unsupported, match="cairn repo migrate"):
+        Repository(tmp_path)
+    with closing(Repository(tmp_path, migrate=True)) as repo:
+        body = documents.loads(repo.report(report["id"])["parts"]["body"]["source"])
+        assert documents.agents(body) == ["baseline"]
+        assert documents.to_markdown(body) == "# Plan\n\nTrain it.\n\n<?cairn agent baseline?>\n"
+
+
 def test_clients_edit_reports_by_name_over_http(tmp_path):
     repository = Repository(tmp_path / "repository")
     try:
         with serve(repository) as url, Client(url, token="test-token", project="demo") as client:
-            client.create_report("study", "# Plan\n\n::: {.agent #baseline}\n:::\n")
+            client.create_report("study", "# Plan\n\n<?cairn agent baseline?>\n")
             written = client.write_report("study", "baseline", "Chamfer 0.41.", by="agent")
             assert written["revision"] == 1
             with pytest.raises(Conflict):
@@ -111,6 +131,7 @@ def test_clients_edit_reports_by_name_over_http(tmp_path):
             assert comment["anchor"] == {"path": "body", "quote": "Plan"}
             report = client.report("study")
             assert report["parts"]["baseline"]["author"] == "agent"
+            assert report["parts"]["body"]["markdown"] == "# Plan\n\n<?cairn agent baseline?>\n"
             assert [item["name"] for item in client.reports()] == ["study"]
             assert [c["body"] for c in client.comments("reports/**")] == ["Seeds?"]
             client.delete_report("study")
@@ -140,7 +161,7 @@ def test_report_cli_writes_parts_and_waits_for_edits_and_sent_comments(
         checks.append(seconds)
         with closing(Repository(path)) as repo:
             if len(checks) == 1:
-                repo.write_report(report["id"], "body", "# Plan v2\n")
+                repo.write_report(report["id"], "body", doc("# Plan v2"))
             elif len(checks) == 2:
                 question = repo.report_comments(report["id"])[0]
                 repo.update_comment(question["id"], "Too broad?", for_agent=True)
