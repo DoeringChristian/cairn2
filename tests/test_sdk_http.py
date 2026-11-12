@@ -1,6 +1,7 @@
 import threading
 import time
 from contextlib import closing
+from pathlib import Path
 
 import httpx
 import pytest
@@ -333,3 +334,21 @@ def test_state_dir_selects_default_outbox(tmp_path, monkeypatch):
     monkeypatch.setenv("CAIRN_STATE_DIR", str(tmp_path / "state"))
     with Client("http://127.0.0.1:9", token="test-token") as client:
         assert client._outbox.parent == tmp_path / "state/outbox"
+
+
+def test_remote_immutable_and_new_files_reach_the_server(tmp_path):
+    with closing(Repository(tmp_path / "repository")) as repository, serve(repository) as url:
+        source = tmp_path / "large.bin"
+        source.write_bytes(b"y" * 100_000)
+        outbox = tmp_path / "outbox"
+        with Client(url, token="test-token", outbox=outbox) as client:
+            artifact = client.start("renders", "remote")
+            staged, stage = [], client.delivery.stage_blob
+            client.delivery.stage_blob = lambda blob: staged.append(blob) or stage(blob)
+            artifact.add(source, immutable=True)
+            with artifact.new_file("notes.txt") as stream:
+                stream.write("written in place")
+            assert [Path(path).name for path in staged] == ["notes.txt"]
+            reader = client.get(artifact.finish(timeout=5)["id"])
+            assert reader.file("large.bin").load() == b"y" * 100_000
+            assert reader.file("notes.txt").load() == b"written in place"

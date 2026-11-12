@@ -13,7 +13,7 @@ import pytest
 
 from cairn.delivery import Delivery
 from cairn.media import File, encode
-from cairn.model import CapacityError, Conflict, Pending
+from cairn.model import CapacityError, Conflict, IntegrityError, Pending
 
 
 class Remote:
@@ -384,3 +384,48 @@ def test_records_logged_together_reach_the_repository_in_one_batch(tmp_path):
         assert batches == [20]
     finally:
         delivery.close()
+
+
+def test_immutable_files_upload_from_where_they_are_without_a_staged_copy(tmp_path):
+    remote = Remote()
+    journal = tmp_path / "journal"
+    source = tmp_path / "frame.bin"
+    source.write_bytes(b"x" * 4096)
+    delivery = Delivery(remote, journal, "https://example.test", background=False, max_bytes=2048)
+    writer = begin(delivery)["writer"]["id"]
+    value = encode(File(source), delivery.refer_blob)
+    delivery.append(writer, "record", {"file": value})
+    assert not list((journal / "blobs").iterdir())
+    delivery.close()
+    delivery = Delivery(remote, journal, "https://example.test", background=False, max_bytes=2048)
+    delivery.flush(writer, timeout=1)
+    assert remote.blobs[value["blobs"][0]["digest"]] == b"x" * 4096
+    delivery.close()
+
+    changed = tmp_path / "changed.bin"
+    changed.write_bytes(b"before")
+    delivery = Delivery(remote, journal, "https://example.test", background=False)
+    writer = begin(delivery)["writer"]["id"]
+    delivery.append(writer, "record", {"file": encode(File(changed), delivery.refer_blob)})
+    changed.write_bytes(b"after!!")
+    with pytest.raises(IntegrityError, match="changed.bin changed or was removed"):
+        delivery.flush(writer, timeout=1)
+    assert delivery.pending(writer) == 1
+    delivery.close()
+
+
+def test_schema_3_outbox_upgrades_and_keeps_pending_entries(tmp_path):
+    remote = Remote()
+    delivery = Delivery(remote, tmp_path, "https://example.test", background=False)
+    writer = begin(delivery)["writer"]["id"]
+    delivery.append(writer, "record", {"step": 1})
+    delivery.close()
+    with sqlite3.connect(tmp_path / "journal.sqlite3") as connection:
+        connection.execute("DROP TABLE sources")
+        connection.execute("UPDATE meta SET value='3' WHERE key='schema_version'")
+    connection.close()
+    delivery = Delivery(remote, tmp_path, "https://example.test", background=False)
+    assert delivery._meta("schema_version") == "4"
+    delivery.flush(writer, timeout=1)
+    assert remote.entries[writer][0]["data"] == {"step": 1}
+    delivery.close()
