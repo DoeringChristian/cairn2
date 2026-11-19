@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from contextlib import closing
 
 import pytest
@@ -93,7 +94,7 @@ def test_schema_7_repositories_migrate_to_reports(tmp_path):
     with pytest.raises(Unsupported, match="cairn repo migrate"):
         Repository(tmp_path)
     with closing(Repository(tmp_path, migrate=True)) as repo:
-        assert repo.info()["schema_version"] == 9
+        assert repo.info()["schema_version"] == 10
         assert repo.resolve(identifier)["id"] == identifier
         report = repo.create_report("demo", "study")
         repo.add_report_comment(report["id"], {"path": "body"}, "Works")
@@ -116,6 +117,59 @@ def test_schema_8_markdown_bodies_become_documents(tmp_path):
         body = documents.loads(repo.report(report["id"])["parts"]["body"]["source"])
         assert documents.agents(body) == ["baseline"]
         assert documents.to_markdown(body) == "# Plan\n\nTrain it.\n\n<?cairn agent baseline?>\n"
+
+
+def test_agent_reports_name_their_origin_and_can_change_owner(tmp_path):
+    with closing(Repository(tmp_path / "repo")) as repo:
+        plan = repo.create_report("demo", "plan")
+        assert (plan["owner"], plan["origin_id"], plan["origin_slot"]) == ("user", None, None)
+        direction = repo.create_report(
+            "demo", "plan/grids", owner="agent", origin_id=plan["id"], origin_slot="directions"
+        )
+        assert (direction["owner"], direction["origin_id"]) == ("agent", plan["id"])
+        deeper = repo.create_report(
+            "demo", "plan/grids/sizes", owner="agent", origin_id=direction["id"]
+        )
+        assert deeper["origin_slot"] is None
+        with pytest.raises(ValidationError):
+            repo.create_report("other", "stray", owner="agent", origin_id=plan["id"])
+        with pytest.raises(ValidationError):
+            repo.create_report("demo", "slotless", origin_slot="directions")
+        with pytest.raises(ValidationError):
+            repo.create_report("demo", "robot", owner="robot")
+        taken = repo.set_report_owner(direction["id"], "user")
+        assert taken["owner"] == "user" and taken["origin_id"] == plan["id"]
+        assert check_repository(repo)["ok"]
+        exported = export_repository(repo, tmp_path / "export")
+        repo.delete_report(plan["id"])
+        assert repo.report(direction["id"])["origin_id"] is None
+        assert repo.report(deeper["id"])["origin_id"] == direction["id"]
+    with closing(Repository(tmp_path / "copy")) as copy:
+        assert import_repository(copy, exported)["imported"]["cairn_reports"] == 3
+        assert copy.report(deeper["id"])["origin_id"] == direction["id"]
+        assert check_repository(copy)["ok"]
+
+
+def test_schema_9_reports_gain_an_owner_and_origin(tmp_path):
+    with closing(Repository(tmp_path)) as repo:
+        report = repo.create_report("demo", "study")
+    with closing(sqlite3.connect(tmp_path / "metadata.sqlite3")) as conn, conn:
+        columns = "id, project, name, created_at, updated_at"
+        conn.execute(
+            "CREATE TABLE schema9 (id VARCHAR PRIMARY KEY, project VARCHAR NOT NULL, "
+            "name VARCHAR NOT NULL, created_at VARCHAR NOT NULL, updated_at VARCHAR NOT NULL, "
+            "UNIQUE (project, name))"
+        )
+        conn.execute(f"INSERT INTO schema9 SELECT {columns} FROM cairn_reports")
+        conn.execute("DROP TABLE cairn_reports")
+        conn.execute("ALTER TABLE schema9 RENAME TO cairn_reports")
+        conn.execute("UPDATE cairn_meta SET value = '9' WHERE key = 'schema_version'")
+    with pytest.raises(Unsupported, match="cairn repo migrate"):
+        Repository(tmp_path)
+    with closing(Repository(tmp_path, migrate=True)) as repo:
+        assert repo.report(report["id"])["owner"] == "user"
+        child = repo.create_report("demo", "study/a", owner="agent", origin_id=report["id"])
+        assert child["origin_id"] == report["id"]
 
 
 def test_clients_edit_reports_by_name_over_http(tmp_path):
@@ -181,3 +235,19 @@ def test_report_cli_writes_parts_and_waits_for_edits_and_sent_comments(
     assert woken["edited"] and woken["threads"] == []
     assert main([*base, "show", "study"]) == 0
     assert json.loads(capsys.readouterr().out)["parts"]["baseline"]["source"] == "Queued."
+
+
+def test_report_cli_creates_agent_reports_under_their_origin(tmp_path, capsys):
+    base = ["--repo", str(tmp_path / "repo"), "--project", "demo", "report"]
+    assert main([*base, "new", "plan"]) == 0
+    plan = json.loads(capsys.readouterr().out)
+    child = [*base, "new", "plan/grids", "--owner", "agent", "--origin", "plan", "--slot", "ideas"]
+    assert main([*child, "--by", "agent"]) == 0
+    created = json.loads(capsys.readouterr().out)
+    assert (created["owner"], created["origin_id"], created["origin_slot"]) == (
+        "agent",
+        plan["id"],
+        "ideas",
+    )
+    assert main([*base, "owner", "plan/grids", "user"]) == 0
+    assert json.loads(capsys.readouterr().out)["owner"] == "user"

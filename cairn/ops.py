@@ -125,7 +125,13 @@ def export_repository(repository, destination):
                 filename = table.name + ".jsonl"
                 count = 0
                 with (stage / filename).open("wb") as target:
-                    statement = sa.select(table).order_by(*table.primary_key.columns)
+                    # A report's origin was created before it, so parents import first.
+                    order = (
+                        (reports.c.created_at, reports.c.id)
+                        if table is reports
+                        else tuple(table.primary_key.columns)
+                    )
+                    statement = sa.select(table).order_by(*order)
                     result = conn.execution_options(stream_results=True).execute(statement)
                     for row in result.mappings():
                         target.write(canonical(dict(row)) + b"\n")

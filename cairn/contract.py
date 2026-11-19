@@ -293,7 +293,14 @@ class RepositoryProtocol(Protocol):
         *,
         body: str | None = None,
         author: str | None = None,
+        owner: str = "user",
+        origin_id: str | None = None,
+        origin_slot: str | None = None,
         request_id: str | None = None,
+    ) -> dict[str, JSONValue]: ...
+
+    def set_report_owner(
+        self, report_id: str, owner: str, *, request_id: str | None = None
     ) -> dict[str, JSONValue]: ...
 
     def reports(self, *, project: str = "default") -> list[dict[str, JSONValue]]: ...

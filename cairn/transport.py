@@ -438,7 +438,16 @@ class HTTPRepository:
         return {"id": comment_id, "deleted": True}
 
     def create_report(
-        self, project, name, *, body=None, author=None, request_id=None
+        self,
+        project,
+        name,
+        *,
+        body=None,
+        author=None,
+        owner="user",
+        origin_id=None,
+        origin_slot=None,
+        request_id=None,
     ) -> dict[str, JSONValue]:
         self._require("reports")
         return self._request(
@@ -449,8 +458,19 @@ class HTTPRepository:
                 "name": name,
                 "body": body,
                 "author": author,
+                "owner": owner,
+                "origin_id": origin_id,
+                "origin_slot": origin_slot,
                 "request_id": request_id,
             },
+        )
+
+    def set_report_owner(self, report_id, owner, *, request_id=None) -> dict[str, JSONValue]:
+        self._require("reports")
+        return self._request(
+            "PUT",
+            f"v1/reports/{self._id(report_id)}/owner",
+            json={"owner": owner, "request_id": request_id},
         )
 
     def reports(self, *, project="default") -> list[dict[str, JSONValue]]:

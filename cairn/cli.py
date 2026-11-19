@@ -333,7 +333,16 @@ def parser() -> argparse.ArgumentParser:
         "source", nargs="?", help="Markdown file with the body, or - for standard input"
     )
     new.add_argument("--by", help="Who writes it")
+    new.add_argument(
+        "--owner", choices=["user", "agent"], default="user", help="Who writes the body"
+    )
+    new.add_argument("--origin", help="The report that asked for this one")
+    new.add_argument("--slot", help="The origin's agent slot that asked for it")
     new.set_defaults(action="report-new")
+    owner = reports.add_parser("owner", help="Hand a report's body to the user or an agent")
+    owner.add_argument("name")
+    owner.add_argument("owner", choices=["user", "agent"])
+    owner.set_defaults(action="report-owner")
     write = reports.add_parser("write", help="Save a new revision of one part")
     write.add_argument("name")
     write.add_argument("part", help="An agent slot, or body for the author's Markdown")
@@ -661,7 +670,11 @@ def _dispatch(args, client):
         return client.delete_report(args.name)
     if action == "report-new":
         body = _source(args.source) if args.source else ""
-        return client.create_report(args.name, body, by=args.by)
+        return client.create_report(
+            args.name, body, by=args.by, owner=args.owner, origin=args.origin, slot=args.slot
+        )
+    if action == "report-owner":
+        return client.set_report_owner(args.name, args.owner)
     if action == "report-write":
         return client.write_report(
             args.name, args.part, _source(args.source), expected_revision=args.revision, by=args.by

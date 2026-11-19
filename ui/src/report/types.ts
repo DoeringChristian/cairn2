@@ -1,4 +1,4 @@
-export type Summary = { id: string; project: string; name: string; created_at: string; updated_at: string };
+export type Summary = { id: string; project: string; name: string; created_at: string; updated_at: string; owner: 'user' | 'agent'; origin_id: string | null; origin_slot: string | null };
 export type Part = { source: string; revision: number; author?: string | null; updated_at: string };
 export type Report = Summary & { parts: Record<string, Part> };
 

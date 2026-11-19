@@ -46,7 +46,7 @@ from .model import (
 )
 from .objects import Files, ensure_directory
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 BUSY_SECONDS = 30
 schema = sa.MetaData()
 NAME_KEYS = ("project", "namespace", "name")
@@ -176,6 +176,11 @@ reports = sa.Table(
     sa.Column("name", sa.String, nullable=False),
     sa.Column("created_at", sa.String, nullable=False),
     sa.Column("updated_at", sa.String, nullable=False),
+    # Who writes the body: the user, or an agent the user steers by comments.
+    sa.Column("owner", sa.String, nullable=False, server_default="user"),
+    # The report, and its agent slot, that asked for this one.
+    sa.Column("origin_id", sa.String, sa.ForeignKey("cairn_reports.id")),
+    sa.Column("origin_slot", sa.String),
     sa.UniqueConstraint("project", "name"),
 )
 # Every saved revision of a part: the author's "body" and one part per agent slot.
@@ -407,11 +412,11 @@ class Repository:
                 version = conn.execute(
                     sa.select(meta.c.value).where(meta.c.key == "schema_version")
                 ).scalar()
-                upgrade = migrate and version in (6, 7, 8)
+                upgrade = migrate and version in (6, 7, 8, 9)
                 if version != SCHEMA_VERSION and not upgrade:
                     hint = (
                         "; export a backup, then run `cairn repo migrate`"
-                        if version in (6, 7, 8)
+                        if version in (6, 7, 8, 9)
                         else ""
                     )
                     raise Unsupported(
@@ -453,7 +458,8 @@ class Repository:
         """Schema 6 to 9: inline annotations become exact properties and comments move along.
 
         Schema 7 to 8 adds reports, whose comments live in the annotation store too; 8 to 9
-        turns each Markdown body revision into a document."""
+        turns each Markdown body revision into a document; 9 to 10 gives reports an owner
+        and an origin."""
         if version == 7:
             conn.execute(
                 sa.text(
@@ -479,6 +485,17 @@ class Repository:
                     )
                     .values(source=documents.dumps(documents.from_markdown(body.source)))
                 )
+            version = 9
+        if version == 9:
+            # A schema 7 repository's reports table was just created with these columns.
+            present = {column["name"] for column in sa.inspect(conn).get_columns(reports.name)}
+            for column in (
+                "owner VARCHAR NOT NULL DEFAULT 'user'",
+                "origin_id VARCHAR REFERENCES cairn_reports (id)",
+                "origin_slot VARCHAR",
+            ):
+                if column.split()[0] not in present:
+                    conn.execute(sa.text(f"ALTER TABLE cairn_reports ADD COLUMN {column}"))
             conn.execute(
                 meta.update().where(meta.c.key == "schema_version").values(value=SCHEMA_VERSION)
             )
@@ -2087,15 +2104,37 @@ class Repository:
             for row in rows
         }
 
-    def create_report(self, project, name, *, body=None, author=None, request_id=None):
-        """Create a report whose body is the author's document; agents write the other parts."""
+    def create_report(
+        self,
+        project,
+        name,
+        *,
+        body=None,
+        author=None,
+        owner="user",
+        origin_id=None,
+        origin_slot=None,
+        request_id=None,
+    ):
+        """Create a report whose body its owner writes; agents write the other parts.
+
+        An origin names the report, and optionally its agent slot, that asked for this one."""
         body = documents.dumps(documents.empty()) if body is None else body
         validate_name(project)
         validate_name(name)
         self._validate_part("body", body, author)
+        self._validate_owner(owner)
+        if origin_slot is not None:
+            if origin_id is None:
+                raise ValidationError("An origin slot needs an origin report")
+            self._validate_part(origin_slot, "", None)
 
         def create():
             identifier, stamp = new_id("report"), now()
+            if origin_id is not None:
+                origin = self._get(conn, reports, origin_id)
+                if origin["project"] != project:
+                    raise ValidationError("A report's origin must be in its project")
             try:
                 with conn.begin_nested():
                     conn.execute(
@@ -2105,6 +2144,9 @@ class Repository:
                             name=name,
                             created_at=stamp,
                             updated_at=stamp,
+                            owner=owner,
+                            origin_id=origin_id,
+                            origin_slot=origin_slot,
                         )
                     )
             except SQLIntegrityError:
@@ -2122,8 +2164,31 @@ class Repository:
             return self._get(conn, reports, identifier)
 
         payload = [project, name, body, author]
+        if (owner, origin_id, origin_slot) != ("user", None, None):
+            payload += [owner, origin_id, origin_slot]
         with self._transaction(write=True) as conn:
             return self._once(conn, request_id, "create_report", payload, create)
+
+    @staticmethod
+    def _validate_owner(owner):
+        if owner not in ("user", "agent"):
+            raise ValidationError('A report owner is "user" or "agent"')
+
+    def set_report_owner(self, report_id, owner, *, request_id=None):
+        """Hand the body to the user or to an agent; its revisions and comments stay."""
+        self._validate_owner(owner)
+
+        def change():
+            self._get(conn, reports, report_id, lock=True)
+            conn.execute(
+                reports.update()
+                .where(reports.c.id == report_id)
+                .values(owner=owner, updated_at=now())
+            )
+            return self._get(conn, reports, report_id)
+
+        with self._transaction(write=True) as conn:
+            return self._once(conn, request_id, "set_report_owner", [report_id, owner], change)
 
     def reports(self, *, project="default"):
         """Reports of a project, most recently changed first, without their parts."""
@@ -2194,6 +2259,12 @@ class Repository:
 
         def remove():
             self._get(conn, reports, report_id, lock=True)
+            # Reports asked for here stay, without an origin.
+            conn.execute(
+                reports.update()
+                .where(reports.c.origin_id == report_id)
+                .values(origin_id=None, origin_slot=None)
+            )
             conn.execute(
                 annotations_table.delete().where(annotations_table.c.report_id == report_id)
             )

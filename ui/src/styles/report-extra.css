@@ -222,3 +222,8 @@ main { width: min(100%, calc(var(--column) + 2 * clamp(24px, 5vw, 74px))); }
   .plotly-card > .image-copy { right: 54px; }
 }
 .report-plot .workspace-plot-wrap{position:relative;height:420px;overflow:hidden}.report-plot .workspace-plot{width:100%;height:100%}
+.report-origin{margin:-8px 0 16px;color:var(--muted);font-size:13px}
+.report-tree{list-style:none;margin:0;padding:0}
+.report-tree .report-tree{margin:4px 0 4px 6px;padding-left:18px;border-left:1px solid var(--line)}
+.report-tree li{margin:6px 0}
+.agent-slot>.report-grid,.native-document>.report-grid{margin-top:12px}

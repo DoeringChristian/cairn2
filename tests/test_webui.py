@@ -51,6 +51,24 @@ def test_browser_sessions_and_plain_artifact_identity(tmp_path):
             assert browser.get("/ui-api/projects").status_code == 200
 
 
+def test_browsers_comment_on_agent_reports_and_edit_them_once_taken_over(tmp_path):
+    with closing(Repository(tmp_path)) as repo:
+        plan = repo.create_report("demo", "plan")
+        direction = repo.create_report("demo", "plan/grids", owner="agent", origin_id=plan["id"])
+        with TestClient(create_app(repo, token="test-token", ui=True)) as browser:
+            browser.post("/ui-api/login", json={"token": "test-token"})
+            path = f"/ui-api/reports/{direction['id']}"
+            edit = {"source": "# Mine now", "expected_revision": 1}
+            assert browser.put(f"{path}/body", json=edit).status_code == 409
+            comment = {"anchor": {"path": "body"}, "body": "Try 64 cells", "for_agent": True}
+            assert browser.post(f"{path}/comments", json=comment).status_code == 200
+            assert browser.put(f"{path}/owner", json={"owner": "user"}).json()["owner"] == "user"
+            assert browser.put(f"{path}/body", json=edit).json()["revision"] == 2
+            created = {"project": "demo", "name": "mine", "owner": "agent", "origin_id": plan["id"]}
+            report = browser.post("/ui-api/reports", json=created).json()
+            assert (report["owner"], report["origin_id"]) == ("user", None)
+
+
 def test_browsers_write_report_bodies_and_comments_but_not_slots(tmp_path):
     with closing(Repository(tmp_path)) as repo:
         other = repo.create_report("other", "findings")["id"]

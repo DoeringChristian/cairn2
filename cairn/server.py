@@ -160,6 +160,13 @@ class NewReport(RequestID):
     name: str
     body: str | None = None
     author: str | None = None
+    owner: str = "user"
+    origin_id: str | None = None
+    origin_slot: str | None = None
+
+
+class Owner(RequestID):
+    owner: str
 
 
 class ReportPart(RequestID):
@@ -543,6 +550,10 @@ def create_app(
     @app.put("/v1/reports/{report_id}/parts/{part}")
     def write_report(report_id: str, part: str, body: ReportPart):
         return repository.write_report(report_id, part, **body.model_dump())
+
+    @app.put("/v1/reports/{report_id}/owner")
+    def set_report_owner(report_id: str, body: Owner):
+        return repository.set_report_owner(report_id, **body.model_dump())
 
     @app.delete("/v1/reports/{report_id}")
     def delete_report(report_id: str, body: RequestID):

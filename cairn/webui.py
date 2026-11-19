@@ -23,7 +23,7 @@ from fastapi.responses import (
     StreamingResponse,
 )
 
-from .model import NotFound, Unauthorized, ValidationError, safe_path
+from .model import Conflict, NotFound, Unauthorized, ValidationError, safe_path
 
 STATIC = Path(__file__).with_name("ui_static")
 COOKIE = "cairn_browser"
@@ -118,7 +118,7 @@ class BrowserAccess:
             )
             report_edit = parts[1:3] == ["ui-api", "reports"] and (
                 (method == "POST" and len(parts) == 3)
-                or (method == "PUT" and len(parts) == 5 and parts[4] == "body")
+                or (method == "PUT" and len(parts) == 5 and parts[4] in {"body", "owner"})
                 or (method == "DELETE" and len(parts) == 4)
             )
             tag_edit = (
@@ -470,7 +470,7 @@ def install(app, repository, token, *, no_auth=False):
                 pending.extend((child, distance + 1) for child in [*inputs[:150], *consumers[:150]])
         return {"nodes": nodes, "truncated": truncated}
 
-    from .server import Comment, NewReport, Reply, ReportPart, Resolution
+    from .server import Comment, NewReport, Owner, Reply, ReportPart, Resolution
 
     def check_write(request):
         sessions.require(request)
@@ -493,8 +493,10 @@ def install(app, repository, token, *, no_auth=False):
 
     @app.post("/ui-api/reports")
     def create_report(body: NewReport, request: Request):
+        # The browser writes the user's own reports; agents create theirs through the API.
         check_write(request)
-        return repository.create_report(**body.model_dump())
+        fields = {**body.model_dump(), "owner": "user", "origin_id": None, "origin_slot": None}
+        return repository.create_report(**fields)
 
     @app.get("/ui-api/reports/{report_id}/markdown")
     def report_markdown(report_id: str):
@@ -509,6 +511,8 @@ def install(app, repository, token, *, no_auth=False):
     def write_report_body(report_id: str, body: ReportPart, request: Request):
         # Browsers write the author's Markdown, stored as a document; slots belong to agents.
         check_write(request)
+        if repository.report(report_id)["owner"] != "user":
+            raise Conflict("An agent writes this report; comment on it, or take it over to edit it")
         if body.source.lstrip().startswith('{"type":"doc"'):
             # A page from before Markdown editing sends the document itself; saving it as text would lose the report.
             raise ValidationError("This page is out of date. Reload it to keep editing.")
@@ -517,6 +521,11 @@ def install(app, repository, token, *, no_auth=False):
         return repository.write_report(
             report_id, "body", **{**body.model_dump(), "source": documents.dumps(document)}
         )
+
+    @app.put("/ui-api/reports/{report_id}/owner")
+    def set_report_owner(report_id: str, body: Owner, request: Request):
+        check_write(request)
+        return repository.set_report_owner(report_id, **body.model_dump())
 
     @app.delete("/ui-api/reports/{report_id}")
     def delete_report(report_id: str, request: Request):

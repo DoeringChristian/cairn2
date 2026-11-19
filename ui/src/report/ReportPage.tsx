@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { CheckCheck, RefreshCw } from 'lucide-react';
+import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { CheckCheck, PenLine, RefreshCw } from 'lucide-react';
 import { snippetCompletion, type CompletionSource } from '@codemirror/autocomplete';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api, artifactBlobs, post, projectPath, reportPath, useResource, when, type Artifact, type ArtifactSummary } from '../api';
 import { useRefresh } from '../refresh';
 import { ActionIcon, Button, Crumbs, ErrorNote, Field, Hero, Hint, Loading, ReportCard, ReportGrid, Section } from '../components';
@@ -43,13 +43,30 @@ export function ReportsPage() {
       <Button primary type="submit" disabled={!name.trim()}>Create</Button>
     </form>{failure && <ErrorNote error={failure}/>}
       {loading && !data && <Loading/>}{error && <ErrorNote error={error}/>}{data?.length === 0 && <Hint>No reports yet. Write down what you want to find out, and type @agent where the agent should answer.</Hint>}
-      {!!data?.length && <ReportGrid>{data.map(report => <ReportCard key={report.id} to={reportPath(project, report.name)} project={project} title={report.name} updated={when(report.updated_at)}/>)}</ReportGrid>}
-    </Section></main>;
+      {!!data?.length && <ReportGrid>{roots(data).map(report => <ReportCard key={report.id} to={reportPath(project, report.name)} project={project} title={report.name} description={owned(report)} updated={when(report.updated_at)}/>)}</ReportGrid>}
+    </Section>
+    {!!data?.some(report => !roots(data).includes(report)) && <Section title="Explorations"><ReportTree reports={data} project={project} parent={null}/></Section>}
+  </main>;
+}
+
+const owned = (report: Summary) => report.owner === 'agent' ? 'Written by the agent; you steer it with comments.' : undefined;
+/** Reports nobody else asked for, including those whose origin was deleted. */
+const roots = (reports: Summary[]) => reports.filter(report => !report.origin_id || !reports.some(other => other.id === report.origin_id));
+/** Reports asked for by another, under the report that asked. */
+function ReportTree({reports, project, parent}: {reports: Summary[]; project: string; parent: string | null}) {
+  const level = parent === null ? roots(reports).filter(root => reports.some(report => report.origin_id === root.id)) : reports.filter(report => report.origin_id === parent);
+  if (!level.length) return null;
+  return <ul className="report-tree">{level.map(report => <li key={report.id}><Link to={reportPath(project, report.name)}>{report.name}</Link> <small className="muted">{report.owner === 'agent' ? 'agent' : 'yours'}{report.origin_slot ? ` · from ${report.origin_slot}` : ''} · {when(report.updated_at)}</small><ReportTree reports={reports} project={project} parent={report.id}/></li>)}</ul>;
+}
+
+/** Cards for the reports asked for at one place in a report. */
+function Derived({reports, project}: {reports: Summary[]; project: string}) {
+  return reports.length ? <ReportGrid>{reports.map(report => <ReportCard key={report.id} to={reportPath(project, report.name)} project={project} title={report.name} description={owned(report)} updated={when(report.updated_at)}/>)}</ReportGrid> : null;
 }
 
 type Slots={open:Set<string>;toggle:(slot:string,open:boolean)=>void;remove:(slot:string)=>void;focus?:string};
-/** The body's blocks: cairn: figures, view blocks and agent blocks render through the page. */
-function renderer(report:Report,slots:Slots):Render {
+/** The body's blocks: cairn: figures, view blocks and agent blocks render through the page; an agent block lists the reports it asked for. */
+function renderer(report:Report,slots:Slots,derived:Summary[]):Render {
   return {
     fence:(info,content,key,source)=>info==='view'?<ViewFigure key={key} text={content} project={report.project} part="body" id={`body-${source?.line_start||1}`}/>:undefined,
     image:(src,alt,_attrs,key)=>src.startsWith('cairn:')?<ArtifactMedia key={key} reference={src.slice(6)} alt={alt} project={report.project} part="body"/>:<span key={key}>[Only cairn: references can be shown: {alt}]</span>,
@@ -59,6 +76,7 @@ function renderer(report:Report,slots:Slots):Render {
         <SlotDiscussion artifact={report.id} slot={slot} prompt={prompt} focus={slots.focus===slot} open={slots.open.has(slot)} onToggle={open=>slots.toggle(slot,open)} onRemove={()=>slots.remove(slot)} meta={answer&&<small>{answer.author?`${answer.author} · `:''}{when(answer.updated_at)}</small>}>
           {answer?.source.trim()?<div className="agent-answer"><Answer source={answer.source} part={slot} project={report.project}/></div>:undefined}
         </SlotDiscussion>
+        <Derived reports={derived.filter(item=>item.origin_slot===slot)} project={report.project}/>
       </section>;
     },
   };
@@ -136,12 +154,24 @@ export function ReportPage() {
     remove:slot=>body.setDraft(body.source.split('\n').filter(line=>agentLine.exec(line)?.[1]!==slot).join('\n'))};
   const resolved = params.get('resolved') === '1';
   const missing = listing.data && !id;
+  const derived = (listing.data || []).filter(item => item.origin_id === report?.id);
+  const origin = listing.data?.find(item => item.id === report?.origin_id), agent = report?.owner === 'agent';
+  const render = report && renderer(report, slots, derived);
+  // Without the editor, the table of contents follows the read-only text.
+  useEffect(() => {if(agent)setRendered(n => n + 1);}, [agent, body.source]);
+  async function takeOver() {
+    if(!report)return;
+    await api(`/ui-api/reports/${report.id}/owner`, {method: 'PUT', body: JSON.stringify({owner: 'user'})});
+    setRevision(n => n + 1);
+  }
   return <main className="report-page">
     <Hero eyebrow={<Crumbs items={[{label:'Projects',to:'/'},{label:project,to:projectPath(project)},{label:'Reports'}]}/>} title={name}/>
+    {origin && <p className="report-origin">Asked for in <Link to={reportPath(project, origin.name)}>{origin.name}</Link>{report?.origin_slot ? ` · ${report.origin_slot}` : ''}</p>}
     {(listing.error || error) && <ErrorNote error={(listing.error || error)!}/>}{missing && <Hint>No report named “{name}” in {project}.</Hint>}
     {(loading || listing.loading || (report && !body.ready)) && !missing && <Loading what="Loading report"/>}
     {report && body.ready && <Section title="Report" actions={<div className="report-actions">
-      <span className="comment-save-status" role="status">{body.status}</span>
+      <span className="comment-save-status" role="status">{agent ? 'Written by the agent · comment to steer it' : body.status}</span>
+      {agent && <Button small onClick={() => void takeOver()}><PenLine size={14} aria-hidden="true"/> Take over</Button>}
       <ActionIcon label={resolved?'Hide resolved comments':'Show resolved comments'} aria-pressed={resolved} onClick={()=>{const next=new URLSearchParams(params);if(resolved)next.delete('resolved');else next.set('resolved','1');setParams(next,{replace:true});}}><CheckCheck size={17} aria-hidden="true"/></ActionIcon>
       <ActionIcon label="Refresh" onClick={() => setRevision(n => n + 1)}><RefreshCw size={17} aria-hidden="true"/></ActionIcon>
     </div>}>
@@ -149,8 +179,10 @@ export function ReportPage() {
       <ReportArtifactContext.Provider value={report.id}><ReportCommentsProvider key={report.id} artifact={report.id}><div className="report-reader-layout">
         <ReportToc container={container} documentKey={rendered}/>
         <article ref={container} className="native-document report-prose" aria-label={name}>
-          <Editor value={body.source} onChange={body.setDraft} onRender={() => setRendered(n => n + 1)} onAgent={(slot,request)=>void placeAgent(slot,request)} label="Report text" complete={completions(report)} render={block => nodesToReact(block.nodes, renderer(report, slots))}/>
-          {nodesToReact(parsed.rest, renderer(report, slots))}
+          {agent ? parsed.blocks.map((block, index) => <Fragment key={index}>{nodesToReact(block.nodes, render!)}</Fragment>)
+            : <Editor value={body.source} onChange={body.setDraft} onRender={() => setRendered(n => n + 1)} onAgent={(slot,request)=>void placeAgent(slot,request)} label="Report text" complete={completions(report)} render={block => nodesToReact(block.nodes, render!)}/>}
+          {nodesToReact(parsed.rest, render!)}
+          <Derived reports={derived.filter(item => !item.origin_slot || !placed.has(item.origin_slot))} project={project}/>
           {!!other.length&&<section className="agent-notes" aria-label="Other agent notes"><h2>Other agent notes</h2>{other.map(([part,slot])=><section key={part} className="agent-slot"><div className="agent-answer"><header><span>Agent · {part}</span><small>{when(slot.updated_at)}</small></header><Answer source={slot.source} part={part} project={project}/></div></section>)}</section>}
           <SelectionCopy container={container} version={`reports/${name}`}/>
         </article>

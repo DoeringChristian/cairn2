@@ -283,14 +283,25 @@ class Client:
             body["markdown"] = documents.to_markdown(documents.loads(body["source"]))
         return report
 
-    def create_report(self, name, body=None, *, by=None):
-        """Create a report from Markdown or a document."""
+    def create_report(self, name, body=None, *, by=None, owner="user", origin=None, slot=None):
+        """Create a report from Markdown or a document.
+
+        An agent's report (owner="agent") names the report, and its slot, that asked for it."""
         return self.backend.create_report(
             self.project,
             name,
             body=None if body is None else _document(body),
             author=by,
+            owner=owner,
+            origin_id=None if origin is None else self._report_id(origin),
+            origin_slot=slot,
             request_id=new_id("request"),
+        )
+
+    def set_report_owner(self, name, owner):
+        """Hand a report's body to the user or to an agent."""
+        return self.backend.set_report_owner(
+            self._report_id(name), owner, request_id=new_id("request")
         )
 
     def write_report(self, name, part, source, *, expected_revision=None, by=None):

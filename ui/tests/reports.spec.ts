@@ -230,3 +230,28 @@ test('the same view works as a workspace card',async({page})=>{
   await dialog.getByRole('button',{name:'Add card',exact:true}).click();
   await expect(page.getByRole('article',{name:'Viewer',exact:true}).frameLocator('iframe').locator('img')).toHaveCount(1);
 });
+
+test('agent reports hang under the slot that asked for them and can be taken over',async({page,request})=>{
+  const stamp=`${Date.now()}`,created:string[]=[];
+  const make=async(data:object)=>{const report=await (await request.post('/v1/reports',{data:{project:'neural-rendering',...data}})).json();created.push(report.id);return report;};
+  try{
+    const plan=await make({name:`spec-plan-${stamp}`,body:await toDocument(request,'# Plan\n\n<?cairn agent directions?>\n')});
+    const grids=await make({name:`spec-plan-${stamp}/grids`,owner:'agent',origin_id:plan.id,origin_slot:'directions',body:await toDocument(request,'# Grids\n\nClaim: grids help.\n')});
+    await make({name:`spec-plan-${stamp}/grids/sizes`,owner:'agent',origin_id:grids.id,body:await toDocument(request,'# Sizes\n')});
+    await page.goto(`/p/neural-rendering/r/spec-plan-${stamp}`);
+    await expect(page.getByRole('region',{name:'Agent: directions'}).locator('.report-card')).toContainText(`spec-plan-${stamp}/grids`);
+    await page.goto('/p/neural-rendering');
+    const tree=page.locator('.report-tree').filter({hasText:`spec-plan-${stamp}`}).first();
+    await expect(tree.locator('.report-tree .report-tree a')).toHaveText(`spec-plan-${stamp}/grids/sizes`);
+    await page.goto(`/p/neural-rendering/r/spec-plan-${stamp}/grids`);
+    await expect(page.locator('.report-origin')).toContainText(`Asked for in spec-plan-${stamp} · directions`);
+    await expect(page.locator('article.native-document')).toContainText('Claim: grids help.');
+    await expect(page.getByLabel('Report text')).toHaveCount(0);
+    await expect(page.locator('article.native-document > .report-grid .report-card')).toContainText('sizes');
+    await page.getByRole('button',{name:'Take over'}).click();
+    await expect(page.getByLabel('Report text')).toBeVisible();
+    await expect(page.getByRole('button',{name:'Take over'})).toHaveCount(0);
+  }finally{
+    for(const id of created.reverse())await request.delete(`/ui-api/reports/${id}`);
+  }
+});

@@ -2,8 +2,8 @@
 
 `cairn/contract.py` declares `RepositoryProtocol` and JSON result shapes. The direct
 repository and HTTP adapter implement the same methods. Protocol version **4**,
-repository schema **9**, durable outbox schema **3**. Other schemas are rejected;
-schema 6, 7 and 8 repositories convert only through the explicit `cairn repo migrate`.
+repository schema **10**, durable outbox schema **3**. Other schemas are rejected;
+schema 6, 7, 8 and 9 repositories convert only through the explicit `cairn repo migrate`.
 
 ## One artifact lifecycle
 
@@ -71,11 +71,12 @@ UTC ISO strings; errors have a stable code, message and details.
 | `update_comment(comment_id, body, *, expected_revision=None, for_agent=None, request_id=None)` | Replaces the body and the agent mark; a change to either clears `sent_at`. A stale revision raises Conflict. |
 | `resolve_comment(comment_id, *, resolved=True, note=None, by=None, request_id=None)` | Sets or clears `resolved_at` and `resolution: {note, by}` on a thread's first comment; its replies follow its `resolved_at`. Deleting the first comment deletes its replies. |
 | `delete_comment(comment_id, *, request_id=None)` | `{id, deleted}`; an unknown ID raises NotFound. |
-| `create_report(project, name, *, body='', author=None, request_id=None)` | `{id, project, name, created_at, updated_at}`; a second report with the name raises Conflict. |
+| `create_report(project, name, *, body='', author=None, owner='user', origin_id=None, origin_slot=None, request_id=None)` | `{id, project, name, created_at, updated_at, owner, origin_id, origin_slot}`; a second report with the name raises Conflict. An origin must be a report of the same project; `origin_slot` needs `origin_id`. |
+| `set_report_owner(report_id, owner, *, request_id=None)` | The report with its new `owner` (`user` or `agent`); revisions and comments stay. |
 | `reports(*, project='default')` | The project's reports without their parts, most recently changed first. |
 | `report(report_id)` | The report with `parts`: each part's latest `{source, revision, author, updated_at}`. |
 | `write_report(report_id, part, source, *, expected_revision=None, author=None, request_id=None)` | `{report_id, part, revision}`; saves a new revision unless the text is unchanged. A part not at `expected_revision` (0 before its first write) raises Conflict with the current `revision`. |
-| `delete_report(report_id, *, request_id=None)` | `{id, deleted}`; removes the report with every revision and comment. |
+| `delete_report(report_id, *, request_id=None)` | `{id, deleted}`; removes the report with every revision and comment. Reports it was the origin of stay, without an origin. |
 | `add_report_comment(report_id, anchor, body, *, author=None, for_agent=False, request_id=None)` | A comment on a report, otherwise as `add_comment`. |
 | `report_comments(report_id, *, include_resolved=True)` | The report's comments, oldest first. |
 | `collect_garbage(*, grace_seconds=3600, dry_run=True)` | `{dry_run, pinned, artifacts, candidates, removed, orphans}`. Purges artifacts deleted before the grace period that only other purged artifacts reference, then unreferenced content. |
@@ -255,8 +256,8 @@ JSON `where` and optional `state` to `GET /v1/artifacts`. Python exposes
 `Client.annotate`, `Client.find`, `Client.comments`, `Client.resolve_comment` and
 `Client.reopen_comment`; the CLI exposes `artifact annotate [--name]`,
 `artifact list --where` and `comments list|resolve|reopen`. `Client.reports`, `report`,
-`create_report`, `write_report`, `delete_report` and `comment_report` address reports
-by name; the CLI exposes `report list|show|new|write|comment|delete|watch`. `report
+`create_report`, `set_report_owner`, `write_report`, `delete_report` and `comment_report` address reports
+by name; the CLI exposes `report list|show|new|owner|write|comment|delete|watch`. `report
 watch` waits until the body passes a revision and has rested, or a thread on the
 report has a comment sent after its last reply, prints the report with those threads
 as one JSON line and exits.
@@ -279,6 +280,13 @@ agent fills with Markdown. Parts are identifiers of 1–64 characters and hold a
 writing unchanged text keeps the revision. `expected_revision` makes a write
 conditional, so two editors never overwrite each other silently. Browser sessions
 write only `body` and comments; agents write slots with the server token.
+
+A report's `owner` says who writes its body: `user` (the default), or `agent` for a
+report an agent writes on its own, which the user steers by comments. Browser
+sessions create only user reports, cannot write an agent report's body, and may
+change a report's owner. `origin_id` and `origin_slot` name the report, and its agent
+slot, that asked for a report, so an agent exploring several directions writes one
+report per direction under the request; origins nest to any depth.
 
 The body's source is a JSON document tree in ProseMirror's shape, `{"type": "doc", "content": [...]}`,
 which the repository validates (`cairn/documents.py`). Blocks are `paragraph`,

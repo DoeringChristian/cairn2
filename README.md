@@ -586,6 +586,8 @@ refused instead of overwriting. Agents work on reports by name:
 ```sh
 cairn report list
 cairn report new study body.md                  # Markdown, or create it in the UI
+cairn report new study/grids notes.md --owner agent --origin study --slot directions
+cairn report owner study/grids user             # take an agent's report over
 cairn report show study                         # every part; the body also as markdown
 cairn report write study baseline answer.md --by agent   # or - for standard input
 cairn report comment study "Three rates may miss the optimum" \
@@ -593,6 +595,11 @@ cairn report comment study "Three rates may miss the optimum" \
 cairn report watch study --after 4              # wait for edits or sent comments
 cairn report delete study
 ```
+
+An agent's report (`--owner agent`) is the agent's to write: the UI shows it read-only,
+you steer it with comments, and **Take over** makes it yours to edit. `--origin` and
+`--slot` place it under the report and agent block that asked for it; the UI shows
+such reports as cards there, and as a tree under their origin in the report list.
 
 `report watch` prints the report and its waiting threads as one JSON line and
 exits when the body passes revision `--after` (by default the current one) and has
@@ -687,7 +694,7 @@ The API provides one artifact lifecycle, multiple producers, alias compare-and-s
 typed values, comments, SQL-filtered record queries, streaming blobs and explicit
 transfer/maintenance. Runs automatically capture client-side provenance and console output. The
 backend has one shared token and ordinal query ordering; no code execution
-or AI integration. Unknown schemas fail explicitly: repository schema **9**, HTTP
+or AI integration. Unknown schemas fail explicitly: repository schema **10**, HTTP
 protocol **4**, durable outbox schema **3**. Typed-value codec envelopes remain
 version 1. A schema 6, 7 or 8 repository opens again after `cairn repo export` (a backup)
 and `cairn --repo PATH repo migrate`, which converts it in one transaction; use
