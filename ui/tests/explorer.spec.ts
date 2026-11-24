@@ -365,7 +365,7 @@ test('run list is bounded and slow loads survive auto refresh', async ({page}) =
   expect(forbidden).toEqual([]);
 });
 
-test('list cache survives category navigation and reload, refresh bypasses it', async ({page}) => {
+test('while auto-refresh is paused the list cache survives navigation; reload and refresh bypass it', async ({page}) => {
   const requests: string[] = [];
   await page.route('**/ui-api/artifacts?*', async route => {
     const query = new URL(route.request().url()).searchParams;
@@ -386,14 +386,14 @@ test('list cache survives category navigation and reload, refresh bypasses it', 
   expect(requests).toEqual(['runs','artifacts']);
   await page.reload();
   await expect(page.getByRole('link', {name:'cached-runs', exact:true})).toBeVisible();
-  expect(requests).toEqual(['runs','artifacts']);
+  await expect.poll(() => requests).toEqual(['runs','artifacts','runs']);
   await page.getByRole('button', {name:'Pause auto-refresh', exact:true}).click();
   await page.getByRole('button', {name:'Refresh', exact:true}).click();
-  await expect.poll(() => requests.length).toBe(3);
+  await expect.poll(() => requests.length).toBe(4);
   expect(requests.at(-1)).toBe('runs');
   await nav.getByRole('link', {name:'Artifacts', exact:true}).click();
   await expect(page.getByRole('link', {name:'cached-artifacts', exact:true})).toBeVisible();
-  expect(requests).toHaveLength(3);
+  expect(requests).toHaveLength(4);
 });
 
 test('run console shows the output stored by the run',async({page,request})=>{

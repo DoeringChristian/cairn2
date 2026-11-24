@@ -88,12 +88,17 @@ export function compare(a: Json | undefined, b: Json | undefined) {
   return String(a).localeCompare(String(b), undefined, { numeric: true });
 }
 export function sorted(rows: Observation[], order: Order) {
-  return [...rows].sort((a, b) => {
-    const av = valueAt(a, order.field),
-      bv = valueAt(b, order.field);
-    const direction = av == null || bv == null ? 1 : order.descending ? -1 : 1;
-    return compare(av, bv) * direction || a.artifact_id.localeCompare(b.artifact_id) || a.ordinal - b.ordinal;
-  });
+  const keyed = rows.map((row) => ({ row, value: valueAt(row, order.field) }));
+  const before = (a: (typeof keyed)[number], b: (typeof keyed)[number]) => {
+    const direction = a.value == null || b.value == null ? 1 : order.descending ? -1 : 1;
+    const difference = compare(a.value, b.value) * direction;
+    if (difference) return difference;
+    if (a.row.artifact_id !== b.row.artifact_id) return a.row.artifact_id.localeCompare(b.row.artifact_id);
+    return a.row.ordinal - b.row.ordinal;
+  };
+  // Runs mostly log in order.
+  if (keyed.every((item, i) => !i || before(keyed[i - 1], item) <= 0)) return rows.slice();
+  return keyed.sort(before).map((item) => item.row);
 }
 function same(a: Json, b: Json): boolean {
   if (a === b) return true;
@@ -133,7 +138,15 @@ export const filtered = (rows: Observation[], card: Card) =>
   );
 export function groups(rows: Observation[], fields: string[]) {
   const result = new Map<string, { name: string; rows: Observation[] }>();
+  // Fields of the run are the same for all its records.
+  const perRun = fields.every((f) => ['@run', '@name', '@version'].includes(f) || f.startsWith('@config/'));
+  const byRun = new Map<Artifact, { name: string; rows: Observation[] }>();
   for (const row of rows) {
+    const known = perRun && byRun.get(row.run);
+    if (known) {
+      known.rows.push(row);
+      continue;
+    }
     const key = JSON.stringify(fields.map((f) => valueAt(row, f) ?? null));
     let group = result.get(key);
     if (!group) {
@@ -146,6 +159,7 @@ export function groups(rows: Observation[], fields: string[]) {
       result.set(key, group);
     }
     group.rows.push(row);
+    if (perRun) byRun.set(row.run, group);
   }
   return [...result.entries()].map(([key, group]) => ({ key, ...group }));
 }
@@ -154,6 +168,19 @@ export function typeOf(value: Json | undefined): string {
   const typed = envelope(value);
   if (!typed) return typeof value;
   return typed.format === 'file' ? `file:${(typed.data as { media_type?: string }).media_type}` : typed.format;
+}
+const discovered = new WeakMap<Observation[], FieldInfo[]>();
+/** The fields of several runs' records; a run whose records did not change is not read again. */
+export function discoverAll(runs: Observation[][]): FieldInfo[] {
+  const fields = new Map<string, Set<string>>();
+  for (const rows of runs.length ? runs : [[]]) {
+    if (!discovered.has(rows)) discovered.set(rows, discover(rows));
+    for (const { name, kinds } of discovered.get(rows)!) {
+      if (!fields.has(name)) fields.set(name, new Set());
+      kinds.forEach((kind) => fields.get(name)!.add(kind));
+    }
+  }
+  return [...fields].map(([name, kinds]) => ({ name, kinds })).sort((a, b) => a.name.localeCompare(b.name));
 }
 export function discover(rows: Observation[]): FieldInfo[] {
   const fields = new Map<string, Set<string>>();
@@ -167,6 +194,7 @@ export function discover(rows: Observation[]): FieldInfo[] {
     if (value && typeof value === 'object' && !Array.isArray(value) && !envelope(value))
       for (const [key, v] of Object.entries(value)) visit(v, `${path}/${key.replace(/~/g, '~0').replace(/\//g, '~1')}`);
   };
+  const configured = new Set<Artifact>();
   for (const row of rows) {
     for (const [key, value] of Object.entries(row.data)) {
       add(key, value);
@@ -174,7 +202,8 @@ export function discover(rows: Observation[]): FieldInfo[] {
         for (const [k, v] of Object.entries(value))
           visit(v, `/${key.replace(/~/g, '~0').replace(/\//g, '~1')}/${k.replace(/~/g, '~0').replace(/\//g, '~1')}`);
     }
-    if (row.run.metadata.config) visit(row.run.metadata.config, '@config');
+    if (row.run.metadata.config && !configured.has(row.run)) visit(row.run.metadata.config, '@config');
+    configured.add(row.run);
   }
   for (const [name, kind] of [
     ['@run', 'string'],

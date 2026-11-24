@@ -23,6 +23,20 @@ async function workspaceServer(page:Page){
     return r.fulfill({json:{name:body.name,revision:revision+1}});
   });
 }
+/** The record stream of the requested runs; `state` and `records` are read on every request. */
+async function serveRecords(page:Page,records:(id:string)=>any[],state='finished',end='{"done":true}\n'){
+  await page.route('**/ui-api/observations',r=>{
+    const {after}=r.request().postDataJSON();let body='';
+    for(const [id,from] of Object.entries<number>(after)){
+      const all=records(id),run=runs.find(a=>a.id===id)!;
+      const rows=all.map((data,i)=>[i+1,i,'w','2026-01-01',data]).slice(from);
+      body+=JSON.stringify({artifact:{...run,state}})+'\n';
+      for(let i=0;i<rows.length;i+=1000)body+=JSON.stringify(rows.slice(i,i+1000))+'\n';
+      body+=JSON.stringify({cutoff:all.length})+'\n';
+    }
+    return r.fulfill({contentType:'application/x-ndjson',body:body+end});
+  });
+}
 async function fixture(page:Page,projects=[project]){
   await workspaceServer(page);
   await page.route('**/ui-api/session',r=>r.fulfill({json:{authenticated:true,no_auth:true,repository_id:'workspace-tests'}}));
@@ -30,7 +44,7 @@ async function fixture(page:Page,projects=[project]){
   await page.route('**/ui-api/artifacts?*',r=>{const offset=Number(new URL(r.request().url()).searchParams.get('offset'));return r.fulfill({json:{items:runs.slice(offset,offset+2),total:runs.length}});});
   await page.route('**/ui-api/artifacts/*/history',r=>r.fulfill({json:runs.filter(a=>a.name===runs.find(item=>r.request().url().includes(`/artifacts/${item.id}/`))?.name)}));
   await page.route('**/v1/resolutions',r=>r.fulfill({json:runs.filter(a=>r.request().postDataJSON().refs.includes(a.id))}));
-  await page.route('**/v1/records/query',r=>{const body=r.request().postDataJSON(),id=body.ref;const values=body.cursor?[{step:2,loss:1,quality:10,elapsed:20,camera:'front',camera_angle:0,image,video,figure}]:[{step:0,loss:3,quality:30,elapsed:0,camera:'front',camera_angle:0,image,video,figure},...(id==='b'?[]:[{step:1,loss:2,quality:20,elapsed:10,camera:'front',camera_angle:0,image,video,figure}])];return r.fulfill({json:{artifact_id:id,cutoff:3,next_cursor:body.cursor?null:'page2',items:values.map((data,i)=>({artifact_id:id,ordinal:body.cursor?3:i+1,sequence:i,writer_id:'w',kind:'record',data,created_at:'2026-01-01'}))}});});
+  await serveRecords(page,id=>[{step:0,loss:3,quality:30,elapsed:0,camera:'front',camera_angle:0,image,video,figure},...(id==='b'?[]:[{step:1,loss:2,quality:20,elapsed:10,camera:'front',camera_angle:0,image,video,figure}]),{step:2,loss:1,quality:10,elapsed:20,camera:'front',camera_angle:0,image,video,figure}]);
   await page.route('**/v1/blobs/test-png',r=>r.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64')}));
   await page.route('**/v1/blobs/test-mp4',r=>r.fulfill({contentType:'application/octet-stream',body:readFileSync(new URL('../../examples/report-showcase/assets/wave-evolution.mp4',import.meta.url))}));
   await page.goto(`/p/${project}/workspace?example=cards`);
@@ -86,7 +100,7 @@ test('workspace SVG blobs decode in thumbnails and lightboxes despite an untyped
   const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await fixture(page);
   const svg={$cairn:1,format:'figure/svg',version:1,data:{},blobs:[{digest:'test-svg',media_type:'image/svg+xml',size:150,name:'figure.svg'}],refs:[]};
   await page.route('**/v1/blobs/test-svg',r=>r.fulfill({contentType:'application/octet-stream',body:'<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect width="120" height="80" fill="teal"/></svg>'}));
-  await page.route('**/v1/records/query',r=>{const body=r.request().postDataJSON();return r.fulfill({json:{artifact_id:body.ref,cutoff:1,next_cursor:null,items:[{artifact_id:body.ref,ordinal:1,sequence:1,writer_id:'w',kind:'record',data:{step:0,image:svg},created_at:'2026-01-01'}]}});});
+  await serveRecords(page,()=>[{step:0,image:svg}]);
   await page.getByRole('button',{name:'Refresh workspace',exact:true}).click();
   const comparison=card(page,'Compare reconstructions');
   await expect.poll(()=>comparison.locator('img').evaluateAll(nodes=>nodes.map(n=>(n as HTMLImageElement).naturalWidth))).toEqual([120,120]);
@@ -103,7 +117,7 @@ test('sweeping media keeps the previous frame until the next has loaded',async({
   const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await fixture(page);
   const frame=(step:number)=>({$cairn:1,format:'image',version:1,data:{name:'frame.png'},blobs:[{digest:`frame-${step}`,media_type:'image/png',size:68}],refs:[]});
   await page.route('**/v1/blobs/frame-*',async r=>{await new Promise(resolve=>setTimeout(resolve,150));await r.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64')});});
-  await page.route('**/v1/records/query',r=>{const body=r.request().postDataJSON();return r.fulfill({json:{artifact_id:body.ref,cutoff:8,next_cursor:null,items:Array.from({length:8},(_,step)=>({artifact_id:body.ref,ordinal:step+1,sequence:step,writer_id:'w',kind:'record',data:{step,image:frame(step)},created_at:'2026-01-01'}))}});});
+  await serveRecords(page,()=>Array.from({length:8},(_,step)=>({step,image:frame(step)})));
   await page.getByRole('button',{name:'Refresh workspace',exact:true}).click();
   const comparison=card(page,'Compare reconstructions');await comparison.scrollIntoViewIfNeeded();
   await expect.poll(()=>comparison.locator('.workspace-held-layer:not(.pending) img').evaluateAll(nodes=>nodes.filter(n=>(n as HTMLImageElement).complete).length)).toBe(2);
@@ -127,9 +141,36 @@ test('record filters support nested configuration and splitting never aggregates
 
 test('a failed later record page never leaves a partial plot',async({page})=>{
   await fixture(page);
-  await page.route('**/v1/records/query',async r=>{if(r.request().postDataJSON().cursor)return r.fulfill({status:503,json:{error:{message:'Record stream temporarily unavailable'}}});await r.fallback();});
+  await page.route('**/ui-api/observations',r=>r.fulfill({status:503,json:{error:{message:'Record stream temporarily unavailable'}}}));
   await page.getByRole('button',{name:'Refresh workspace',exact:true}).click();await expect(page.getByRole('alert')).toContainText('Record stream temporarily unavailable');await expect(card(page,'Loss over training').locator('.workspace-scalar-plot')).toHaveCount(0);
   await expect(card(page,'Loss over training')).toContainText('Data could not be loaded');
+  // A stream that breaks off after complete runs is a failure too.
+  await serveRecords(page,()=>[{step:0,loss:1}],'finished','');
+  await page.getByRole('button',{name:'Refresh workspace',exact:true}).click();await expect(page.getByRole('alert')).toContainText('ended early');await expect(card(page,'Loss over training').locator('.workspace-scalar-plot')).toHaveCount(0);
+});
+
+test('live runs fetch only new records, and nothing again when runs are hidden and shown',async({page})=>{
+  await fixture(page);const all=[{step:0,loss:3},{step:1,loss:2}] as any[],asked:Record<string,number>[]=[];
+  page.on('request',r=>{if(r.url().endsWith('/ui-api/observations'))asked.push(r.postDataJSON().after);});
+  await serveRecords(page,()=>all,'live');await page.getByRole('button',{name:'Refresh workspace',exact:true}).click();
+  await expect(page.locator('.workspace-data-status')).toContainText('2 runs · 4 records');
+  all.push({step:2,loss:1});await expect(page.locator('.workspace-data-status')).toContainText('2 runs · 6 records');
+  await expect.poll(()=>card(page,'Loss over training').locator('.workspace-scalar-plot').evaluate((n:any)=>n.uplot?.data.slice(1).map((t:any)=>t[0]))).toEqual([[0,1,2],[0,1,2]]);
+  await page.getByRole('button',{name:'Hide workspace-demo/b · v1',exact:true}).click();await expect(page.locator('.workspace-data-status')).toContainText('1 run · 3 records');
+  await page.getByRole('button',{name:'Show workspace-demo/b · v1',exact:true}).click();await expect(page.locator('.workspace-data-status')).toContainText('2 runs · 6 records');
+  const whole=asked.filter(after=>Object.values(after).includes(0)).flatMap(after=>Object.keys(after));expect(whole.sort()).toEqual(['a','b']);
+  expect(asked.some(after=>after.a===2)).toBe(true);
+});
+
+test('hidden runs are remembered without saving, and new runs are shown',async({page})=>{
+  await fixture(page);await page.getByRole('button',{name:'Save',exact:true}).click();await settled(page);await page.goto(`/p/${project}/workspace`);
+  await page.getByRole('button',{name:'Hide workspace-demo/b · v1',exact:true}).click();await expect(page.locator('.workspace-data-status')).toContainText('1 run · 3 records · 1 hidden');await settled(page);
+  await page.reload();await expect(page.locator('.workspace-data-status')).toContainText('1 run · 3 records · 1 hidden');
+  await page.getByRole('button',{name:'Settings for Loss over training'}).click();await page.getByRole('dialog').getByLabel('Card title').fill('Renamed');await page.getByRole('dialog').getByRole('button',{name:'Done'}).click();await settled(page);
+  expect(stored(page,'Training cards demo').selected).toBeNull();
+  const added=artifact('c','workspace-demo/c',1,'2026-01-03');runs.push(added);
+  try{await page.reload();await expect(page.locator('.workspace-data-status')).toContainText('2 runs · 6 records · 1 hidden');}
+  finally{runs.splice(runs.indexOf(added),1);}
 });
 
 for(const scenario of [{name:'50,000 records',perRun:26001,padding:0},{name:'32 MiB',perRun:2000,padding:9000}])test(`complete selections above ${scenario.name} remain inspectable`,async({page})=>{
@@ -137,18 +178,14 @@ for(const scenario of [{name:'50,000 records',perRun:26001,padding:0},{name:'32 
   await page.getByRole('button',{name:'Save',exact:true}).click();await expect(page.locator('.workspace-save-status')).toHaveText('Saved');
   // Keep one scalar card so the assertion measures complete data, not duplicate renderers.
   const demo=stored(page,'Training cards demo');demo.cards=demo.cards.slice(0,1);
-  let pages=0,bytes=0;
-  await page.route('**/v1/records/query',async route=>{
-    const body=route.request().postDataJSON(),start=Number(body.cursor||0),end=Math.min(start+1000,scenario.perRun);pages++;
-    const items=Array.from({length:end-start},(_,i)=>{const step=start+i;return {artifact_id:body.ref,ordinal:step+1,sequence:step,writer_id:'w',kind:'record',created_at:'2026-01-01',data:{step,loss:scenario.perRun-step,...(scenario.padding?{detail:'x'.repeat(scenario.padding)}:{})}};});
-    const response=JSON.stringify({artifact_id:body.ref,cutoff:scenario.perRun,next_cursor:end<scenario.perRun?String(end):null,items});bytes+=Buffer.byteLength(response);
-    await route.fulfill({contentType:'application/json',body:response});
-  });
+  const items=Array.from({length:scenario.perRun},(_,step)=>({step,loss:scenario.perRun-step,...(scenario.padding?{detail:'x'.repeat(scenario.padding)}:{})}));
+  let requests=0;page.on('request',r=>{if(r.url().endsWith('/ui-api/observations'))requests++;});
+  await serveRecords(page,()=>items);
   await settled(page);await page.reload();
   await expect(page.locator('.workspace-data-status')).toContainText(`${(2*scenario.perRun).toLocaleString()} records`,{timeout:20000});
   const plot=card(page,'Loss over training').locator('.workspace-scalar-plot');
   await expect.poll(()=>plot.evaluate((n:any)=>n.uplot?.data.slice(1).map((series:any)=>({count:series[0].length,first:series[0][0],last:series[0].at(-1),lastY:series[1].at(-1)})))).toEqual(Array(2).fill({count:scenario.perRun,first:0,last:scenario.perRun-1,lastY:1}));
-  expect(pages).toBe(2*Math.ceil(scenario.perRun/1000));if(scenario.padding)expect(bytes).toBeGreaterThan(32*1024*1024);
+  expect(requests).toBe(2);
   await expect(page.getByRole('alert')).toHaveCount(0);expect(errors).toEqual([]);
 });
 
@@ -284,14 +321,14 @@ test('run links open Overview; Workspace is an embedded run tab with the other i
 
 test('saved visibility survives reload; direct run views ignore filters and latest-only selection',async({page})=>{
   await fixture(page);await page.getByRole('button',{name:'Hide all runs',exact:true}).click();await expect(page.locator('.workspace-data-status')).toContainText('0 runs · 0 records');await page.getByRole('button',{name:'Save',exact:true}).click();await settled(page);await page.reload();await expect(page.locator('.workspace-data-status')).toContainText('0 runs · 0 records');
-  const queries:string[]=[];let listRequests=0;page.on('request',r=>{if(r.url().includes('/v1/records/query'))queries.push(r.postDataJSON().ref);if(r.url().includes('/ui-api/artifacts?'))listRequests++;});
+  const queries:string[]=[];let listRequests=0;page.on('request',r=>{if(r.url().endsWith('/ui-api/observations'))queries.push(...Object.keys(r.postDataJSON().after));if(r.url().includes('/ui-api/artifacts?'))listRequests++;});
   await page.goto(`/p/${project}/workspace/old`);await expect(page).toHaveURL(new RegExp(`/a/old\\?tab=workspace$`));await expect(page.getByRole('tab',{name:'Workspace',exact:true})).toHaveAttribute('aria-selected','true');await expect(page.locator('.workspace-data-status')).toContainText('1 run · 3 records');await expect.poll(()=>card(page,'Loss over training').locator('.workspace-scalar-plot').evaluate((n:any)=>n.uplot?.series[1].label)).toBe('workspace-demo/a · v1');expect(new Set(queries)).toEqual(new Set(['old']));expect(listRequests).toBe(0);
   await page.getByRole('link',{name:'Project workspace',exact:true}).click();await expect(page.locator('.workspace-data-status')).toContainText('0 runs · 0 records');await page.getByRole('button',{name:'Show all runs',exact:true}).click();await expect(page.locator('.workspace-data-status')).toContainText('2 runs · 5 records');
 });
 
 test('invalid and cross-project run links never fall back to project records',async({page})=>{
   await fixture(page);await page.route('**/v1/resolutions',r=>{const id=r.request().postDataJSON().refs[0];return r.fulfill({json:id==='foreign'?[{...runs[0],id,project:'another-project'}]:[]});});
-  const queries:string[]=[];page.on('request',r=>{if(r.url().includes('/v1/records/query'))queries.push(r.postDataJSON().ref);});
+  const queries:string[]=[];page.on('request',r=>{if(r.url().endsWith('/ui-api/observations'))queries.push(...Object.keys(r.postDataJSON().after));});
   for(const id of ['missing','foreign']){await page.goto(`/p/${project}/workspace/${id}`);await expect(page.getByRole('alert')).toContainText('Artifact not found in this project');await expect(page.locator('.workspace-scalar-plot')).toHaveCount(0);await expect(page.getByRole('complementary',{name:'Run selection'})).toHaveCount(0);}
   expect(queries).toEqual([]);
 });
@@ -391,7 +428,7 @@ test('directional drags zoom only the selected axis and reset restores padded ho
 
 test('log axes render filtered tick labels, retain positive padded bounds and survive reload',async({page})=>{
   const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await fixture(page);
-  await page.route('**/v1/records/query',r=>{const id=r.request().postDataJSON().ref;return r.fulfill({json:{artifact_id:id,cutoff:5,next_cursor:null,items:[[-1,-1],[0,0],[1,.01],[10,.1],[100,1]].map(([step,loss],i)=>({artifact_id:id,ordinal:i+1,sequence:i,writer_id:'w',kind:'record',data:{step,loss},created_at:'2026-01-01'}))}});});
+  await serveRecords(page,()=>[[-1,-1],[0,0],[1,.01],[10,.1],[100,1]].map(([step,loss])=>({step,loss})));
   await page.getByRole('button',{name:'Refresh workspace'}).click();await expect(page.locator('.workspace-data-status')).toContainText('10 records');
   const loss=card(page,'Loss over training'),plot=loss.locator('.workspace-scalar-plot');await loss.getByRole('button',{name:'Settings for Loss over training'}).click();const dialog=page.getByRole('dialog');await dialog.getByRole('tab',{name:'Appearance'}).click();
   await dialog.getByLabel('Logarithmic X').check();await dialog.getByLabel('Logarithmic Y').check();await dialog.getByRole('button',{name:'Done'}).click();

@@ -196,15 +196,15 @@ overwriting. The browser remembers which layout was open, and layouts that earli
 versions kept in localStorage can be moved to the project. Card settings save automatically; other unsaved layout edits remain temporary. Saving the example removes
 its preset URL parameter so reloading opens the saved view.
 
-The initial workspace loads complete, cutoff-pinned record streams for selected
-runs, with three concurrent fetches and loading progress. There is no fixed
-record-count or response-byte cutoff; complete selected records remain in browser
-memory.
-A failed page cancels the remaining requests and shows an error with no partial charts. Finished
-selections load once; selections containing live runs refresh every five seconds
-unless auto-refresh is paused. The run picker refreshes every ten seconds. Large
-selections should be narrowed using run filters; server-side workspace query and
-aggregation operations are not introduced by this feature.
+The workspace reads the records of all selected runs from up to four compressed streams
+(`POST /ui-api/observations`, private to the UI). A run appears once all its records have
+arrived, so no run is ever drawn partially, and cards fill in run by run. There is no
+fixed record-count or response-byte cutoff; records stay in browser memory, also while
+their run is hidden. A failed or incomplete first load shows an error with no charts.
+Afterwards only the new records of live runs are fetched, every second (less often when
+drawing them takes long), while the page is visible and auto-refresh is not paused. The
+run picker refreshes every five seconds. Refresh loads everything again. Hidden runs are
+remembered per layout in this browser; a layout's own `selected` applies until then.
 
 The reproducible synthetic demo lives in `examples/training/workspace_demo.py`.
 Open `/p/training-example/workspace?example=cards` for the eight-card tour. The

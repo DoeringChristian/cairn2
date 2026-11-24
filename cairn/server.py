@@ -175,6 +175,11 @@ class ReportPart(RequestID):
     author: str | None = None
 
 
+class Observations(StrictBody):
+    project: str = "default"
+    after: dict[str, int] = Field(max_length=1000)
+
+
 class Stop(StrictBody):
     force: bool = False
 

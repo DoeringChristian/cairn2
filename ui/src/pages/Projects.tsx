@@ -70,9 +70,10 @@ function ArtifactList() {
     }
     const cached = cachedList(path);
     if (cached) {
-      setResult({...cached, path});setLoading(false);setError(undefined);
-      if (!paused) timer = window.setTimeout(poll, 5000);
-    } else {setLoading(true);void load();}
+      setResult({...cached, path});setLoading(false);
+    } else setLoading(true);
+    // A cached page only bridges the request, unless auto-refresh is paused.
+    if (!cached || !paused) void load();
     return () => {controller.abort();window.clearTimeout(timer);};
   }, [path, revision, paused]);
   const liveness=useLiveness(items.some(a=>a.state!=='finished')?project:null);

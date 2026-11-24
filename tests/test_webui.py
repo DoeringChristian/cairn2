@@ -1,3 +1,4 @@
+import json
 import time
 from contextlib import closing
 
@@ -284,3 +285,40 @@ def test_viewers_serve_an_artifacts_files_to_a_sandbox_by_signed_link(tmp_path):
         assert browser.get(url + "viewer/missing.js").status_code == 404
         forged = url.replace("/viewers/", "/viewers/x")
         assert browser.get(forged + "viewer/index.html").status_code == 401
+
+
+def test_observations_stream_records_after_a_position(tmp_path):
+    with closing(Repository(tmp_path)) as repo:
+        ids = []
+        for name in ("a", "b"):
+            started = repo.start("demo", "runs", name)
+            ids.append(started["artifact"]["id"])
+            entries = [
+                {"sequence": 1, "kind": "record", "data": {"loss": 0.5, "text": "line\nbreak é"}},
+                {"sequence": 2, "kind": "metadata", "data": {"config": {"lr": 1}}},
+                {"sequence": 3, "kind": "record", "data": {"loss": 0.25}},
+            ]
+            repo.append_batch(ids[-1], started["writer"]["id"], entries)
+
+        def read(browser, after, **headers):
+            body = {"project": "demo", "after": after}
+            response = browser.post("/ui-api/observations", json=body, headers=headers)
+            return response, [json.loads(line) for line in response.text.split("\n") if line]
+
+        with TestClient(create_app(repo, token="test-token", ui=True)) as browser:
+            assert read(browser, {ids[0]: 0})[0].status_code == 401
+            browser.post("/ui-api/login", json={"token": "test-token"})
+            response, lines = read(browser, dict.fromkeys(ids, 0))
+            assert response.headers["content-encoding"] == "gzip"
+            assert [line["artifact"]["id"] for line in lines if "artifact" in line] == ids
+            assert lines[0]["artifact"]["metadata"]["config"] == {"lr": 1}
+            assert [[row[0], row[4]] for row in lines[1]] == [
+                [1, {"loss": 0.5, "text": "line\nbreak é"}],
+                [3, {"loss": 0.25}],
+            ]
+            assert lines[2] == {"cutoff": 3} and lines[-1] == {"done": True}
+            plain, rest = read(browser, {ids[1]: 1}, **{"accept-encoding": "identity"})
+            assert "content-encoding" not in plain.headers
+            assert [row[0] for row in rest[1]] == [3]
+            assert len(read(browser, {ids[1]: 3})[1]) == 3
+            assert read(browser, {"0" * 32: 0})[0].status_code == 404

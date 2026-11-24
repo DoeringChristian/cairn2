@@ -17,6 +17,7 @@ export function RunPanel({
   selected,
   open,
   patch,
+  hide,
 }: {
   project: string;
   layout: Layout;
@@ -24,12 +25,14 @@ export function RunPanel({
   selected: ArtifactSummary[];
   open: boolean;
   patch: (value: Partial<Layout>) => void;
+  hide: (ids: string[]) => void;
 }) {
   const liveness = useLiveness(candidates.some((run) => run.state !== 'finished') ? project : null);
   const prefix = sharedPrefix(candidates);
   const hiddenCount = candidates.length - selected.length;
   const allVisible = candidates.length > 0 && hiddenCount === 0;
-  const visibleIds = selected.map((run) => run.id);
+  const visibleIds = new Set(selected.map((run) => run.id));
+  const hiddenIds = candidates.filter((run) => !visibleIds.has(run.id)).map((run) => run.id);
   return (
     <aside className={`workspace-run-panel ${open ? 'open' : ''}`} aria-label="Run selection">
       <header className="workspace-runs-heading">
@@ -43,7 +46,7 @@ export function RunPanel({
           title={allVisible ? 'Hide all runs' : 'Show all runs'}
           aria-pressed={allVisible}
           disabled={!candidates.length}
-          onClick={() => patch({ selected: allVisible ? [] : null })}
+          onClick={() => hide(allVisible ? candidates.map((run) => run.id) : [])}
         >
           {allVisible ? <Eye size={14} /> : <EyeOff size={14} />}
         </button>
@@ -79,7 +82,7 @@ export function RunPanel({
 
       <div className="workspace-run-list">
         {candidates.map((run) => {
-          const hidden = !visibleIds.includes(run.id);
+          const hidden = !visibleIds.has(run.id);
           const lost = run.state !== 'finished' && liveness.get(run.id)?.lost;
           const status = lost ? 'lost contact' : run.outcome || run.state;
           return (
@@ -99,9 +102,7 @@ export function RunPanel({
                 className="workspace-run-visibility"
                 aria-label={`${hidden ? 'Show' : 'Hide'} ${label(run)}`}
                 aria-pressed={!hidden}
-                onClick={() =>
-                  patch({ selected: hidden ? [...visibleIds, run.id] : visibleIds.filter((id) => id !== run.id) })
-                }
+                onClick={() => hide(hidden ? hiddenIds.filter((id) => id !== run.id) : [...hiddenIds, run.id])}
               >
                 {hidden ? <EyeOff size={14} /> : <Eye size={14} />}
               </button>
@@ -111,10 +112,8 @@ export function RunPanel({
       </div>
 
       <p className="workspace-setting-note">
-        {layout.selected === null
-          ? 'All matching runs are shown automatically.'
-          : 'Visibility is pinned to the runs shown.'}{' '}
-        Latest is the most recently created run for each name among matching runs.
+        Hidden runs are remembered in this browser; new runs are shown automatically. Latest is the most recently
+        created run for each name among matching runs.
       </p>
     </aside>
   );

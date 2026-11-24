@@ -42,7 +42,7 @@ export function CardFrame({
   dragging: boolean;
   actions: CardActions;
 }) {
-  const waiting = cardKinds[card.kind].usesRecords && (records.loading || records.failed);
+  const waiting = cardKinds[card.kind].usesRecords && (records.failed || (records.loading && !records.rows.length));
 
   function resizeByKeyboard(e: KeyboardEvent) {
     const step = keySteps[e.key];

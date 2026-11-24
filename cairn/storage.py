@@ -1649,6 +1649,48 @@ class Repository:
                 "artifact_id": artifact_id,
             }
 
+    def _observations(self, after, *, project, page=1000):
+        """Lines of JSON with each artifact, pages of its records and its cutoff.
+
+        Records keep their stored text: the workspace reads far too many to decode here."""
+        data = sa.cast(records.c.data, sa.Text)
+        for identifier, ordinal in after.items():
+            with self._transaction() as conn:
+                artifact = self._resolve(conn, identifier, project)
+            cutoff = artifact["cutoff"]
+            yield canonical({"artifact": {**artifact, "manifest": None, "intent": None}}) + b"\n"
+            while ordinal < cutoff:
+                with self._transaction() as conn:
+                    rows = conn.execute(
+                        sa.select(
+                            records.c.ordinal,
+                            records.c.sequence,
+                            records.c.writer_id,
+                            records.c.created_at,
+                            records.c.kind,
+                            data,
+                        )
+                        .where(
+                            records.c.artifact_id == artifact["id"],
+                            records.c.ordinal > ordinal,
+                            records.c.ordinal <= cutoff,
+                        )
+                        .order_by(records.c.ordinal)
+                        .limit(page)
+                    ).all()
+                if not rows:
+                    break
+                ordinal = rows[-1].ordinal
+                found = [
+                    f'[{row[0]},{row[1]},"{row[2]}","{row[3]}",{row[5]}]'
+                    for row in rows
+                    if row.kind == "record"
+                ]
+                if found:
+                    yield f"[{','.join(found)}]\n".encode()
+            yield canonical({"cutoff": cutoff}) + b"\n"
+        yield b'{"done":true}\n'
+
     def _reserve_blob(self, sha, length, key):
         """Return True when the content is stored, else reserve it unless another upload has.
 

@@ -24,6 +24,22 @@ export async function saveLayout(project: string, layout: Layout, revision: numb
 }
 export const activeKey = (repository: string, project: string) =>
   `cairn:workspace:active:${encodeURIComponent(repository)}:${encodeURIComponent(project)}`;
+/** The runs hidden in each layout, kept beside the layout that was open. */
+export function readHidden(key: string): Record<string, string[]> {
+  try {
+    const value = JSON.parse(localStorage.getItem(`${key}:hidden`) || '{}');
+    return Object.fromEntries(Object.entries<any>(value).filter(([, ids]) => Array.isArray(ids)));
+  } catch {
+    return {};
+  }
+}
+export function writeHidden(key: string, hidden: Record<string, string[]>) {
+  try {
+    localStorage.setItem(`${key}:hidden`, JSON.stringify(hidden));
+  } catch {
+    // Without storage, visibility lasts until the page is left.
+  }
+}
 /** Browsers saved layouts locally before workspaces were stored on the server. */
 /** Validate local data before it can affect a query or a renderer. Unknown versions are retained untouched. */
 export function readSaved(key: string): SavedWorkspace | null {

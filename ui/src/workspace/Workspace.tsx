@@ -24,10 +24,10 @@ import { newCard } from './cards';
 import { useObservations, useRun, useRuns } from './data';
 import { WorkspaceDialog } from './Dialog';
 import { defaultLayout, snapWidth, uniformSections } from './layout';
-import { discover, uid, type Card, type Layout, type Section } from './model';
+import { discoverAll, uid, type Card, type Layout, type Section } from './model';
 import { RunPanel } from './RunPanel';
 import { matchingRuns } from './runs';
-import { activeKey, loadLayouts, readSaved, saveLayout, storageKey } from './storage';
+import { activeKey, loadLayouts, readHidden, readSaved, saveLayout, storageKey, writeHidden } from './storage';
 import './workspace.css';
 
 export function WorkspacePage() {
@@ -54,6 +54,8 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
   const [saved, setSaved] = useState<Layout[]>([]);
   const [local, setLocal] = useState<Layout[]>([]);
   const [key, setKey] = useState('');
+  // Hidden runs, by layout, belong to this browser; every other run shows, also new ones.
+  const [hiddenRuns, setHiddenRuns] = useState<Record<string, string[]>>({});
   const revisions = useRef(new Map<string, number>());
   const writes = useRef(Promise.resolve());
   const [storageError, setStorageError] = useState('');
@@ -78,6 +80,7 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
       const nextKey = activeKey(session.repository_id, project);
       setKey(nextKey);
       setSaved(layouts.map(({ layout }) => layout));
+      setHiddenRuns(readHidden(nextKey));
       const open = localStorage.getItem(nextKey);
       const named = params.get('layout');
       const active = (
@@ -105,10 +108,13 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
   const candidates = useMemo(() => matchingRuns(runs.items, layout), [runs.items, layout]);
   const selected = useMemo(() => {
     if (runId) return focused.run ? [focused.run] : [];
-    return candidates.filter((run) => layout.selected === null || layout.selected.includes(run.id));
-  }, [runId, focused.run, candidates, layout.selected]);
+    const hidden = hiddenRuns[layout.id];
+    return candidates.filter((run) =>
+      hidden ? !hidden.includes(run.id) : layout.selected === null || layout.selected.includes(run.id),
+    );
+  }, [runId, focused.run, candidates, layout.id, layout.selected, hiddenRuns]);
   const data = useObservations(project, loaded ? selected : [], revision);
-  const fields = useMemo(() => discover(data.rows), [data.rows]);
+  const fields = useMemo(() => discoverAll(data.runs.map((run) => run.rows)), [data.runs]);
   const scopeLoading = runId ? focused.loading : runs.loading;
   const scopeError = runId ? focused.error : runs.error;
   const records: RecordState = {
@@ -122,6 +128,11 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
   function change(next: Layout, remember = true) {
     if (remember) setHistory((h) => [...h.slice(-29), layout]);
     setLayout(uniformSections(next));
+  }
+  function hide(ids: string[], id = layout.id) {
+    const next = { ...hiddenRuns, [id]: ids };
+    setHiddenRuns(next);
+    if (key) writeHidden(key, next);
   }
   const patch = (value: Partial<Layout>) => change({ ...layout, ...value });
 
@@ -240,8 +251,11 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
     if (!naming) return;
     const value = naming.value.trim();
     if (!value) return;
-    if (naming.kind === 'save') persist({ ...layout, id: uid(), name: value });
-    else if (naming.kind === 'section')
+    if (naming.kind === 'save') {
+      const id = uid();
+      if (hiddenRuns[layout.id]) hide(hiddenRuns[layout.id], id);
+      persist({ ...layout, id, name: value });
+    } else if (naming.kind === 'section')
       patch({ sections: [...layout.sections, { id: uid(), title: value, collapsed: false }] });
     else updateSection(naming.id!, { title: value });
     setNaming(undefined);
@@ -359,6 +373,7 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
             selected={selected}
             open={showRuns}
             patch={patch}
+            hide={hide}
           />
         )}
         <div className="workspace-canvas">

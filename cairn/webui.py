@@ -9,6 +9,7 @@ import importlib.util
 import mimetypes
 import secrets
 import time
+import zlib
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote
@@ -30,7 +31,20 @@ COOKIE = "cairn_browser"
 SESSION_SECONDS = 7 * 24 * 60 * 60
 RENEW_SECONDS = 60 * 60
 VIEWER_SECONDS = 12 * 60 * 60
-READ_POSTS = {"/v1/resolutions", "/v1/records/query", "/v1/blobs/availability", "/ui-api/markdown"}
+READ_POSTS = {
+    "/v1/resolutions",
+    "/v1/records/query",
+    "/v1/blobs/availability",
+    "/ui-api/markdown",
+    "/ui-api/observations",
+}
+
+
+def _gzip(chunks):
+    compressor = zlib.compressobj(1, zlib.DEFLATED, 31)
+    for chunk in chunks:
+        yield compressor.compress(chunk) + compressor.flush(zlib.Z_SYNC_FLUSH)
+    yield compressor.flush()
 
 
 def available():
@@ -474,7 +488,26 @@ def install(app, repository, token, *, no_auth=False):
                 pending.extend((child, distance + 1) for child in [*inputs[:150], *consumers[:150]])
         return {"nodes": nodes, "truncated": truncated}
 
-    from .server import Comment, NewReport, Owner, Reply, ReportPart, Resolution, WorkspaceLayout
+    from .server import (
+        Comment,
+        NewReport,
+        Observations,
+        Owner,
+        Reply,
+        ReportPart,
+        Resolution,
+        WorkspaceLayout,
+    )
+
+    @app.post("/ui-api/observations")
+    def observations(body: Observations, request: Request):
+        """Records of several runs after the given ordinals, as one compressed stream."""
+        repository.resolve_many(list(body.after), project=body.project)
+        lines = repository._observations(body.after, project=body.project)
+        headers = {"X-Accel-Buffering": "no"}
+        if "gzip" in request.headers.get("accept-encoding", ""):
+            headers["Content-Encoding"], lines = "gzip", _gzip(lines)
+        return StreamingResponse(lines, media_type="application/x-ndjson", headers=headers)
 
     def check_write(request):
         sessions.require(request)
