@@ -175,6 +175,18 @@ class ReportPart(RequestID):
     author: str | None = None
 
 
+class Stop(StrictBody):
+    force: bool = False
+
+
+class WorkspaceLayout(RequestID):
+    project: str = "default"
+    name: str
+    layout: dict[str, Any]
+    expected_revision: int | None = None
+    author: str | None = None
+
+
 class GarbageCollection(StrictBody):
     grace_seconds: int = 3600
     dry_run: bool = True
@@ -258,7 +270,7 @@ def _queries(request: Request):
         allowed = ("project", "namespace", "where", "state", "limit", "cursor")
     elif path == "/v1/blobs" and request.method == "PUT":
         allowed = ("digest", "size")
-    elif path == "/v1/reports" and request.method == "GET":
+    elif path in ("/v1/reports", "/v1/workspaces", "/v1/liveness") and request.method == "GET":
         allowed = ("project",)
     elif path == "/v1/comments" and request.method == "GET":
         allowed = ("pattern", "project", "include_resolved", "limit", "cursor")
@@ -351,6 +363,8 @@ def create_app(
                 "search",
                 "links",
                 "reports",
+                "workspaces",
+                "liveness",
             ],
         }
 
@@ -369,6 +383,18 @@ def create_app(
     @app.post("/v1/artifacts/{artifact_id}/writers/{writer_id}/entries")
     def append_batch(artifact_id: str, writer_id: str, body: Batch):
         return repository.append_batch(artifact_id, writer_id, body.model_dump()["entries"])
+
+    @app.post("/v1/artifacts/{artifact_id}/writers/{writer_id}/heartbeat")
+    def heartbeat(artifact_id: str, writer_id: str):
+        return repository.heartbeat(artifact_id, writer_id)
+
+    @app.get("/v1/liveness")
+    def liveness(request: Request, project: str = "default"):
+        return repository.liveness(project=project)
+
+    @app.post("/v1/artifacts/{artifact_id}/stop")
+    def stop(artifact_id: str, body: Stop):
+        return repository.stop(artifact_id, **body.model_dump())
 
     @app.post("/v1/artifacts/{artifact_id}/writers/{writer_id}/close")
     def close_writer(artifact_id: str, writer_id: str, body: CloseWriter):
@@ -558,6 +584,22 @@ def create_app(
     @app.delete("/v1/reports/{report_id}")
     def delete_report(report_id: str, body: RequestID):
         return repository.delete_report(report_id, **body.model_dump())
+
+    @app.get("/v1/workspaces")
+    def workspaces(request: Request, project: str = "default"):
+        return repository.workspaces(project=project)
+
+    @app.get("/v1/workspaces/{workspace_id}")
+    def workspace(workspace_id: str, request: Request):
+        return repository.workspace(workspace_id)
+
+    @app.put("/v1/workspaces")
+    def write_workspace(body: WorkspaceLayout):
+        return repository.write_workspace(**body.model_dump())
+
+    @app.delete("/v1/workspaces/{workspace_id}")
+    def delete_workspace(workspace_id: str, body: RequestID):
+        return repository.delete_workspace(workspace_id, **body.model_dump())
 
     @app.post("/v1/reports/{report_id}/comments")
     def add_report_comment(report_id: str, body: Comment):

@@ -168,6 +168,19 @@ test('typing over an agent block keeps it; its own control removes it',async({pa
   }finally{await request.delete(`/ui-api/reports/${report.id}`);}
 });
 
+test('text goes after a report that ends in agent blocks',async({page,request})=>{
+  const report=await scratch(request,'# Scratch\n\n<?cairn agent first?>\n\n<?cairn agent last?>');
+  try{
+    await page.goto(`/p/neural-rendering/r/${report.name}`);
+    await page.locator('.report-editor-end').click();
+    await page.keyboard.type('After the agents.');
+    await expect.poll(()=>saved(request,report.id)).toBe('# Scratch\n\n<?cairn agent first?>\n\n<?cairn agent last?>\n\nAfter the agents.\n');
+    await toEnd(page);
+    await page.keyboard.type(' More.');
+    await expect.poll(()=>saved(request,report.id)).toContain('After the agents. More.');
+  }finally{await request.delete(`/ui-api/reports/${report.id}`);}
+});
+
 test('a body changed elsewhere is never overwritten',async({page,request})=>{
   const report=await scratch(request);
   try{

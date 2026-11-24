@@ -121,18 +121,22 @@ class BrowserAccess:
                 or (method == "PUT" and len(parts) == 5 and parts[4] in {"body", "owner"})
                 or (method == "DELETE" and len(parts) == 4)
             )
+            workspace_edit = method == "PUT" and path == "/ui-api/workspaces"
             tag_edit = (
                 method == "PATCH"
                 and len(parts) == 5
                 and parts[1:3] == ["ui-api", "artifacts"]
                 and parts[4] == "tags"
             )
+            stopping = method == "POST" and (
+                len(parts) == 5 and parts[1:3] == ["ui-api", "artifacts"] and parts[4] == "stop"
+            )
             removal = (
                 method == "DELETE" and len(parts) == 4 and parts[1:3] == ["ui-api", "artifacts"]
             )
             explicit = b"authorization" in dict(scope["headers"])
             session = (
-                read or comment or report_edit or tag_edit or removal
+                read or comment or report_edit or workspace_edit or tag_edit or stopping or removal
             ) and self.sessions.valid(request)
             renew = (
                 session
@@ -470,7 +474,7 @@ def install(app, repository, token, *, no_auth=False):
                 pending.extend((child, distance + 1) for child in [*inputs[:150], *consumers[:150]])
         return {"nodes": nodes, "truncated": truncated}
 
-    from .server import Comment, NewReport, Owner, Reply, ReportPart, Resolution
+    from .server import Comment, NewReport, Owner, Reply, ReportPart, Resolution, WorkspaceLayout
 
     def check_write(request):
         sessions.require(request)
@@ -497,6 +501,16 @@ def install(app, repository, token, *, no_auth=False):
         check_write(request)
         fields = {**body.model_dump(), "owner": "user", "origin_id": None, "origin_slot": None}
         return repository.create_report(**fields)
+
+    @app.post("/ui-api/artifacts/{artifact_id}/stop")
+    def stop_artifact(artifact_id: str, request: Request):
+        check_write(request)
+        return repository.stop(artifact_id)
+
+    @app.put("/ui-api/workspaces")
+    def write_workspace(body: WorkspaceLayout, request: Request):
+        check_write(request)
+        return repository.write_workspace(**body.model_dump())
 
     @app.get("/ui-api/reports/{report_id}/markdown")
     def report_markdown(report_id: str):

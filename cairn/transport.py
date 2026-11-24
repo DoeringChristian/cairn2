@@ -161,6 +161,20 @@ class HTTPRepository:
             json={"entries": entries},
         )
 
+    def heartbeat(self, artifact_id, writer_id) -> dict[str, JSONValue]:
+        self._require("liveness")
+        return self._request("POST", self._writer_path(artifact_id, writer_id) + "/heartbeat")
+
+    def liveness(self, *, project="default") -> list[dict[str, JSONValue]]:
+        self._require("liveness")
+        return self._request("GET", "v1/liveness", params={"project": project})
+
+    def stop(self, artifact_id, *, force=False) -> ArtifactDescriptor:
+        self._require("liveness")
+        return self._request(
+            "POST", f"v1/artifacts/{self._id(artifact_id)}/stop", json={"force": force}
+        )
+
     def close_writer(self, artifact_id, writer_id, final_sequence) -> WriterDescriptor:
         return self._request(
             "POST",
@@ -500,6 +514,37 @@ class HTTPRepository:
         self._require("reports")
         return self._request(
             "DELETE", f"v1/reports/{self._id(report_id)}", json={"request_id": request_id}
+        )
+
+    def workspaces(self, *, project="default") -> list[dict[str, JSONValue]]:
+        self._require("workspaces")
+        return self._request("GET", "v1/workspaces", params={"project": project})
+
+    def workspace(self, workspace_id) -> dict[str, JSONValue]:
+        self._require("workspaces")
+        return self._request("GET", f"v1/workspaces/{self._id(workspace_id)}")
+
+    def write_workspace(
+        self, project, name, layout, *, expected_revision=None, author=None, request_id=None
+    ) -> dict[str, JSONValue]:
+        self._require("workspaces")
+        return self._request(
+            "PUT",
+            "v1/workspaces",
+            json={
+                "project": project,
+                "name": name,
+                "layout": layout,
+                "expected_revision": expected_revision,
+                "author": author,
+                "request_id": request_id,
+            },
+        )
+
+    def delete_workspace(self, workspace_id, *, request_id=None) -> dict[str, JSONValue]:
+        self._require("workspaces")
+        return self._request(
+            "DELETE", f"v1/workspaces/{self._id(workspace_id)}", json={"request_id": request_id}
         )
 
     def add_report_comment(

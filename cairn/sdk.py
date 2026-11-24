@@ -17,9 +17,10 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
-from . import documents
+from . import documents, liveness
 from .contract import PUBLICATION_METADATA_LIMIT, PUBLICATION_VALUE_LIMIT
 from .delivery import Delivery, _binary_source
+from .liveness import Terminated
 from .media import (
     Directory,
     File,
@@ -61,6 +62,7 @@ class Client:
         self._lifecycle_lock = threading.RLock()
         self._closed = False
         self._consoles = []
+        self._heartbeats = []
         if self.repo.startswith(("http://", "https://")):
             from .transport import HTTPRepository
 
@@ -135,6 +137,9 @@ class Client:
             run._console = capture(run)
             if run._console:
                 self._consoles.append(run._console)
+        run._heartbeat = liveness.Heartbeat(run)
+        self._heartbeats.append(run._heartbeat)
+        liveness.track(run)
         return run
 
     def attach(self, artifact_id):
@@ -322,6 +327,33 @@ class Client:
     def delete_report(self, name):
         return self.backend.delete_report(self._report_id(name), request_id=new_id("request"))
 
+    def _workspace_id(self, name):
+        for workspace in self.backend.workspaces(project=self.project):
+            if workspace["name"] == name:
+                return workspace["id"]
+        raise NotFound(f"Unknown workspace: {name}")
+
+    def workspaces(self):
+        return self.backend.workspaces(project=self.project)
+
+    def workspace(self, name):
+        """A workspace with its current layout and revision."""
+        return self.backend.workspace(self._workspace_id(name))
+
+    def write_workspace(self, name, layout, *, expected_revision=None, by=None):
+        """Save a workspace's layout, creating the workspace when it does not exist yet."""
+        return self.backend.write_workspace(
+            self.project,
+            name,
+            layout,
+            expected_revision=expected_revision,
+            author=by,
+            request_id=new_id("request"),
+        )
+
+    def delete_workspace(self, name):
+        return self.backend.delete_workspace(self._workspace_id(name), request_id=new_id("request"))
+
     def comment_report(self, name, body, *, quote=None, part="body", by=None):
         """Comment on a part, on the passage quote when given."""
         anchor = {"path": part, **({"quote": quote} if quote else {})}
@@ -338,6 +370,8 @@ class Client:
                 return
             for console in self._consoles:
                 console.stop()
+            for heartbeat in self._heartbeats:
+                heartbeat.stop()
             if self.delivery:
                 self.delivery.close()
             self.backend.close()
@@ -368,6 +402,7 @@ class Artifact:
         self._lock = threading.RLock()
         self._owns_client = False
         self._console = None
+        self._heartbeat = None
         self._dependencies = set()
         self._encoded_datasets = {}
 
@@ -607,6 +642,7 @@ class Artifact:
                 if self._owns_client:
                     self.client.close()
                 return copy.deepcopy(self.result)
+            self._end()
             if self._owns_client and self.client._closed:
                 previous = self.client
                 self.client = Client(
@@ -652,8 +688,14 @@ class Artifact:
                 self.client.close()
             return copy.deepcopy(self.result)
 
+    def _end(self):
+        if self._heartbeat:
+            self._heartbeat.stop()
+        liveness.forget(self)
+
     def close(self, *, timeout=None):
         """Close this producer without requesting artifact finalization."""
+        self._end()
         if self._console:
             self._console.stop()
         with self._lock:
@@ -674,7 +716,7 @@ class Artifact:
                 self.finish()
             elif self.result is None:
                 self.finish(
-                    outcome="failed",
+                    outcome="cancelled" if issubclass(exc_type, Terminated) else "failed",
                     metadata={"exception": {"type": exc_type.__name__, "message": str(exc)}},
                 )
         except Exception as finish_error:

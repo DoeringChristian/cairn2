@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { Eye, EyeOff } from 'lucide-react';
 import { artifactPath, type ArtifactSummary } from '../api';
 import { Select } from '../components/Select';
+import { useLiveness } from '../liveness';
 import { label, type Layout } from './model';
 import { runColor } from './presentation';
 import { sharedPrefix } from './runs';
@@ -24,6 +25,7 @@ export function RunPanel({
   open: boolean;
   patch: (value: Partial<Layout>) => void;
 }) {
+  const liveness = useLiveness(candidates.some((run) => run.state !== 'finished') ? project : null);
   const prefix = sharedPrefix(candidates);
   const hiddenCount = candidates.length - selected.length;
   const allVisible = candidates.length > 0 && hiddenCount === 0;
@@ -78,7 +80,8 @@ export function RunPanel({
       <div className="workspace-run-list">
         {candidates.map((run) => {
           const hidden = !visibleIds.includes(run.id);
-          const status = run.outcome || run.state;
+          const lost = run.state !== 'finished' && liveness.get(run.id)?.lost;
+          const status = lost ? 'lost contact' : run.outcome || run.state;
           return (
             <div key={run.id} className={`workspace-run-row ${hidden ? 'is-hidden' : ''}`}>
               <i className="workspace-run-swatch" style={{ background: runColor(run.id) }} aria-hidden="true" />

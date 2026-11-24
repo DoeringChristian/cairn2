@@ -2,6 +2,7 @@ import time
 from contextlib import closing
 
 from fastapi.testclient import TestClient
+from test_workspaces import layout
 
 import cairn
 from cairn import documents
@@ -67,6 +68,29 @@ def test_browsers_comment_on_agent_reports_and_edit_them_once_taken_over(tmp_pat
             created = {"project": "demo", "name": "mine", "owner": "agent", "origin_id": plan["id"]}
             report = browser.post("/ui-api/reports", json=created).json()
             assert (report["owner"], report["origin_id"]) == ("user", None)
+
+
+def test_browsers_save_workspaces_only_within_their_session(tmp_path):
+    with closing(Repository(tmp_path)) as repo:
+        written = {
+            "project": "demo",
+            "name": "training",
+            "layout": layout(),
+            "expected_revision": 0,
+        }
+        with TestClient(create_app(repo, token="test-token", ui=True)) as browser:
+            assert browser.put("/ui-api/workspaces", json=written).status_code == 401
+            browser.post("/ui-api/login", json={"token": "test-token"})
+            foreign = {"origin": "https://other.test"}
+            assert (
+                browser.put("/ui-api/workspaces", json=written, headers=foreign).status_code == 401
+            )
+            assert browser.put("/ui-api/workspaces", json=written).json()["revision"] == 1
+            assert browser.put("/ui-api/workspaces", json=written).status_code == 409
+            assert browser.put("/v1/workspaces", json=written).status_code == 401
+            [summary] = browser.get("/v1/workspaces?project=demo").json()
+            stored = browser.get(f"/v1/workspaces/{summary['id']}").json()
+            assert (stored["layout"], stored["revision"]) == (layout(), 1)
 
 
 def test_browsers_write_report_bodies_and_comments_but_not_slots(tmp_path):

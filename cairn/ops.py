@@ -48,6 +48,8 @@ from .storage import (
     report_parts,
     reports,
     validate_annotations,
+    workspace_layouts,
+    workspaces,
     writers,
 )
 
@@ -62,6 +64,8 @@ TRANSFER_TABLES = (
     annotation_members,
     reports,
     report_parts,
+    workspaces,
+    workspace_layouts,
     annotations_table,
 )
 

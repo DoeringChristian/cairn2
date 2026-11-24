@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { RefreshCw, Trash2 } from 'lucide-react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useRefreshMode } from '../refresh';
+import { useLiveness, type Liveness } from '../liveness';
 import { Graph } from '../components/Graph';
 import { api, post, artifactBlobs, chunkedFiles, projectPath, artifactPath, runWorkspacePath, when, type Artifact } from '../api';
 import { ActionIcon, BlobTable, Button, Crumbs, DataTable, ErrorNote, Hero, Hint, JsonBlock, KeyValueTable, Loading, Pill, Section, Select, StatusPill, Tabs, ValueView } from '../components';
@@ -30,6 +31,26 @@ function RemoveArtifact({artifact, reference}: {artifact: Artifact; reference: s
       <p>It disappears from lists and names. Artifacts that use it keep it readable by ID; <code>cairn gc</code> frees its storage.</p>
       {error && <ErrorNote error={error}/>}
       <div className="form-actions"><Button disabled={busy} onClick={() => dialog.current?.close()}>Cancel</Button><Button className="danger" disabled={busy} onClick={() => void remove()}>{busy ? 'Removing…' : 'Remove'}</Button></div>
+    </dialog></>;
+}
+
+/** An unfinished artifact: whether its process is still heard from, and finishing one that is gone. */
+function Unfinished({artifact, seen, onStopped}: {artifact: Artifact; seen?: Liveness; onStopped: () => void}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [busy, setBusy] = useState(false), [error, setError] = useState<Error>();
+  async function stop() {
+    setBusy(true); setError(undefined);
+    try { await post(`/ui-api/artifacts/${artifact.id}/stop`, {}); invalidateLists(); dialog.current?.close(); onStopped(); }
+    catch (e) { setError(e as Error); }
+    setBusy(false);
+  }
+  return <><Hint>{seen?.lost ? `Lost contact: nothing was heard from its process since ${when(seen.last_seen)}.` : `This artifact is ${artifact.state}. Its ID stays the same when it finishes.${seen && !seen.heartbeat ? ` Last heard from ${when(seen.last_seen)}.` : ''}`}</Hint>
+    {seen && (seen.lost || !seen.heartbeat) && <Button small onClick={() => dialog.current?.showModal()}>Mark as stopped</Button>}
+    <dialog ref={dialog} className="confirm-dialog" aria-labelledby={`stop-${artifact.id}`} onClick={event => {if (event.target === dialog.current && !busy) dialog.current.close();}} onClose={() => setError(undefined)}>
+      <h2 id={`stop-${artifact.id}`}>Mark <code>{artifact.name}</code> as stopped?</h2>
+      <p>It finishes as incomplete, which cannot be undone. Do this only when its process is gone: records it has not delivered yet can no longer be added.</p>
+      {error && <ErrorNote error={error}/>}
+      <div className="form-actions"><Button disabled={busy} onClick={() => dialog.current?.close()}>Cancel</Button><Button className="danger" disabled={busy} onClick={() => void stop()}>{busy ? 'Stopping…' : 'Mark as stopped'}</Button></div>
     </dialog></>;
 }
 
@@ -72,6 +93,7 @@ export function ArtifactPage() {
 
   // Version history is ancillary: it must never hold up the value or figures.
   const selectedId = current?.selected.id;
+  const liveness = useLiveness(current && current.selected.state !== 'finished' ? project : null);
   useEffect(() => {
     if (!selectedId) return;
     const controller = new AbortController();
@@ -93,12 +115,12 @@ export function ArtifactPage() {
   const showConsole = run && (live || captures.length < Object.keys(manifest?.captures || {}).length);
   const tabs = [{ value: 'overview', label: 'Overview' }, ...(run ? [{ value: 'workspace', label: 'Workspace' }] : []), { value: 'records', label: 'Records' }, ...(showConsole ? [{ value: 'console', label: 'Console' }] : []), { value: 'files', label: 'Files' }, { value: 'lineage', label: 'Lineage' }, { value: 'versions', label: 'History', count: history.length }, { value: 'metadata', label: 'Metadata' }];
   return <main>
-    <Hero eyebrow={<Crumbs items={[{ label: 'Projects', to: '/' }, { label: selected.project, to: projectPath(selected.project) }, { label: selected.namespace }]}/>} title={typeof metadata.title === 'string' ? metadata.title : selected.name} subtitle={typeof metadata.description === 'string' ? metadata.description : undefined} status={<StatusPill status={manifest?.outcome || selected.state}/>}/>
+    <Hero eyebrow={<Crumbs items={[{ label: 'Projects', to: '/' }, { label: selected.project, to: projectPath(selected.project) }, { label: selected.namespace }]}/>} title={typeof metadata.title === 'string' ? metadata.title : selected.name} subtitle={typeof metadata.description === 'string' ? metadata.description : undefined} status={<StatusPill status={manifest?.outcome || (liveness.get(selected.id)?.lost ? 'lost contact' : selected.state)}/>}/>
     {error && <ErrorNote error={error}/>}
     <div className="detail-bar"><code className="wrap-any">{ref}</code><Select label="Artifact version" value={selected.id} choices={choices} onChange={target => navigate(run && tab === 'workspace' ? runWorkspacePath(selected.project,target) : artifactPath(selected.project, target))}/><ActionIcon label="Refresh" onClick={() => setRefresh(n => n + 1)}><RefreshCw size={17} aria-hidden="true"/></ActionIcon><RemoveArtifact key={selected.id} artifact={selected} reference={ref}/></div>
     <div className="detail-facts"><span>{live ? 'Started' : 'Finished'} {when(selected.finished_at || selected.created_at)}</span><span>{selected.cutoff} entries</span><CopyId value={selected.id} short/></div>
     <ArtifactTags key={`tags:${selected.id}`} artifact={selected} scopes onChange={()=>setRefresh(n=>n+1)}/>
-    {live && <Hint>This artifact is {selected.state}. Its ID stays the same when it finishes.</Hint>}
+    {live && <Unfinished artifact={selected} seen={liveness.get(selected.id)} onStopped={() => setRefresh(n => n + 1)}/>}
     <Tabs label="Artifact detail" tabs={tabs} value={tab} onChange={tab => { const next = new URLSearchParams(params); next.set('tab', tab); setParams(next); }}/>
     {tab === 'overview' && <>
       {run && <RecordsPanel key={`records:${selected.id}`} reference={selected.id} project={selected.project} run overview live={live} refresh={refresh}/>}

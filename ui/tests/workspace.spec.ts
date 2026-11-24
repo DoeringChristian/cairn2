@@ -7,7 +7,24 @@ const runs=[artifact('old','workspace-demo/a',1,'2026-01-01'),artifact('a','work
 const image={$cairn:1,format:'image',version:1,data:{name:'test.png'},blobs:[{digest:'test-png',media_type:'image/png',size:1}],refs:[]};
 const video={$cairn:1,format:'file',version:1,data:{name:'clip.mp4',media_type:'video/mp4'},blobs:[{digest:'test-mp4',media_type:'video/mp4',size:1}],refs:[]};
 const figure={$cairn:1,format:'figure/plotly',version:1,data:{data:[{x:[0,1],y:[0,1],type:'scatter'}],layout:{}},blobs:[],refs:[]};
+/** The repository's workspaces as the server keeps them, by repository, project and name. */
+type Stored={id:string;repository:string;project:string;name:string;revision:number;layout:any};
+const servers=new WeakMap<Page,{repository:string;items:Stored[]}>();
+const stored=(page:Page,name:string,inProject=project,repository='workspace-tests')=>servers.get(page)!.items.find(i=>i.repository===repository&&i.project===inProject&&i.name===name)?.layout;
+async function workspaceServer(page:Page){
+  const server={repository:'workspace-tests',items:[] as Stored[]};servers.set(page,server);
+  const mine=()=>server.items.filter(i=>i.repository===server.repository);
+  await page.route('**/v1/workspaces?*',r=>r.fulfill({json:mine().filter(i=>i.project===new URL(r.request().url()).searchParams.get('project')).map(({layout,repository,...summary})=>summary)}));
+  await page.route('**/v1/workspaces/*',r=>{const item=mine().find(i=>r.request().url().endsWith(i.id));return item?r.fulfill({json:item}):r.fulfill({status:404,json:{error:{message:'Unknown workspace'}}});});
+  await page.route('**/ui-api/workspaces',r=>{
+    const body=r.request().postDataJSON(),item=mine().find(i=>i.project===body.project&&i.name===body.name),revision=item?.revision||0;
+    if(body.expected_revision!==revision)return r.fulfill({status:409,json:{error:{message:'Workspace changed since it was read'}}});
+    if(item){item.layout=body.layout;item.revision++;}else server.items.push({id:`workspace_${server.items.length}`,repository:server.repository,project:body.project,name:body.name,revision:1,layout:body.layout});
+    return r.fulfill({json:{name:body.name,revision:revision+1}});
+  });
+}
 async function fixture(page:Page,projects=[project]){
+  await workspaceServer(page);
   await page.route('**/ui-api/session',r=>r.fulfill({json:{authenticated:true,no_auth:true,repository_id:'workspace-tests'}}));
   await page.route('**/ui-api/projects',r=>r.fulfill({json:projects.map(name=>({name,runs:name===project?3:0,reports:0,artifacts:name===project?3:0}))}));
   await page.route('**/ui-api/artifacts?*',r=>{const offset=Number(new URL(r.request().url()).searchParams.get('offset'));return r.fulfill({json:{items:runs.slice(offset,offset+2),total:runs.length}});});
@@ -19,6 +36,7 @@ async function fixture(page:Page,projects=[project]){
   await page.goto(`/p/${project}/workspace?example=cards`);
   await expect(page.locator('.workspace-data-status')).toContainText('2 runs · 5 records');
 }
+const settled=(page:Page)=>expect(page.locator('.workspace-save-status')).toHaveText('Saved');
 const card=(page:Page,title:string)=>page.getByRole('article',{name:title,exact:true});
 
 async function chooseField(dialog:Locator,label:string,value:string){await dialog.getByRole('button',{name:label,exact:true}).click();await dialog.page().getByRole('listbox',{name:label,exact:true}).getByText(value,{exact:true}).click();}
@@ -51,9 +69,9 @@ test('create, cancel, resize, sections, save and reload preserve the view withou
   const target=page.locator('.workspace-section').filter({has:page.getByRole('heading',{name:'Details',exact:true})}).locator('.workspace-empty-section');await target.scrollIntoViewIfNeeded();const end=await target.boundingBox();await page.mouse.move(end!.x+40,end!.y+20,{steps:5});await page.mouse.move(end!.x+45,end!.y+25);await page.mouse.up();
   await expect(target).toHaveCount(0);
   await page.getByRole('button',{name:'Save as…',exact:true}).click();await dialog.getByLabel('Name',{exact:true}).fill('Review');await dialog.getByRole('button',{name:'Save layout',exact:true}).click();
-  await page.goto(`/p/${project}/workspace`);await expect(page.getByRole('button',{name:'Saved layout'})).toHaveText('Review');
+  await settled(page);await page.goto(`/p/${project}/workspace`);await expect(page.getByRole('button',{name:'Saved layout'})).toHaveText('Review');
   await expect(card(page,'My images')).toHaveCSS('height','380px');await expect(page.locator('.workspace-section').filter({has:page.getByRole('heading',{name:'Details',exact:true})})).toContainText('My images');
-  const saved=await page.evaluate(()=>JSON.parse(localStorage.getItem('cairn:workspace:v1:workspace-tests:workspace-test')!));const review=saved.layouts.find((l:any)=>l.name==='Review');expect(review).toBeTruthy();expect(review.cards.find((c:any)=>c.title==='My images').width).toBe(4);expect(JSON.stringify(saved)).not.toContain('test-png');
+  const review=stored(page,'Review');expect(review.cards.find((c:any)=>c.title==='My images').width).toBe(4);expect(JSON.stringify(review)).not.toContain('test-png');
   await chooseField(page.locator('main'),'Versions','All versions');await expect(page.locator('.workspace-data-status')).toContainText('3 runs · 8 records');
 });
 
@@ -116,9 +134,9 @@ test('a failed later record page never leaves a partial plot',async({page})=>{
 
 for(const scenario of [{name:'50,000 records',perRun:26001,padding:0},{name:'32 MiB',perRun:2000,padding:9000}])test(`complete selections above ${scenario.name} remain inspectable`,async({page})=>{
   const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await fixture(page);
-  await page.getByRole('button',{name:'Save',exact:true}).click();
+  await page.getByRole('button',{name:'Save',exact:true}).click();await expect(page.locator('.workspace-save-status')).toHaveText('Saved');
   // Keep one scalar card so the assertion measures complete data, not duplicate renderers.
-  await page.evaluate(()=>{const key='cairn:workspace:v1:workspace-tests:workspace-test',saved=JSON.parse(localStorage.getItem(key)!);saved.layouts[0].cards=saved.layouts[0].cards.slice(0,1);localStorage.setItem(key,JSON.stringify(saved));});
+  const demo=stored(page,'Training cards demo');demo.cards=demo.cards.slice(0,1);
   let pages=0,bytes=0;
   await page.route('**/v1/records/query',async route=>{
     const body=route.request().postDataJSON(),start=Number(body.cursor||0),end=Math.min(start+1000,scenario.perRun);pages++;
@@ -126,7 +144,7 @@ for(const scenario of [{name:'50,000 records',perRun:26001,padding:0},{name:'32 
     const response=JSON.stringify({artifact_id:body.ref,cutoff:scenario.perRun,next_cursor:end<scenario.perRun?String(end):null,items});bytes+=Buffer.byteLength(response);
     await route.fulfill({contentType:'application/json',body:response});
   });
-  await page.reload();
+  await settled(page);await page.reload();
   await expect(page.locator('.workspace-data-status')).toContainText(`${(2*scenario.perRun).toLocaleString()} records`,{timeout:20000});
   const plot=card(page,'Loss over training').locator('.workspace-scalar-plot');
   await expect.poll(()=>plot.evaluate((n:any)=>n.uplot?.data.slice(1).map((series:any)=>({count:series[0].length,first:series[0][0],last:series[0].at(-1),lastY:series[1].at(-1)})))).toEqual(Array(2).fill({count:scenario.perRun,first:0,last:scenario.perRun-1,lastY:1}));
@@ -140,7 +158,7 @@ test('pointer resize and reordering remain undoable; saved demo reloads',async({
   await page.mouse.move(handle!.x+10,handle!.y+10);await page.mouse.down();await page.mouse.move(handle!.x-120,handle!.y+70,{steps:6});await page.mouse.up();expect((await loss.boundingBox())!.width).toBeLessThan(start!.width);await expect(loss).toHaveCSS('height','420px');await expect(card(page,'Quality by camera angle')).toHaveCSS('height','420px');expect((await card(page,'Quality by camera angle').boundingBox())!.width).toBeCloseTo((await loss.boundingBox())!.width,0);
   await page.getByRole('button',{name:'Undo layout change',exact:true}).click();await expect(loss).toHaveCSS('height','360px');
   await card(page,'Quality by camera angle').locator('.workspace-drag-handle').dragTo(loss);await expect(page.locator('.workspace-section').first().locator('article').first()).toHaveAttribute('aria-label','Quality by camera angle');
-  await page.getByRole('button',{name:'Save',exact:true}).click();await expect(page).toHaveURL(new RegExp(`/p/${project}/workspace$`));await page.reload();await expect(page.locator('.workspace-save-status')).toHaveText('Saved in this browser');
+  await page.getByRole('button',{name:'Save',exact:true}).click();await expect(page).toHaveURL(new RegExp(`/p/${project}/workspace$`));await settled(page);await page.reload();await expect(page.locator('.workspace-save-status')).toHaveText('Saved');
 });
 
 test('run sidebar, section sizes and cross-section moves stay consistent',async({page})=>{
@@ -172,7 +190,7 @@ test('full-width sections resize by pointer and keyboard and survive saving',asy
   expect((await loss.boundingBox())!.width).toBeCloseTo(bounds.width,0);
   for(const span of [6,4,3,3]){await handle.press('ArrowLeft');expect(await loss.evaluate(n=>n.style.getPropertyValue('--card-span'))).toBe(String(span));}
   for(const span of [4,6,12,12]){await handle.press('ArrowRight');expect(await loss.evaluate(n=>n.style.getPropertyValue('--card-span'))).toBe(String(span));}
-  await page.getByRole('button',{name:'Save',exact:true}).click();await page.reload();
+  await page.getByRole('button',{name:'Save',exact:true}).click();await settled(page);await page.reload();
   await expect(loss).toHaveCSS('height','380px');
   for(const item of await section.locator('article').all())expect((await item.boundingBox())!.width).toBeCloseTo((await grid.boundingBox())!.width,0);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
@@ -180,10 +198,11 @@ test('full-width sections resize by pointer and keyboard and survive saving',asy
 
 test('legacy mixed card sizes load without rewriting the saved layout',async({page})=>{
   await fixture(page);await page.getByRole('button',{name:'Save',exact:true}).click();
-  const original=await page.evaluate(()=>{const key='cairn:workspace:v1:workspace-tests:workspace-test',saved=JSON.parse(localStorage.getItem(key)!);saved.layouts[0].cards[0].width=8;saved.layouts[0].cards[1].width=3;saved.layouts[0].cards[1].height=800;const raw=JSON.stringify(saved);localStorage.setItem(key,raw);return raw;});
-  await page.reload();await expect(card(page,'Loss over training')).toHaveCSS('height','360px');await expect(card(page,'Quality by camera angle')).toHaveCSS('height','360px');
+  await expect(page.locator('.workspace-save-status')).toHaveText('Saved');
+  const demo=stored(page,'Training cards demo');demo.cards[0].width=8;demo.cards[1].width=3;demo.cards[1].height=800;const original=JSON.stringify(demo);
+  await settled(page);await page.reload();await expect(card(page,'Loss over training')).toHaveCSS('height','360px');await expect(card(page,'Quality by camera angle')).toHaveCSS('height','360px');
   expect(await card(page,'Quality by camera angle').evaluate(n=>n.style.getPropertyValue('--card-span'))).toBe('6');
-  expect(await page.evaluate(()=>localStorage.getItem('cairn:workspace:v1:workspace-tests:workspace-test'))).toBe(original);
+  expect(JSON.stringify(stored(page,'Training cards demo'))).toBe(original);
 });
 
 test('saved workspaces stay separate across projects and repositories',async({page})=>{
@@ -191,22 +210,26 @@ test('saved workspaces stay separate across projects and repositories',async({pa
   await page.route('**/ui-api/artifacts?*',async r=>{if(new URL(r.request().url()).searchParams.get('project')===other)return r.fulfill({json:{items:[],total:0}});await r.fallback();});
   const rename=async(from:string,to:string)=>{await page.getByRole('button',{name:`Settings for ${from}`,exact:true}).click();const dialog=page.getByRole('dialog');await dialog.getByLabel('Card title').fill(to);await dialog.getByRole('button',{name:'Done',exact:true}).click();};
   await rename('Loss over training','Project A loss');
-  const keyA=`cairn:workspace:v1:workspace-tests:${project}`,keyB=`cairn:workspace:v1:workspace-tests:${other}`;
-  const savedA=await page.evaluate(key=>localStorage.getItem(key),keyA);
+  await expect.poll(()=>servers.get(page)!.items.filter(i=>i.project===project).length).toBe(1);
+  const layoutOf=(inProject:string)=>JSON.stringify(servers.get(page)!.items.find(i=>i.repository==='workspace-tests'&&i.project===inProject)?.layout);
+  const savedA=layoutOf(project);
   await page.getByRole('button',{name:'Choose project',exact:true}).click();
   const switchProject=async(name:string)=>{await page.getByRole('button',{name:'Project',exact:true}).click();await page.getByRole('listbox',{name:'Project',exact:true}).getByText(name,{exact:true}).click();await expect(page).toHaveURL(new RegExp(`/p/${name}/workspace$`));};
   await switchProject(other);await expect(card(page,'Project A loss')).toHaveCount(0);await expect(page.locator('.workspace-data-status')).toContainText('0 runs');
   await rename('Loss over training','Project B loss');
-  expect(await page.evaluate(key=>localStorage.getItem(key),keyA)).toBe(savedA);
-  const savedB=await page.evaluate(key=>localStorage.getItem(key),keyB);
+  await expect.poll(()=>layoutOf(other)).toContain('Project B loss');
+  expect(layoutOf(project)).toBe(savedA);
+  const savedB=layoutOf(other);
   await switchProject(project);await expect(card(page,'Project A loss')).toBeVisible();await expect(card(page,'Project B loss')).toHaveCount(0);
   await switchProject(other);await expect(card(page,'Project B loss')).toBeVisible();
   // A different repository with the same project name has its own layout.
+  servers.get(page)!.repository='another-repository';
   await page.route('**/ui-api/session',r=>r.fulfill({json:{authenticated:true,no_auth:true,repository_id:'another-repository'}}));
-  await page.reload();await expect(card(page,'Project B loss')).toHaveCount(0);await rename('Loss over training','Other repository loss');
-  expect(await page.evaluate(key=>localStorage.getItem(key),keyB)).toBe(savedB);
+  await settled(page);await page.reload();await expect(card(page,'Project B loss')).toHaveCount(0);await rename('Loss over training','Other repository loss');
+  expect(layoutOf(other)).toBe(savedB);
+  servers.get(page)!.repository='workspace-tests';
   await page.route('**/ui-api/session',r=>r.fulfill({json:{authenticated:true,no_auth:true,repository_id:'workspace-tests'}}));
-  await page.reload();await expect(card(page,'Project B loss')).toBeVisible();await expect(card(page,'Other repository loss')).toHaveCount(0);
+  await settled(page);await page.reload();await expect(card(page,'Project B loss')).toBeVisible();await expect(card(page,'Other repository loss')).toHaveCount(0);
 });
 
 test('one eye control drives run visibility without reshuffling colors',async({page})=>{
@@ -260,7 +283,7 @@ test('run links open Overview; Workspace is an embedded run tab with the other i
 });
 
 test('saved visibility survives reload; direct run views ignore filters and latest-only selection',async({page})=>{
-  await fixture(page);await page.getByRole('button',{name:'Hide all runs',exact:true}).click();await expect(page.locator('.workspace-data-status')).toContainText('0 runs · 0 records');await page.getByRole('button',{name:'Save',exact:true}).click();await page.reload();await expect(page.locator('.workspace-data-status')).toContainText('0 runs · 0 records');
+  await fixture(page);await page.getByRole('button',{name:'Hide all runs',exact:true}).click();await expect(page.locator('.workspace-data-status')).toContainText('0 runs · 0 records');await page.getByRole('button',{name:'Save',exact:true}).click();await settled(page);await page.reload();await expect(page.locator('.workspace-data-status')).toContainText('0 runs · 0 records');
   const queries:string[]=[];let listRequests=0;page.on('request',r=>{if(r.url().includes('/v1/records/query'))queries.push(r.postDataJSON().ref);if(r.url().includes('/ui-api/artifacts?'))listRequests++;});
   await page.goto(`/p/${project}/workspace/old`);await expect(page).toHaveURL(new RegExp(`/a/old\\?tab=workspace$`));await expect(page.getByRole('tab',{name:'Workspace',exact:true})).toHaveAttribute('aria-selected','true');await expect(page.locator('.workspace-data-status')).toContainText('1 run · 3 records');await expect.poll(()=>card(page,'Loss over training').locator('.workspace-scalar-plot').evaluate((n:any)=>n.uplot?.series[1].label)).toBe('workspace-demo/a · v1');expect(new Set(queries)).toEqual(new Set(['old']));expect(listRequests).toBe(0);
   await page.getByRole('link',{name:'Project workspace',exact:true}).click();await expect(page.locator('.workspace-data-status')).toContainText('0 runs · 0 records');await page.getByRole('button',{name:'Show all runs',exact:true}).click();await expect(page.locator('.workspace-data-status')).toContainText('2 runs · 5 records');
@@ -281,7 +304,7 @@ test('settings apply while open, aggregate bands persist, and one undo restores 
   await dialog.getByRole('tab',{name:'Mapping'}).click();await dialog.getByRole('button',{name:'Remove grouping @run'}).click();await chooseField(dialog,'Group center','Mean');await chooseField(dialog,'Group band','± standard deviation');await dialog.getByLabel('Show member runs').check();
   const plot=page.locator('main article[aria-label="Grouped loss"] .workspace-scalar-plot');
   await expect.poll(()=>plot.evaluate((n:any)=>n.uplot?.series.length)).toBe(4);
-  await dialog.getByRole('button',{name:'Done',exact:true}).click();await expect(page.getByRole('button',{name:'Save',exact:true})).toBeDisabled();await page.reload();
+  await dialog.getByRole('button',{name:'Done',exact:true}).click();await expect(page.getByRole('button',{name:'Save',exact:true})).toBeDisabled();await settled(page);await page.reload();
   await page.getByRole('button',{name:'Settings for Grouped loss'}).click();await dialog.getByRole('tab',{name:'Mapping'}).click();await expect(dialog.getByRole('button',{name:'Group center',exact:true})).toHaveText('Mean');await expect(dialog.getByRole('button',{name:'Group band',exact:true})).toHaveText('± standard deviation');
   await chooseField(dialog,'Group center','Median');await chooseField(dialog,'Group band','Min – max');await dialog.getByRole('button',{name:'Close dialog'}).click();await page.getByRole('button',{name:'Undo layout change'}).click();
   await page.getByRole('button',{name:'Settings for Grouped loss'}).click();await dialog.getByRole('tab',{name:'Mapping'}).click();await expect(dialog.getByRole('button',{name:'Group center',exact:true})).toHaveText('Mean');await expect(dialog.getByRole('button',{name:'Group band',exact:true})).toHaveText('± standard deviation');
@@ -374,7 +397,7 @@ test('log axes render filtered tick labels, retain positive padded bounds and su
   await dialog.getByLabel('Logarithmic X').check();await dialog.getByLabel('Logarithmic Y').check();await dialog.getByRole('button',{name:'Done'}).click();
   const logarithmic=()=>plot.evaluate((n:any)=>{const u=n.uplot;return {x:u.scales.x.distr,y:u.scales.y.distr,xRange:[u.scales.x.min,u.scales.x.max],yRange:[u.scales.y.min,u.scales.y.max],dx:[u.valToPos(10,'x')-u.valToPos(1,'x'),u.valToPos(100,'x')-u.valToPos(10,'x')],dy:[u.valToPos(.01,'y')-u.valToPos(.1,'y'),u.valToPos(.1,'y')-u.valToPos(1,'y')],valid:u.data.slice(1).every((s:any)=>s[0].every((x:number|null,i:number)=>x===null||s[1][i]===null||x>0&&s[1][i]>0))};});
   let log=await logarithmic();expect(log.x).toBe(3);expect(log.y).toBe(3);expect(log.xRange[0]).toBeGreaterThan(0);expect(log.xRange[0]).toBeLessThan(1);expect(log.xRange[1]).toBeGreaterThan(100);expect(log.yRange[0]).toBeGreaterThan(0);expect(log.yRange[0]).toBeLessThan(.01);expect(log.yRange[1]).toBeGreaterThan(1);expect(log.dx[0]).toBeCloseTo(log.dx[1]);expect(log.dy[0]).toBeCloseTo(log.dy[1]);expect(log.valid).toBe(true);
-  await page.reload();await expect(plot.locator('canvas')).toBeVisible();log=await logarithmic();expect(log.x).toBe(3);expect(log.y).toBe(3);
+  await settled(page);await page.reload();await expect(plot.locator('canvas')).toBeVisible();log=await logarithmic();expect(log.x).toBe(3);expect(log.y).toBe(3);
   await loss.getByRole('button',{name:'Settings for Loss over training'}).click();await dialog.getByRole('tab',{name:'Appearance'}).click();await dialog.getByLabel('Logarithmic X').uncheck();await dialog.getByLabel('Logarithmic Y').uncheck();await dialog.getByRole('button',{name:'Done'}).click();await expect.poll(()=>plot.evaluate((n:any)=>[n.uplot.scales.x.distr,n.uplot.scales.y.distr])).toEqual([1,1]);expect(errors).toEqual([]);
 });
 
@@ -391,6 +414,25 @@ test('each run separately shows every record card once per run, with only that r
   }
   expect(await page.getByRole('article').count()).toBeGreaterThanOrEqual(together);
   await page.getByRole('button',{name:'Save',exact:true}).click();
-  await page.reload();
+  await settled(page);await page.reload();
   await expect(page.getByRole('region',{name:/^Run /})).toHaveCount(2);
+});
+
+test('workspaces written elsewhere open here, and a stale save does not overwrite them',async({page})=>{
+  await fixture(page);await page.getByRole('button',{name:'Save',exact:true}).click();await settled(page);
+  await page.getByRole('button',{name:'Save as…',exact:true}).click();await page.getByRole('dialog').getByLabel('Name',{exact:true}).fill('Sweep');await page.getByRole('dialog').getByRole('button',{name:'Save layout',exact:true}).click();await settled(page);
+  const item=servers.get(page)!.items.find(i=>i.name==='Sweep')!;
+  item.layout={...item.layout,cards:item.layout.cards.map((c:any)=>c.kind==='scalar'?{...c,title:'Agent loss'}:c)};item.revision++;
+  await page.getByRole('button',{name:'Settings for Loss over training',exact:true}).click();const dialog=page.getByRole('dialog');await dialog.getByLabel('Card title').fill('Mine');await dialog.getByRole('button',{name:'Done',exact:true}).click();
+  await expect(page.getByRole('alert')).toContainText('changed elsewhere');expect(JSON.stringify(item.layout)).toContain('Agent loss');expect(JSON.stringify(item.layout)).not.toContain('Mine');
+  await page.goto(`/p/${project}/workspace`);await expect(card(page,'Agent loss').first()).toBeVisible();
+});
+
+test('layouts a browser kept before are offered to the project',async({page})=>{
+  await fixture(page);await page.getByRole('button',{name:'Save',exact:true}).click();await settled(page);
+  const legacy=JSON.parse(JSON.stringify(stored(page,'Training cards demo')));
+  await page.evaluate(layout=>localStorage.setItem('cairn:workspace:v1:workspace-tests:workspace-test',JSON.stringify({version:1,active:'old',layouts:[{...layout,id:'old',name:'Old local'}]})),legacy);
+  await page.goto(`/p/${project}/workspace`);await page.getByRole('button',{name:'Move to the project',exact:true}).click();
+  await expect.poll(()=>stored(page,'Old local')?.id).toBe('old');await expect(page.getByText('saved only in this browser')).toHaveCount(0);
+  expect(await page.evaluate(()=>localStorage.getItem('cairn:workspace:v1:workspace-tests:workspace-test'))).toBeNull();
 });

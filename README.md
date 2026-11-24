@@ -230,6 +230,12 @@ with Client("./results") as client:
     print(rows, list(baseline.records(where={"path": "/loss", "op": "lt", "value": 0.5})))
 ```
 
+A run whose process is killed cannot finish itself. The UI shows "lost contact" two
+minutes after its last heartbeat; **Mark as stopped** there, or
+`cairn artifact stop runs/train@live`, finishes it as incomplete. A run open at SIGTERM
+finishes as cancelled, and a `cairn.init()` run without a `with` block finishes when
+Python exits.
+
 Readers pin the exact finished artifact. Direct IDs are stable before and after
 finish. Live inspection/querying uses the backend; SDK readers and run inputs
 require finished artifacts. There is no revision or snapshot API. Starting again
@@ -527,8 +533,20 @@ and media from artifacts, a table of contents, source copying, and comments.
 Artifact/run pages include lineage, records, files, editable tags for one version
 or all versions, and click-to-copy IDs. The project Workspace displays scalar,
 image, video, and Plotly cards directly from run records, with comparisons, galleries,
-axis sliders, resizable sections, and browser-local saved layouts. See the
+axis sliders, resizable sections, and layouts saved in the project, shared by everyone
+who opens it. See the
 [training card tour](examples/training/README.md#workspace-card-tour).
+
+Agents and scripts read and write the same layouts as JSON (its fields are listed in
+[the contract](docs/CONTRACT.md#workspaces)); every save is a revision:
+
+```sh
+cairn workspace list
+cairn workspace show training > layout.json            # a layout to start from
+cairn workspace write training layout.json --revision 2 --by agent
+cairn workspace write sweep sweep.json --revision 0    # a new one
+cairn workspace delete sweep
+```
 
 The UI source lives in [ui/](ui/README.md). Rebuild the bundled assets after
 changes with `npm ci --prefix ui && npm run build --prefix ui`.
@@ -708,9 +726,9 @@ The API provides one artifact lifecycle, multiple producers, alias compare-and-s
 typed values, comments, SQL-filtered record queries, streaming blobs and explicit
 transfer/maintenance. Runs automatically capture client-side provenance and console output. The
 backend has one shared token and ordinal query ordering; no code execution
-or AI integration. Unknown schemas fail explicitly: repository schema **10**, HTTP
+or AI integration. Unknown schemas fail explicitly: repository schema **11**, HTTP
 protocol **4**, durable outbox schema **4**. Typed-value codec envelopes remain
-version 1. A schema 6, 7 or 8 repository opens again after `cairn repo export` (a backup)
+version 1. A schema 6 to 10 repository opens again after `cairn repo export` (a backup)
 and `cairn --repo PATH repo migrate`, which converts it in one transaction; use
 `--database-url` with `--objects` or `--s3-bucket` for PostgreSQL. Names use
 slash-separated namespaces; colon-style references are unsupported.

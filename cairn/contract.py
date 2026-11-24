@@ -128,6 +128,12 @@ class RepositoryProtocol(Protocol):
         self, artifact_id: str, writer_id: str, final_sequence: int
     ) -> WriterDescriptor: ...
 
+    def heartbeat(self, artifact_id: str, writer_id: str) -> dict[str, JSONValue]: ...
+
+    def liveness(self, *, project: str = "default") -> list[dict[str, JSONValue]]: ...
+
+    def stop(self, artifact_id: str, *, force: bool = False) -> ArtifactDescriptor: ...
+
     def finish(
         self,
         artifact_id: str,
@@ -320,6 +326,25 @@ class RepositoryProtocol(Protocol):
 
     def delete_report(
         self, report_id: str, *, request_id: str | None = None
+    ) -> dict[str, JSONValue]: ...
+
+    def workspaces(self, *, project: str = "default") -> list[dict[str, JSONValue]]: ...
+
+    def workspace(self, workspace_id: str) -> dict[str, JSONValue]: ...
+
+    def write_workspace(
+        self,
+        project: str,
+        name: str,
+        layout: dict[str, JSONValue],
+        *,
+        expected_revision: int | None = None,
+        author: str | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, JSONValue]: ...
+
+    def delete_workspace(
+        self, workspace_id: str, *, request_id: str | None = None
     ) -> dict[str, JSONValue]: ...
 
     def add_report_comment(

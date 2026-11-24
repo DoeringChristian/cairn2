@@ -291,6 +291,10 @@ def parser() -> argparse.ArgumentParser:
     register = artifacts.add_parser("writer")
     register.add_argument("artifact_id")
     register.set_defaults(action="writer")
+    stop = artifacts.add_parser("stop", help="Finish an abandoned artifact as incomplete")
+    stop.add_argument("reference", help="Artifact ID, or a reference such as runs/train@live")
+    stop.add_argument("--force", action="store_true", help="Even if its process was just alive")
+    stop.set_defaults(action="stop")
     close = artifacts.add_parser("close-writer")
     close.add_argument("artifact_id")
     close.add_argument("writer")
@@ -369,6 +373,29 @@ def parser() -> argparse.ArgumentParser:
     )
     watch.add_argument("--interval", type=float, default=5.0, help="Seconds between checks")
     watch.set_defaults(action="report-watch")
+    workspaces = commands.add_parser(
+        "workspace", help="Workspaces: named layouts of cards over a project's runs"
+    ).add_subparsers(dest="workspace_command", required=True)
+    workspaces.add_parser("list", help="Workspaces of the project").set_defaults(
+        action="workspace-list"
+    )
+    for operation, text in (
+        ("show", "Print a workspace's layout and revision"),
+        ("delete", "Remove a workspace with every revision of its layout"),
+    ):
+        sub = workspaces.add_parser(operation, help=text)
+        sub.add_argument("name")
+        sub.set_defaults(action="workspace-" + operation)
+    write = workspaces.add_parser("write", help="Save a layout, creating the workspace if needed")
+    write.add_argument("name")
+    write.add_argument(
+        "source", nargs="?", default="-", help="Layout JSON file, or - for standard input"
+    )
+    write.add_argument(
+        "--revision", type=int, help="Fail unless the workspace is at this revision; 0: new"
+    )
+    write.add_argument("--by", help="Who writes it, e.g. an agent name")
+    write.set_defaults(action="workspace-write")
 
     repository_parser = commands.add_parser(
         "repo", help="Repository transfer, integrity checks and garbage collection"
@@ -653,6 +680,9 @@ def _dispatch(args, client):
         return backend.versions(args.artifact_id, project=client.project)
     if action == "writer":
         return backend.register_writer(args.artifact_id)
+    if action == "stop":
+        found = backend.resolve(args.reference, project=client.project)
+        return backend.stop(found["id"], force=args.force)
     if action == "close-writer":
         return _close_writer(backend, args.artifact_id, args.writer, args.final_sequence)
     if action == "finish":
@@ -685,6 +715,24 @@ def _dispatch(args, client):
         )
     if action == "report-watch":
         return _watch_report(client, args.name, args.after, args.settle, args.interval)
+    if action == "workspace-list":
+        return client.workspaces()
+    if action == "workspace-show":
+        return client.workspace(args.name)
+    if action == "workspace-delete":
+        return client.delete_workspace(args.name)
+    if action == "workspace-write":
+        try:
+            layout = json.loads(_source(args.source))
+        except ValueError as exc:
+            raise ValidationError(f"The layout is not JSON: {exc}") from None
+        if isinstance(layout, dict) and isinstance(layout.get("layout"), dict):
+            layout = layout["layout"]  # as `workspace show` prints it
+        if isinstance(layout, dict):
+            layout.setdefault("name", args.name)
+        return client.write_workspace(
+            args.name, layout, expected_revision=args.revision, by=args.by
+        )
     if action.startswith("repo-"):
         from .ops import check_repository, export_repository, import_repository
         from .storage import Repository

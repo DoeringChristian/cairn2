@@ -190,9 +190,10 @@ into a section adopt its size. Card settings contain no section sizing controls;
 Older saved layouts remain readable in the v1 format; the first card
 in each section supplies its height and nearest supported width. This adjustment
 is applied in memory until the layout is saved. Undo restores up to 30 layout changes. Save and Save
-as persist version-1 UI definitions in localStorage, scoped to repository identity
-and project; data is not copied. These layouts are specific to this browser and
-origin. Card settings save automatically; other unsaved layout edits remain temporary. Saving the example removes
+as store version-1 layouts in the project on the server, where agents read and write
+them too; data is not copied. A save based on an older revision is refused instead of
+overwriting. The browser remembers which layout was open, and layouts that earlier
+versions kept in localStorage can be moved to the project. Card settings save automatically; other unsaved layout edits remain temporary. Saving the example removes
 its preset URL parameter so reloading opens the saved view.
 
 The initial workspace loads complete, cutoff-pinned record streams for selected

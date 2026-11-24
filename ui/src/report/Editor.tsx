@@ -39,6 +39,13 @@ function mention(onAgent:{current:(slot:string,request:string)=>void}) {
     return true;
   }}]);
 }
+/** Text typed against an agent block goes on a line of its own, before or after it. */
+const beside=EditorView.inputHandler.of((view,from,to,text)=>{
+  const line=view.state.doc.lineAt(from);
+  if(from!==to||!agentLine.test(line.text)||(from!==line.from&&from!==line.to))return false;
+  const after=from===line.to,insert=after?`\n\n${text}`:`${text}\n\n`;
+  view.dispatch({changes:{from,insert},selection:{anchor:after?from+insert.length:from+text.length},userEvent:'input.type'});return true;
+});
 const agentCount=(state:EditorState)=>{let n=0;for(let i=1;i<=state.doc.lines;i++)if(agentLine.test(state.doc.line(i).text))n++;return n;};
 /** Typing, deleting or pasting never removes an agent block by accident; its own control (a change from the page) or undo does. */
 const guard=EditorState.transactionFilter.of(tr=>tr.docChanged&&['input','delete','move'].some(event=>tr.isUserEvent(event))&&agentCount(tr.state)<agentCount(tr.startState)?[]:tr);
@@ -159,7 +166,7 @@ export function Editor({value,onChange,onRender,onAgent,render,complete,label}: 
     };
     view.current=new EditorView({parent:host.current!,state:EditorState.create({doc:value,extensions:[
       history(),markdown({base:markdownLanguage}),syntaxHighlighting(style),EditorView.lineWrapping,preview(mounts),inline,guard,
-      Prec.high(display),Prec.highest(mention(agent)),closeBrackets(),EditorState.languageData.of(()=>[{closeBrackets:{brackets:['(','[','{','"','`','*','_','$']}}]),
+      Prec.high(display),Prec.high(beside),Prec.highest(mention(agent)),closeBrackets(),EditorState.languageData.of(()=>[{closeBrackets:{brackets:['(','[','{','"','`','*','_','$']}}]),
       autocompletion({override:[context=>latest.current.complete(context)]}),keymap.of([...closeBracketsKeymap,...completionKeymap,...defaultKeymap,...historyKeymap]),
       EditorView.focusChangeEffect.of((_state,focusing)=>focusing&&pressing.current?null:focused.of(focusing)),
       EditorView.contentAttributes.of({'aria-label':label}),
@@ -184,12 +191,19 @@ export function Editor({value,onChange,onRender,onAgent,render,complete,label}: 
       current.focus();current.dispatch({selection:{anchor:at===undefined?doc.line(Math.min(line,doc.lines)).to:Math.min(at,doc.length)},effects:focused.of(true)});
     });
   }
+  /** A click below the last block starts a paragraph after it, also after an agent block. */
+  function append() {
+    const current=view.current;if(!current)return;
+    const {doc}=current.state,text=doc.toString(),gap=!text.trim()||text.endsWith('\n\n')?'':text.endsWith('\n')?'\n':'\n\n';
+    clearTimeout(blur.current);pressing.current=false;current.focus();
+    current.dispatch({changes:gap?{from:doc.length,insert:gap}:undefined,selection:{anchor:doc.length+gap.length},effects:focused.of(true),scrollIntoView:true,userEvent:'input'});
+  }
   /** Shows a block's source from its edit button, for blocks such as viewers whose content keeps every click. */
   function source(block:Block) {
     const current=view.current;if(!current)return;
     current.focus();current.dispatch({selection:{anchor:current.state.doc.line(block.lines[0]+1).from},effects:focused.of(true),scrollIntoView:true});
   }
-  return <><div ref={host} className="report-editor"/>{[...mounted].map(([dom,{block,key}])=>createPortal(isAgent(block)?render(block):<div className="report-block-body" onMouseDown={press} onClick={event=>edit(event,block)}>
+  return <><div ref={host} className="report-editor"/><div className="report-editor-end" onMouseDown={event=>event.preventDefault()} onClick={append}/>{[...mounted].map(([dom,{block,key}])=>createPortal(isAgent(block)?render(block):<div className="report-block-body" onMouseDown={press} onClick={event=>edit(event,block)}>
     <button type="button" className="report-block-edit" aria-label="Edit source" title="Edit source" onMouseDown={event=>{event.preventDefault();event.stopPropagation();}} onClick={()=>source(block)}><Code2 aria-hidden="true"/></button>
     {render(block)}
   </div>,dom,key))}</>;

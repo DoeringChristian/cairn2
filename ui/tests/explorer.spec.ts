@@ -458,3 +458,16 @@ test('code annotations preserve syntax foreground colors and a dark background',
   await editor.getByRole('button',{name:'Delete comment'}).click();
   await expect(editor).toHaveCount(0);
 });
+
+test('a run whose process is gone shows lost contact and can be marked as stopped',async({page,request})=>{
+  const name=`abandoned-${Date.now()}`,{artifact}=await (await request.post('/v1/artifacts',{data:{project:'neural-rendering',namespace:'runs',name}})).json();
+  try{
+    let lost=true;await page.route('**/v1/liveness?*',r=>r.fulfill({json:[{artifact_id:artifact.id,last_seen:artifact.created_at,heartbeat:true,lost}]}));
+    await page.goto(`/p/neural-rendering/a/${artifact.id}`);await expect(page.getByText('Lost contact:')).toBeVisible();await expect(page.getByText('lost contact',{exact:true})).toBeVisible();
+    lost=false;await page.reload();await expect(page.getByText('This artifact is live.')).toBeVisible();await expect(page.getByRole('button',{name:'Mark as stopped'})).toHaveCount(0);
+    await page.unroute('**/v1/liveness?*');await page.reload();await page.getByRole('button',{name:'Mark as stopped'}).click();
+    await page.getByRole('dialog').getByRole('button',{name:'Mark as stopped',exact:true}).click();
+    await expect(page.getByText('incomplete',{exact:true})).toBeVisible();
+    expect((await (await request.get(`/v1/artifacts?project=neural-rendering&namespace=runs&state=finished`)).json()).items.find((a:any)=>a.id===artifact.id).manifest.outcome).toBe('incomplete');
+  }finally{await request.delete(`/ui-api/artifacts/${artifact.id}`);}
+});

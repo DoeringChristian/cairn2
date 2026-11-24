@@ -246,6 +246,7 @@
   color: var(--warn);
   font-size: 13px;
 }
+.workspace-local { display: flex; align-items: center; gap: .6rem; margin: 0 0 1rem; color: var(--muted); }
 .workspace-run-panel {
   margin: 16px 0 !important;
   border: 1px solid var(--line);

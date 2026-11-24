@@ -2,8 +2,8 @@
 
 `cairn/contract.py` declares `RepositoryProtocol` and JSON result shapes. The direct
 repository and HTTP adapter implement the same methods. Protocol version **4**,
-repository schema **10**, durable outbox schema **4**. Other schemas are rejected;
-schema 6, 7, 8 and 9 repositories convert only through the explicit `cairn repo migrate`.
+repository schema **11**, durable outbox schema **4**. Other schemas are rejected;
+schema 6 to 10 repositories convert only through the explicit `cairn repo migrate`.
 A schema 3 outbox upgrades in place when opened; older clients reject schema 4.
 
 ## One artifact lifecycle
@@ -57,6 +57,9 @@ UTC ISO strings; errors have a stable code, message and details.
 | `annotate(artifact_id, patch, *, expected_etag=None, target='artifact', request_id=None)` | Atomic JSON Merge Patch with optional concurrency check; `target='name'` patches the properties of every version of the artifact's name. Returns the artifact descriptor. |
 | `annotation_layers(artifact_id)` | `{name, artifact, annotations, annotations_etag}`: the name-level and exact properties and their projection. |
 | `versions(ref, *, project='default')` | Finished artifacts sharing the referenced name, ordered by numeric label. |
+| `heartbeat(artifact_id, writer_id)` | Records that an open writer's process is alive; `open` is false once it is closed. |
+| `liveness(*, project="default")` | For each unfinished artifact: `last_seen` (its latest heartbeat or record), whether it sent a `heartbeat`, and `lost` after 120 silent seconds. |
+| `stop(artifact_id, *, force=False)` | Closes an abandoned artifact's writers and finishes it as `incomplete`, or with the completion already requested. Refused while its process is heard from, unless forced. |
 | `set_alias(artifact_id, alias, *, expected_id=None, request_id=None)` | Assigns an alias within the artifact's name; compare-and-swap against its previous target. `latest` is allowed; `live` and `vN` are reserved. |
 | `query(ref, *, project='default', where=None, fields=None, limit=100, cursor=None, kind=None)` | `{items, next_cursor, cutoff, artifact_id}`; cursor pins artifact and acknowledged cutoff. |
 | `put_blob(source, *, digest=None, size=None)` | Verified immutable content descriptor `{digest, size}`. |
@@ -74,6 +77,10 @@ UTC ISO strings; errors have a stable code, message and details.
 | `delete_comment(comment_id, *, request_id=None)` | `{id, deleted}`; an unknown ID raises NotFound. |
 | `create_report(project, name, *, body='', author=None, owner='user', origin_id=None, origin_slot=None, request_id=None)` | `{id, project, name, created_at, updated_at, owner, origin_id, origin_slot}`; a second report with the name raises Conflict. An origin must be a report of the same project; `origin_slot` needs `origin_id`. |
 | `set_report_owner(report_id, owner, *, request_id=None)` | The report with its new `owner` (`user` or `agent`); revisions and comments stay. |
+| `workspaces(*, project="default")` | Workspaces of the project with their `revision` and `author`, without layouts. |
+| `workspace(workspace_id)` | A workspace with its current `layout`. |
+| `write_workspace(project, name, layout, *, expected_revision=None, author=None, request_id=None)` | Saves a layout by name, creating the workspace; returns its `id` and `revision`. `expected_revision` 0 requires that it does not exist. |
+| `delete_workspace(workspace_id, *, request_id=None)` | Removes a workspace with every revision. |
 | `reports(*, project='default')` | The project's reports without their parts, most recently changed first. |
 | `report(report_id)` | The report with `parts`: each part's latest `{source, revision, author, updated_at}`. |
 | `write_report(report_id, part, source, *, expected_revision=None, author=None, request_id=None)` | `{report_id, part, revision}`; saves a new revision unless the text is unchanged. A part not at `expected_revision` (0 before its first write) raises Conflict with the current `revision`. |
@@ -274,6 +281,45 @@ Export/import preserves the annotation store and validates projections, ETags an
 the membership index against it. Purge removes an artifact's exact annotations,
 including comments, and its index rows; name-level annotations remain. Annotation writes are
 synchronous and do not enter a writer's record-upload journal.
+
+## Runs whose process ends
+
+Runs started by the SDK send a heartbeat every 10 seconds. Losing contact changes no
+state: a run that is heard from again is live again. SIGTERM unwinds the main thread as
+`SystemExit` (143) when runs are open and the application left SIGTERM at its default; a
+run's context then finishes as `cancelled`, and a second SIGTERM ends the process at
+once. `cairn.init()` runs still open at interpreter exit finish as `cancelled` after
+SIGTERM, `failed` after an uncaught exception or `sys.exit` with an error, and otherwise
+`completed`. Runs of an explicit `Client` outside a context, other artifacts, forked
+children and writers that were closed are left as they are. A killed process finishes
+nothing; `stop` closes its runs.
+
+## Workspaces
+
+A workspace is a named layout of cards over a project's runs, shown on the project's
+Workspace page. Like a report it is a mutable document outside the artifact lifecycle:
+it has a random `workspace_` ID and a name unique in its project. Every saved layout is a
+new revision, numbered from 1; an unchanged layout keeps the revision, and
+`expected_revision` makes a write conditional. Browser sessions save layouts through the
+UI; agents use the API, SDK (`client.workspaces()`, `workspace`, `write_workspace`,
+`delete_workspace`, all by name) or `cairn workspace list | show | write | delete`.
+
+A layout is a version 1 JSON object of at most 1 MiB, checked on every write; unknown keys
+are refused (`cairn/layouts.py`):
+
+- `version` 1, `id`, `name` (the workspace's), `search` and `status` (run filters),
+  `versions` (`latest` or `all`), `selected` (null or the shown run IDs), optional `view`
+  (`together` or `runs`), `sections` (`id`, `title`, `collapsed`; at least one) and `cards`.
+- A card has `id`, `title`, `kind` (`scalar`, `image`, `video`, `plotly` or `viewer`),
+  `section`, `width` (1–12), `height` (280–1000), `columns` (1–6), `pageSize` (1–24),
+  `filters` (`field`, `op` in `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `contains`, `exists`,
+  `value`), `filterMode` (`all`, `any`), `x`, `y`, `value`, `split`, `pointOrder`
+  (`field`, `descending`), `lineOrder` (`label`, `minimum`, `maximum`), `marks`
+  (`lines`, `markers`, `lines+markers`), `logX`, `logY`, `mode` (`gallery`, `compare`,
+  `sequence`), `axis`, `matching` (`exact`, `previous`, `nearest`), `caption`, `fit`
+  (`contain`, `cover`), `linkAxes`, and optionally `aggregation` (`center`, `band`,
+  `showMembers`). Fields are record paths or `@run`, `@name`, `@version`, `@ordinal`,
+  `@created` and `@config/…`.
 
 ## Reports
 

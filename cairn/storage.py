@@ -8,6 +8,7 @@ import re
 import tempfile
 import time
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 
 import sqlalchemy as sa
@@ -25,6 +26,7 @@ from .contract import (
     StartResult,
     WriterDescriptor,
 )
+from .layouts import validate_layout
 from .model import (
     PROTOCOL_VERSION,
     CapacityError,
@@ -46,7 +48,9 @@ from .model import (
 )
 from .objects import Files, ensure_directory
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
+# Processes report every 10 s.
+LOST_SECONDS = 120
 BUSY_SECONDS = 30
 schema = sa.MetaData()
 NAME_KEYS = ("project", "namespace", "name")
@@ -114,6 +118,8 @@ writers = sa.Table(
     sa.Column("acknowledged", sa.BigInteger, nullable=False, default=0),
     sa.Column("closed", sa.Boolean, nullable=False, default=False),
     sa.Column("created_at", sa.String, nullable=False),
+    # When its process last reported that it is alive.
+    sa.Column("heartbeat", sa.String),
 )
 records = sa.Table(
     "cairn_records",
@@ -191,6 +197,26 @@ report_parts = sa.Table(
     sa.Column("part", sa.String, primary_key=True),
     sa.Column("revision", sa.Integer, primary_key=True),
     sa.Column("source", sa.Text, nullable=False),
+    sa.Column("author", sa.String),
+    sa.Column("created_at", sa.String, nullable=False),
+)
+# Named workspace layouts of a project, and every saved revision of each.
+workspaces = sa.Table(
+    "cairn_workspaces",
+    schema,
+    sa.Column("id", sa.String, primary_key=True),
+    sa.Column("project", sa.String, nullable=False),
+    sa.Column("name", sa.String, nullable=False),
+    sa.Column("created_at", sa.String, nullable=False),
+    sa.Column("updated_at", sa.String, nullable=False),
+    sa.UniqueConstraint("project", "name"),
+)
+workspace_layouts = sa.Table(
+    "cairn_workspace_layouts",
+    schema,
+    sa.Column("workspace_id", sa.ForeignKey(workspaces.c.id), primary_key=True),
+    sa.Column("revision", sa.Integer, primary_key=True),
+    sa.Column("layout", JSON, nullable=False),
     sa.Column("author", sa.String),
     sa.Column("created_at", sa.String, nullable=False),
 )
@@ -412,11 +438,11 @@ class Repository:
                 version = conn.execute(
                     sa.select(meta.c.value).where(meta.c.key == "schema_version")
                 ).scalar()
-                upgrade = migrate and version in (6, 7, 8, 9)
+                upgrade = migrate and version in (6, 7, 8, 9, 10)
                 if version != SCHEMA_VERSION and not upgrade:
                     hint = (
                         "; export a backup, then run `cairn repo migrate`"
-                        if version in (6, 7, 8, 9)
+                        if version in (6, 7, 8, 9, 10)
                         else ""
                     )
                     raise Unsupported(
@@ -459,7 +485,11 @@ class Repository:
 
         Schema 7 to 8 adds reports, whose comments live in the annotation store too; 8 to 9
         turns each Markdown body revision into a document; 9 to 10 gives reports an owner
-        and an origin."""
+        and an origin; 10 to 11 adds workspaces, whose tables already exist,
+        and heartbeats of writers."""
+        present = {column["name"] for column in sa.inspect(conn).get_columns(writers.name)}
+        if "heartbeat" not in present:
+            conn.execute(sa.text("ALTER TABLE cairn_writers ADD COLUMN heartbeat VARCHAR"))
         if version == 7:
             conn.execute(
                 sa.text(
@@ -496,6 +526,8 @@ class Repository:
             ):
                 if column.split()[0] not in present:
                     conn.execute(sa.text(f"ALTER TABLE cairn_reports ADD COLUMN {column}"))
+            version = 10
+        if version == 10:
             conn.execute(
                 meta.update().where(meta.c.key == "schema_version").values(value=SCHEMA_VERSION)
             )
@@ -757,7 +789,8 @@ class Repository:
 
     @staticmethod
     def _writer_dict(writer):
-        return {**writer, "next_sequence": writer["acknowledged"] + 1}
+        shown = {key: value for key, value in writer.items() if key != "heartbeat"}
+        return {**shown, "next_sequence": writer["acknowledged"] + 1}
 
     def start(self, project, namespace, name, *, request_id=None) -> StartResult:
         for item in (project, namespace, name):
@@ -1038,6 +1071,78 @@ class Repository:
                     .values(cutoff=cutoff, metadata=metadata)
                 )
             return {"acknowledged": acknowledged, "cutoff": cutoff}
+
+    def heartbeat(self, artifact_id, writer_id):
+        """Record that an open writer's process is alive."""
+        with self._transaction(write=True) as conn:
+            changed = conn.execute(
+                writers.update()
+                .where(
+                    writers.c.id == writer_id,
+                    writers.c.artifact_id == artifact_id,
+                    writers.c.closed.is_(False),
+                )
+                .values(heartbeat=now())
+            )
+            return {"open": changed.rowcount == 1}
+
+    def liveness(self, *, project="default"):
+        """When each unfinished artifact of a project was last heard from.
+
+        Contact is lost when a process that sent heartbeats has been silent too long."""
+        with self._transaction() as conn:
+            return self._liveness(conn, artifacts.c.project == project)
+
+    def _liveness(self, conn, condition):
+        beat = sa.func.max(writers.c.heartbeat)
+        rows = conn.execute(
+            sa.select(
+                artifacts.c.id, artifacts.c.created_at, beat, sa.func.max(records.c.created_at)
+            )
+            .join(writers, writers.c.artifact_id == artifacts.c.id)
+            .outerjoin(
+                records,
+                sa.and_(
+                    records.c.artifact_id == artifacts.c.id,
+                    records.c.ordinal == artifacts.c.cutoff,
+                ),
+            )
+            .where(condition, artifacts.c.state != "finished", artifacts.c.deleted_at.is_(None))
+            .group_by(artifacts.c.id, artifacts.c.created_at)
+        )
+        result, current = [], datetime.fromisoformat(now())
+        for identifier, created, heartbeat, recorded in rows:
+            seen = max(created, heartbeat or "", recorded or "")
+            silent = (current - datetime.fromisoformat(seen)).total_seconds()
+            result.append(
+                {
+                    "artifact_id": identifier,
+                    "last_seen": seen,
+                    "heartbeat": heartbeat is not None,
+                    "lost": heartbeat is not None and silent > LOST_SECONDS,
+                }
+            )
+        return result
+
+    def stop(self, artifact_id, *, force=False):
+        """Close an abandoned artifact's writers and finish it as incomplete.
+
+        A process heard from recently is refused unless forced; records still in its
+        outbox cannot be added afterwards."""
+        with self._transaction(write=True) as conn:
+            artifact = self._artifact(conn, artifact_id, lock=True)
+            if artifact["state"] == "finished":
+                return artifact
+            [seen] = self._liveness(conn, artifacts.c.id == artifact_id)
+            if seen["heartbeat"] and not seen["lost"] and not force:
+                raise Conflict(
+                    f"Its process was alive at {seen['last_seen']}; force stopping it if it is gone"
+                )
+            conn.execute(
+                writers.update().where(writers.c.artifact_id == artifact_id).values(closed=True)
+            )
+        intent = artifact["intent"] or {"outcome": "incomplete"}
+        return self.finish(artifact_id, **intent)
 
     def close_writer(self, artifact_id, writer_id, final_sequence) -> WriterDescriptor:
         if type(final_sequence) is not int or final_sequence < 0:
@@ -2274,6 +2379,112 @@ class Repository:
 
         with self._transaction(write=True) as conn:
             return self._once(conn, request_id, "delete_report", report_id, remove)
+
+    def _workspace(self, conn, row):
+        layout = (
+            conn.execute(
+                sa.select(workspace_layouts)
+                .where(workspace_layouts.c.workspace_id == row["id"])
+                .order_by(workspace_layouts.c.revision.desc())
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        return {**row, "revision": layout["revision"], "author": layout["author"]}, layout
+
+    def workspaces(self, *, project="default"):
+        """Workspaces of a project, most recently changed first, without their layouts."""
+        with self._transaction() as conn:
+            rows = conn.execute(
+                sa.select(workspaces)
+                .where(workspaces.c.project == project)
+                .order_by(workspaces.c.updated_at.desc(), workspaces.c.id)
+            ).mappings()
+            return [self._workspace(conn, dict(row))[0] for row in rows]
+
+    def workspace(self, workspace_id):
+        with self._transaction() as conn:
+            summary, layout = self._workspace(conn, self._get(conn, workspaces, workspace_id))
+            return {**summary, "layout": layout["layout"]}
+
+    def write_workspace(
+        self, project, name, layout, *, expected_revision=None, author=None, request_id=None
+    ):
+        """Save a workspace's layout by name, creating it at revision 1; an unchanged
+        layout keeps the current revision. expected_revision 0 means it must not exist."""
+        validate_name(project)
+        validate_name(name)
+        validate_layout(layout, name)
+        _text(author, "Workspace author", 256, optional=True)
+        if expected_revision is not None and (
+            type(expected_revision) is not int or expected_revision < 0
+        ):
+            raise ValidationError("Expected revision must be a nonnegative integer")
+
+        def write():
+            stamp = now()
+            row = _row(
+                conn.execute(
+                    sa.select(workspaces)
+                    .where(workspaces.c.project == project, workspaces.c.name == name)
+                    .with_for_update()
+                )
+            )
+            current = self._workspace(conn, row)[1] if row else None
+            revision = current["revision"] if current else 0
+            if expected_revision is not None and expected_revision != revision:
+                raise Conflict(
+                    "Workspace changed since it was read", details={"revision": revision}
+                )
+            if row is None:
+                row = {"id": new_id("workspace")}
+                try:
+                    with conn.begin_nested():
+                        conn.execute(
+                            workspaces.insert().values(
+                                id=row["id"],
+                                project=project,
+                                name=name,
+                                created_at=stamp,
+                                updated_at=stamp,
+                            )
+                        )
+                except SQLIntegrityError:
+                    raise Conflict(f"Workspace was created meanwhile: {name}") from None
+            if current is None or canonical(current["layout"]) != canonical(layout):
+                revision += 1
+                conn.execute(
+                    workspace_layouts.insert().values(
+                        workspace_id=row["id"],
+                        revision=revision,
+                        layout=layout,
+                        author=author,
+                        created_at=stamp,
+                    )
+                )
+                conn.execute(
+                    workspaces.update().where(workspaces.c.id == row["id"]).values(updated_at=stamp)
+                )
+            return {"id": row["id"], "project": project, "name": name, "revision": revision}
+
+        payload = [project, name, layout, expected_revision, author]
+        with self._transaction(write=True) as conn:
+            return self._once(conn, request_id, "write_workspace", payload, write)
+
+    def delete_workspace(self, workspace_id, *, request_id=None):
+        """Remove a workspace with every revision of its layout."""
+
+        def remove():
+            self._get(conn, workspaces, workspace_id, lock=True)
+            conn.execute(
+                workspace_layouts.delete().where(workspace_layouts.c.workspace_id == workspace_id)
+            )
+            conn.execute(workspaces.delete().where(workspaces.c.id == workspace_id))
+            return {"id": workspace_id, "deleted": True}
+
+        with self._transaction(write=True) as conn:
+            return self._once(conn, request_id, "delete_workspace", workspace_id, remove)
 
     def add_report_comment(
         self, report_id, anchor, body, *, author=None, for_agent=False, request_id=None

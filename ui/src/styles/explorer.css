@@ -329,6 +329,7 @@ button.tag-chip { cursor: pointer; }
 .report-editor .cm-scroller { font: inherit; line-height: inherit; overflow: visible; }
 .report-editor .cm-content { padding: 0; caret-color: var(--ink); min-width: 0; }
 .report-editor .cm-line { padding: 0; }
+.report-editor-end { min-height: 4rem; cursor: text; }
 /* CodeMirror's zero-width cursor helpers beside widgets are images; the report's figure styles must not size them. */
 .report-editor img.cm-widgetBuffer { display: inline; width: 0; height: 1em; margin: 0; padding: 0; border: 0; border-radius: 0; cursor: text; }
 .report-block-body { position: relative; }

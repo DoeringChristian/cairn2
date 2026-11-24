@@ -1,6 +1,7 @@
 import { cachedList, cacheList, invalidateList } from '../listCache';
 import { ArtifactTags, artifactTags } from '../components/ArtifactTags';
 import { useRefresh, useRefreshMode } from '../refresh';
+import { useLiveness } from '../liveness';
 import { useEffect, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
@@ -74,6 +75,7 @@ function ArtifactList() {
     } else {setLoading(true);void load();}
     return () => {controller.abort();window.clearTimeout(timer);};
   }, [path, revision, paused]);
+  const liveness=useLiveness(items.some(a=>a.state!=='finished')?project:null);
   const availableTags=[...new Set(items.flatMap(artifactTags))].sort();
   function toggleTag(tag:string){const next=new URLSearchParams(params);next.delete('page');next.delete('tag');for(const value of selectedTags.includes(tag)?selectedTags.filter(t=>t!==tag):[...selectedTags,tag])next.append('tag',value);setParams(next);}
   function changePage(value: number) {const next=new URLSearchParams(params);next.set('page', String(value));setParams(next);}
@@ -83,7 +85,7 @@ function ArtifactList() {
     <Toolbar><SearchInput label="Search artifacts" value={search} onChange={value=>{setSearch(value);if(page)changePage(0);}}/><form onSubmit={e=>{e.preventDefault();const tag=tagDraft.trim();if(tag&&!selectedTags.includes(tag))toggleTag(tag);setTagDraft('');}}><SearchInput label="Filter by tag" value={tagDraft} onChange={setTagDraft}/></form></Toolbar>
     {(!!availableTags.length||!!selectedTags.length)&&<div className="tag-filters" aria-label="Filter by tags"><span className="muted">Tags</span>{[...new Set([...availableTags,...selectedTags])].map(tag=><button type="button" className="tag-chip" key={tag} aria-pressed={selectedTags.includes(tag)} onClick={()=>toggleTag(tag)}>{tag}</button>)}{!!selectedTags.length&&<button type="button" className="tag-clear" onClick={()=>{const next=new URLSearchParams(params);next.delete('tag');next.delete('page');setParams(next);}}>Clear tags</button>}</div>}
     {loading && !items.length && <Loading/>}{error && <ErrorNote error={error}/>}{!loading && !error && !filtered.length && <Hint>No matching artifacts in this view.</Hint>}
-    {!!filtered.length && <div className="artifact-list"><DataTable head={['Name','Namespace','State / version','Tags','Created']}>{filtered.map(a=><tr key={a.id}><td data-label="Name"><Link to={artifactPath(project,a.id)}><strong>{a.name}</strong></Link></td><td data-label="Namespace"><Pill tone="alias">{a.namespace}</Pill></td><td data-label="State / version"><Pill tone={a.state === 'finished' ? 'default':'pending'}>{a.number ? `v${a.number} · ${a.outcome || a.state}` : a.state}</Pill></td><td data-label="Tags"><ArtifactTags artifact={a} compact onTagClick={toggleTag} onChange={refreshList}/></td><td data-label="Created" className="muted nowrap">{when(a.created_at)}</td></tr>)}</DataTable></div>}
+    {!!filtered.length && <div className="artifact-list"><DataTable head={['Name','Namespace','State / version','Tags','Created']}>{filtered.map(a=><tr key={a.id}><td data-label="Name"><Link to={artifactPath(project,a.id)}><strong>{a.name}</strong></Link></td><td data-label="Namespace"><Pill tone="alias">{a.namespace}</Pill></td><td data-label="State / version"><Pill tone={a.state === 'finished' ? 'default':'pending'}>{a.number ? `v${a.number} · ${a.outcome || a.state}` : liveness.get(a.id)?.lost ? 'lost contact' : a.state}</Pill></td><td data-label="Tags"><ArtifactTags artifact={a} compact onTagClick={toggleTag} onChange={refreshList}/></td><td data-label="Created" className="muted nowrap">{when(a.created_at)}</td></tr>)}</DataTable></div>}
     <div className="pagination"><Hint>{total ? `${page*50+1}–${Math.min((page+1)*50,total)} of ${total}` : '0 results'}</Hint><Button disabled={page===0||loading} onClick={()=>changePage(page-1)}>Previous</Button><Button disabled={(page+1)*50>=total||loading} onClick={()=>changePage(page+1)}>Next</Button></div>
     </Section></main>;
 }

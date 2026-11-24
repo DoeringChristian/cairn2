@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -13,7 +13,7 @@ import {
   Trash2,
   Undo2,
 } from 'lucide-react';
-import { api, artifactPath, projectPath } from '../api';
+import { api, ApiError, artifactPath, projectPath } from '../api';
 import { ActionIcon, Button } from '../components/Button';
 import { Select } from '../components/Select';
 import { CardEditor } from './CardEditor';
@@ -27,7 +27,7 @@ import { defaultLayout, snapWidth, uniformSections } from './layout';
 import { discover, uid, type Card, type Layout, type Section } from './model';
 import { RunPanel } from './RunPanel';
 import { matchingRuns } from './runs';
-import { readSaved, storageKey, type SavedWorkspace } from './storage';
+import { activeKey, loadLayouts, readSaved, saveLayout, storageKey } from './storage';
 import './workspace.css';
 
 export function WorkspacePage() {
@@ -52,7 +52,10 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
   const [params, setParams] = useSearchParams();
   const [layout, setLayout] = useState(() => uniformSections(defaultLayout(params.get('example') === 'cards')));
   const [saved, setSaved] = useState<Layout[]>([]);
+  const [local, setLocal] = useState<Layout[]>([]);
   const [key, setKey] = useState('');
+  const revisions = useRef(new Map<string, number>());
+  const writes = useRef(Promise.resolve());
   const [storageError, setStorageError] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [history, setHistory] = useState<Layout[]>([]);
@@ -64,29 +67,33 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
   const [naming, setNaming] = useState<Naming>();
   const [dragged, setDragged] = useState<string>();
 
-  // Saved layouts live in this browser, per repository and project.
+  // Saved layouts live on the server; the browser keeps which one was open.
   useEffect(() => {
     let closed = false;
-    api<{ repository_id: string }>('/ui-api/session')
-      .then((session) => {
-        if (closed) return;
-        const nextKey = storageKey(session.repository_id, project);
-        try {
-          const stored = readSaved(nextKey);
-          setKey(nextKey);
-          if (stored) {
-            setSaved(stored.layouts);
-            const active = stored.layouts.find((l) => l.id === stored.active) || stored.layouts[0] || defaultLayout();
-            if (!params.has('example')) setLayout(uniformSections(active));
-          }
-        } finally {
-          setLoaded(true);
-        }
-      })
+    (async () => {
+      const session = await api<{ repository_id: string }>('/ui-api/session');
+      const layouts = await loadLayouts(project);
+      if (closed) return;
+      revisions.current = new Map(layouts.map(({ layout, revision }) => [layout.name, revision]));
+      const nextKey = activeKey(session.repository_id, project);
+      setKey(nextKey);
+      setSaved(layouts.map(({ layout }) => layout));
+      const open = localStorage.getItem(nextKey);
+      const named = params.get('layout');
+      const active = (
+        (named && layouts.find(({ layout }) => layout.name === named)) ||
+        layouts.find(({ layout }) => layout.id === open) ||
+        layouts[0]
+      )?.layout;
+      if (active && !params.has('example')) setLayout(uniformSections(active));
+      const stored = readSaved(storageKey(session.repository_id, project));
+      if (!closed) setLocal(stored?.layouts.filter((l) => !layouts.some(({ layout }) => layout.name === l.name)) || []);
+    })()
       .catch((error) => {
-        if (closed) return;
-        setStorageError(String(error));
-        setLoaded(true);
+        if (!closed) setStorageError(String(error));
+      })
+      .finally(() => {
+        if (!closed) setLoaded(true);
       });
     return () => {
       closed = true;
@@ -118,24 +125,47 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
   }
   const patch = (value: Partial<Layout>) => change({ ...layout, ...value });
 
-  function store(value: SavedWorkspace) {
-    localStorage.setItem(key, JSON.stringify(value));
-  }
+  /** Saves run in order, each on the revision the previous one left. */
   function persist(next: Layout) {
     if (!key) return;
-    try {
-      const layouts = [...saved.filter((l) => l.id !== next.id), next];
-      store({ version: 1, active: next.id, layouts });
-      setSaved(layouts);
-      setLayout(next);
-      setStorageError('');
-      if (params.has('example')) {
-        const query = new URLSearchParams(params);
-        query.delete('example');
-        setParams(query, { replace: true });
+    setLayout(next);
+    localStorage.setItem(key, next.id);
+    writes.current = writes.current.then(async () => {
+      try {
+        const revision = await saveLayout(project, next, revisions.current.get(next.name) ?? 0);
+        revisions.current.set(next.name, revision);
+        setSaved((layouts) => [...layouts.filter((l) => l.name !== next.name), next]);
+        setStorageError('');
+        if (params.has('example')) {
+          const query = new URLSearchParams(params);
+          query.delete('example');
+          setParams(query, { replace: true });
+        }
+      } catch (error) {
+        setStorageError(
+          error instanceof ApiError && error.status === 409
+            ? `“${next.name}” exists or was changed elsewhere; reload to see it, or save under another name.`
+            : `Could not save this layout: ${(error as Error).message}`,
+        );
       }
-    } catch (error) {
-      setStorageError(`Could not save this layout: ${String(error)}`);
+    });
+  }
+  /** Moves layouts this browser kept before workspaces were stored on the server. */
+  async function upload() {
+    const remaining: Layout[] = [];
+    for (const layout of local)
+      try {
+        revisions.current.set(layout.name, await saveLayout(project, layout, 0));
+        setSaved((layouts) => [...layouts, layout]);
+      } catch (error) {
+        remaining.push(layout);
+        setStorageError(`Could not move “${layout.name}”: ${(error as Error).message}`);
+      }
+    setLocal(remaining);
+    if (!remaining.length) {
+      const session = await api<{ repository_id: string }>('/ui-api/session');
+      localStorage.removeItem(storageKey(session.repository_id, project));
+      setStorageError('');
     }
   }
   function open(value: string) {
@@ -147,11 +177,7 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
     const next = saved.find((l) => l.id === value);
     if (!next) return;
     change(next);
-    try {
-      if (key) store({ version: 1, active: next.id, layouts: saved });
-    } catch (error) {
-      setStorageError(String(error));
-    }
+    if (key) localStorage.setItem(key, next.id);
   }
 
   // The first card of a section sets the size of every card in it.
@@ -261,7 +287,7 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
           <span>Layout</span>
           <Select label="Saved layout" value={layout.id} disabled={!loaded} choices={layoutChoices} onChange={open} />
         </div>
-        <span className="workspace-save-status">{dirty ? 'Unsaved changes' : 'Saved in this browser'}</span>
+        <span className="workspace-save-status">{dirty ? 'Unsaved changes' : 'Saved'}</span>
         <Button small disabled={!key || !dirty} onClick={() => persist(layout)}>
           <Save size={14} /> Save
         </Button>
@@ -312,6 +338,15 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
       {storageError && (
         <p className="workspace-error" role="alert">
           {storageError}
+        </p>
+      )}
+
+      {!!local.length && (
+        <p className="workspace-local">
+          {local.length === 1 ? 'One layout is' : `${local.length} layouts are`} saved only in this browser.{' '}
+          <Button small onClick={() => void upload()}>
+            Move to the project
+          </Button>
         </p>
       )}
 

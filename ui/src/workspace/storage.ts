@@ -1,8 +1,30 @@
 import { isKind, newCard } from './cards';
+import { api } from '../api';
 import type { Layout } from './model';
 export type SavedWorkspace = { version: 1; active: string; layouts: Layout[] };
 export const storageKey = (repository: string, project: string) =>
   `cairn:workspace:v1:${encodeURIComponent(repository)}:${encodeURIComponent(project)}`;
+/** The layouts of a project on the server, with the revision each was read at. */
+export type StoredLayout = { revision: number; layout: Layout };
+export async function loadLayouts(project: string): Promise<StoredLayout[]> {
+  const found = await api<{ id: string }[]>(`/v1/workspaces?project=${encodeURIComponent(project)}`);
+  const read = await Promise.all(found.map(({ id }) => api<StoredLayout>(`/v1/workspaces/${encodeURIComponent(id)}`)));
+  return read.map(({ revision, layout }) => ({ revision, layout }));
+}
+/** Saves a layout under its name; revision 0 means no workspace may have that name yet. */
+export async function saveLayout(project: string, layout: Layout, revision: number): Promise<number> {
+  const body = JSON.stringify({ project, name: layout.name, layout, expected_revision: revision });
+  // Browsers limit requests that outlive the page to 64 KiB.
+  const saved = await api<{ revision: number }>('/ui-api/workspaces', {
+    method: 'PUT',
+    body,
+    keepalive: new Blob([body]).size < 60_000,
+  });
+  return saved.revision;
+}
+export const activeKey = (repository: string, project: string) =>
+  `cairn:workspace:active:${encodeURIComponent(repository)}:${encodeURIComponent(project)}`;
+/** Browsers saved layouts locally before workspaces were stored on the server. */
 /** Validate local data before it can affect a query or a renderer. Unknown versions are retained untouched. */
 export function readSaved(key: string): SavedWorkspace | null {
   const raw = localStorage.getItem(key);

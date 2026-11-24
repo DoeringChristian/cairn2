@@ -94,7 +94,7 @@ def test_schema_7_repositories_migrate_to_reports(tmp_path):
     with pytest.raises(Unsupported, match="cairn repo migrate"):
         Repository(tmp_path)
     with closing(Repository(tmp_path, migrate=True)) as repo:
-        assert repo.info()["schema_version"] == 10
+        assert repo.info()["schema_version"] == 11
         assert repo.resolve(identifier)["id"] == identifier
         report = repo.create_report("demo", "study")
         repo.add_report_comment(report["id"], {"path": "body"}, "Works")
