@@ -2,7 +2,6 @@ import { AppWindow } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import { ViewEditor } from '../../components/ViewEditor';
 import { readView, ViewerFrame } from '../../components/ViewerFrame';
-import { Note } from './settings';
 import type { CardKind, ContentProps, SettingsProps } from './types';
 
 function ViewerContent({ card }: ContentProps) {
@@ -23,12 +22,11 @@ function ViewerSettings({ card, patch }: SettingsProps) {
   return (
     <div className="workspace-settings-panel">
       <ViewEditor value={card.value} project={project} onChange={(value) => patch({ value })} />
-      <Note>The YAML tab holds the same text as a report’s view block.</Note>
     </div>
   );
 }
 
-/** An artifact's HTML viewer, configured by the same YAML as a report's view block. */
+/** An artifact's HTML viewer, configured by YAML. */
 export const viewer: CardKind = {
   label: 'Viewer',
   icon: AppWindow,

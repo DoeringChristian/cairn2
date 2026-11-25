@@ -7,8 +7,8 @@ export const storageKey = (repository: string, project: string) =>
 /** The layouts of a project on the server, with the revision each was read at. */
 export type StoredLayout = { revision: number; layout: Layout };
 export async function loadLayouts(project: string): Promise<StoredLayout[]> {
-  const found = await api<{ id: string }[]>(`/v1/workspaces?project=${encodeURIComponent(project)}`);
-  const read = await Promise.all(found.map(({ id }) => api<StoredLayout>(`/v1/workspaces/${encodeURIComponent(id)}`)));
+  const found = await api<{ id: string }[]>(`/ui-api/workspaces?project=${encodeURIComponent(project)}`);
+  const read = await Promise.all(found.map(({ id }) => api<StoredLayout>(`/ui-api/workspaces/${encodeURIComponent(id)}`)));
   return read.map(({ revision, layout }) => ({ revision, layout }));
 }
 /** Saves a layout under its name; revision 0 means no workspace may have that name yet. */

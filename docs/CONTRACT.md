@@ -17,8 +17,7 @@ accepted work, but new producers cannot join.
 Every start creates a new artifact, even under an existing name. An identical
 `request_id` retries that creation instead of creating another artifact. A name
 is scoped by `(project, namespace, name)`. Namespaces are arbitrary conventions:
-`runs`, `datasets`, and `viewers` have no special backend behavior. Reports are not
-artifacts (see [Reports](#reports)).
+`runs`, `datasets`, and `viewers` have no special backend behavior. 
 
 On finish, the artifact receives the next `vN` label for its name and becomes
 that name's `latest`. Concurrent finishes receive distinct numbers; the last
@@ -67,26 +66,6 @@ UTC ISO strings; errors have a stable code, message and details.
 | `has_blobs(digests)` | Mapping of digest to availability. |
 | `open_blob(digest)` | Binary stream context manager, caller closes it. |
 | `delete(artifact_id, *, request_id=None)` | Soft deletion: `{id, deleted, retained_by}`. Names and aliases stop resolving it; `latest` falls back to the highest remaining finished version. Finished IDs stay readable for provenance until garbage collection. |
-| `add_comment(artifact_id, anchor, body, *, author=None, for_agent=False, request_id=None)` | Comment on a finished, not deleted artifact; anchor is structured source location data and `author` unauthenticated text. `for_agent` marks it for an agent. |
-| `reply_comment(comment_id, body, *, author=None, for_agent=False, request_id=None)` | Reply in the thread of an open comment: `reply_to` names the thread's first comment, the anchor is empty and the artifact is the first comment's. |
-| `send_comment(comment_id, *, request_id=None)` | Stamps `sent_at` on a comment marked for an agent that is not sent yet and returns it; otherwise returns it unchanged. |
-| `comments(artifact_id, *, scope='artifact', include_resolved=True)` | Comments on the exact artifact, or with `scope='name'` on every version of its name, oldest first. |
-| `list_comments(pattern=None, *, project='default', include_resolved=True, limit=100, cursor=None)` | Pages `{items, next_cursor}` of the project's comments, oldest first, including those on deleted versions; `pattern` is a name glob such as `reports/**` without a selector. |
-| `update_comment(comment_id, body, *, expected_revision=None, for_agent=None, request_id=None)` | Replaces the body and the agent mark; a change to either clears `sent_at`. A stale revision raises Conflict. |
-| `resolve_comment(comment_id, *, resolved=True, note=None, by=None, request_id=None)` | Sets or clears `resolved_at` and `resolution: {note, by}` on a thread's first comment; its replies follow its `resolved_at`. Deleting the first comment deletes its replies. |
-| `delete_comment(comment_id, *, request_id=None)` | `{id, deleted}`; an unknown ID raises NotFound. |
-| `create_report(project, name, *, body='', author=None, owner='user', origin_id=None, origin_slot=None, request_id=None)` | `{id, project, name, created_at, updated_at, owner, origin_id, origin_slot}`; a second report with the name raises Conflict. An origin must be a report of the same project; `origin_slot` needs `origin_id`. |
-| `set_report_owner(report_id, owner, *, request_id=None)` | The report with its new `owner` (`user` or `agent`); revisions and comments stay. |
-| `workspaces(*, project="default")` | Workspaces of the project with their `revision` and `author`, without layouts. |
-| `workspace(workspace_id)` | A workspace with its current `layout`. |
-| `write_workspace(project, name, layout, *, expected_revision=None, author=None, request_id=None)` | Saves a layout by name, creating the workspace; returns its `id` and `revision`. `expected_revision` 0 requires that it does not exist. |
-| `delete_workspace(workspace_id, *, request_id=None)` | Removes a workspace with every revision. |
-| `reports(*, project='default')` | The project's reports without their parts, most recently changed first. |
-| `report(report_id)` | The report with `parts`: each part's latest `{source, revision, author, updated_at}`. |
-| `write_report(report_id, part, source, *, expected_revision=None, author=None, request_id=None)` | `{report_id, part, revision}`; saves a new revision unless the text is unchanged. A part not at `expected_revision` (0 before its first write) raises Conflict with the current `revision`. |
-| `delete_report(report_id, *, request_id=None)` | `{id, deleted}`; removes the report with every revision and comment. Reports it was the origin of stay, without an origin. |
-| `add_report_comment(report_id, anchor, body, *, author=None, for_agent=False, request_id=None)` | A comment on a report, otherwise as `add_comment`. |
-| `report_comments(report_id, *, include_resolved=True)` | The report's comments, oldest first. |
 | `collect_garbage(*, grace_seconds=3600, dry_run=True)` | `{dry_run, pinned, artifacts, candidates, removed, orphans}`. Purges artifacts deleted before the grace period that only other purged artifacts reference, then unreferenced content. |
 
 There is no snapshot operation. A separate finished checkpoint must be a separate
@@ -145,14 +124,10 @@ intent. Rejected batches do not advance records, producer sequences or budgets.
 Definitive rejected finishes can be corrected; uncertain deliveries preserve
 exact retry intent. The 8 MiB final manifest bound is a defensive check.
 
-## HTTP, SDK and reports
+## HTTP and SDK
 
 Routes are named REST resources: `POST /v1/artifacts`, artifact-scoped writers,
-entries, finalization, aliases, annotations and comments; `GET /v1/comments`, `PUT /v1/comments/{id}`,
-`POST /v1/comments/{id}/replies`, `POST /v1/comments/{id}/sending`
-and `PUT /v1/comments/{id}/resolution`; `GET`/`POST /v1/reports`, `GET`/`DELETE
-/v1/reports/{id}`, `PUT /v1/reports/{id}/parts/{part}` and `GET`/`POST
-/v1/reports/{id}/comments`; `POST /v1/resolutions`, `POST /v1/searches`, `POST /v1/links`,
+entries, finalization, aliases and annotations; `POST /v1/resolutions`, `POST /v1/searches`, `POST /v1/links`,
 `POST /v1/records/query`, `GET /v1/history?ref=...&project=...`,
 `DELETE /v1/artifacts/{id}`, and `POST /v1/maintenance/gc`.
 Blob uploads/downloads stream bytes. There are no revision, snapshot or separate
@@ -209,7 +184,7 @@ retention and active transfer leases.
 ## Discovery and mutable annotations
 
 Mutable information lives in one annotation store, separate from captured content.
-Each annotation is a property (one top-level key) or a comment, and targets either
+Each annotation is a property (one top-level key) and targets either
 an exact artifact or a name: every version of `namespace/name`, including later
 ones. Aliases are never targets; `@latest` resolves to its exact version when written.
 
@@ -218,8 +193,7 @@ the artifact's effective properties, its name's overlaid key by key by its own.
 They are stored on the artifact as a projection so discovery stays indexed.
 Captured metadata/records/files remain immutable after finish; annotations can be
 edited on live or finished artifacts. Tags, titles and review status are ordinary
-annotation fields, not backend-specific exceptions. Deleted artifacts reject edits
-and new comments.
+annotation fields, not backend-specific exceptions. Deleted artifacts reject edits.
 
 `annotate` accepts a top-level object using JSON Merge Patch semantics: nested
 objects merge, arrays replace and null removes a key. It patches the selected
@@ -230,21 +204,6 @@ exact retry receipts. No new artifact identity or version label is created.
 Annotation objects are capped at 1 MiB and their scalar array membership index at
 10,000 entries; a name-level patch must keep every version within these limits.
 Updates, projections, ETags and index rows commit or roll back together.
-
-Comments anchor to an exact finished artifact or to a report and carry `artifact_id`,
-`report_id`, `number` (null on reports), `artifact_deleted`, `author`, `revision`,
-`resolved_at`, `resolution`, `reply_to`, `for_agent` and `sent_at`. Comments on a report
-carry the namespace `reports` and its name, so name patterns such as `reports/**` list
-them with comments on artifacts. They are
-not part of the projected `annotations` and do not count toward its limits.
-
-UI figure anchors may include an optional `media_id` string distinguishing figures
-within a report; on reports it is the figure's `cairn:` reference. Text anchors on
-reports name the part as `path`. Readers match this identifier when present and fall
-back to existing `media_key`/source-line anchors otherwise.
-Existing comments remain readable without migration; older readers ignore the
-optional field and may still conflate outputs sharing the same legacy key.
-
 
 Discovery predicates use explicit roots `/metadata/...` and `/annotations/...`;
 `find` also accepts `/value/...`.
@@ -259,27 +218,17 @@ the Python client. Cursors bind project, namespace, state and predicate.
 
 HTTP annotation edits use `PATCH /v1/artifacts/{id}/annotations` with
 `{patch, expected_etag, target, request_id}`; `GET` on the same path returns the
-layers. `GET /v1/artifacts/{id}/comments` accepts `scope` and `include_resolved`;
-`GET /v1/comments` accepts `pattern`, `project`, `include_resolved`, `limit` and `cursor`.
-`/v1/capabilities` lists the `search` feature, which `find` requires, the `links`
-feature, which `link_blob` requires, the `comment_listing` feature, which
-`list_comments` requires, the `comment_threads` feature, which replies, sending
-and `for_agent` require, the `reports` feature, which the report operations require,
-and the `annotations` feature; clients check it before using
-name targets, layers, comment authors, scopes, edits or resolution. Discovery passes
+layers. `/v1/capabilities` lists the `search` feature, which `find` requires, the `links`
+feature, which `link_blob` requires, the `liveness` feature, which heartbeats and `stop`
+require, and the `annotations` feature; clients check it before using name targets or
+layers. Discovery passes
 JSON `where` and optional `state` to `GET /v1/artifacts`. Python exposes
-`Client.annotate`, `Client.find`, `Client.comments`, `Client.resolve_comment` and
-`Client.reopen_comment`; the CLI exposes `artifact annotate [--name]`,
-`artifact list --where` and `comments list|resolve|reopen`. `Client.reports`, `report`,
-`create_report`, `set_report_owner`, `write_report`, `delete_report` and `comment_report` address reports
-by name; the CLI exposes `report list|show|new|owner|write|comment|delete|watch`. `report
-watch` waits until the body passes a revision and has rested, or a thread on the
-report has a comment sent after its last reply, prints the report with those threads
-as one JSON line and exits.
+`Client.annotate` and `Client.find`; the CLI exposes `artifact annotate [--name]` and
+`artifact list --where`.
 
 Export/import preserves the annotation store and validates projections, ETags and
-the membership index against it. Purge removes an artifact's exact annotations,
-including comments, and its index rows; name-level annotations remain. Annotation writes are
+the membership index against it. Purge removes an artifact's exact annotations
+and its index rows; name-level annotations remain. Annotation writes are
 synchronous and do not enter a writer's record-upload journal.
 
 ## Runs whose process ends
@@ -294,84 +243,10 @@ SIGTERM, `failed` after an uncaught exception or `sys.exit` with an error, and o
 children and writers that were closed are left as they are. A killed process finishes
 nothing; `stop` closes its runs.
 
-## Workspaces
+## What older versions stored
 
-A workspace is a named layout of cards over a project's runs, shown on the project's
-Workspace page. Like a report it is a mutable document outside the artifact lifecycle:
-it has a random `workspace_` ID and a name unique in its project. Every saved layout is a
-new revision, numbered from 1; an unchanged layout keeps the revision, and
-`expected_revision` makes a write conditional. Browser sessions save layouts through the
-UI; agents use the API, SDK (`client.workspaces()`, `workspace`, `write_workspace`,
-`delete_workspace`, all by name) or `cairn workspace list | show | write | delete`.
-
-A layout is a version 1 JSON object of at most 1 MiB, checked on every write; unknown keys
-are refused (`cairn/layouts.py`):
-
-- `version` 1, `id`, `name` (the workspace's), `search` and `status` (run filters),
-  `versions` (`latest` or `all`), `selected` (null or the shown run IDs), optional `view`
-  (`together` or `runs`), `sections` (`id`, `title`, `collapsed`; at least one) and `cards`.
-- A card has `id`, `title`, `kind` (`scalar`, `image`, `video`, `plotly` or `viewer`),
-  `section`, `width` (1–12), `height` (280–1000), `columns` (1–6), `pageSize` (1–24),
-  `filters` (`field`, `op` in `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `contains`, `exists`,
-  `value`), `filterMode` (`all`, `any`), `x`, `y`, `value`, `split`, `pointOrder`
-  (`field`, `descending`), `lineOrder` (`label`, `minimum`, `maximum`), `marks`
-  (`lines`, `markers`, `lines+markers`), `logX`, `logY`, `mode` (`gallery`, `compare`,
-  `sequence`), `axis`, `matching` (`exact`, `previous`, `nearest`), `caption`, `fit`
-  (`contain`, `cover`), `linkAxes`, and optionally `aggregation` (`center`, `band`,
-  `showMembers`). Fields are record paths or `@run`, `@name`, `@version`, `@ordinal`,
-  `@created` and `@config/…`.
-
-## Reports
-
-A report is a mutable document of a project, outside the artifact lifecycle: it has a
-random `report_` ID, a name unique in its project, and no versions, outputs or lineage.
-It runs no code. It references artifacts by `cairn:` links, which readers resolve when
-they display it, so `@latest` follows new versions.
-
-A report has parts. `body` is its author's document; every other part is a slot an
-agent fills with Markdown. Parts are identifiers of 1–64 characters and hold at most
-1 MiB of text. Every saved text is kept as a new revision of its part, numbered from 1;
-writing unchanged text keeps the revision. `expected_revision` makes a write
-conditional, so two editors never overwrite each other silently. Browser sessions
-write only `body` and comments; agents write slots with the server token.
-
-A report's `owner` says who writes its body: `user` (the default), or `agent` for a
-report an agent writes on its own, which the user steers by comments. Browser
-sessions create only user reports, cannot write an agent report's body, and may
-change a report's owner. `origin_id` and `origin_slot` name the report, and its agent
-slot, that asked for a report, so an agent exploring several directions writes one
-report per direction under the request; origins nest to any depth.
-
-The body's source is a JSON document tree in ProseMirror's shape, `{"type": "doc", "content": [...]}`,
-which the repository validates (`cairn/documents.py`). Blocks are `paragraph`,
-`heading` (`level` 1–4), `bulletList`, `orderedList` (`start`), `listItem`, `blockquote`,
-`codeBlock` (`language`), `horizontalRule`, `table` with `tableRow`, `tableHeader` and
-`tableCell`, `callout` (`kind`: note, tip, warning or important), `mathBlock` (its TeX as text),
-`figure` (`src`, a `cairn:` reference, and `caption`), `view` (`source`, the YAML of a
-view block) and `agent` (`slot`, and an optional suggested `prompt`). Every block may
-carry an `id`, which stays with it across edits. Inline content is `text` with `bold`,
-`italic`, `strike`, `code`, `math` (the text is TeX) and `link` (`href`) marks, and
-`hardBreak`.
-
-An `agent` block places a slot: the agent's Markdown in the part named by `slot` shows
-there, and the slot's comments without a quote are its conversation, whose first
-message is the request. The SDK and CLI read and write the body as Markdown
-(`client.report(name)["parts"]["body"]["markdown"]`, `create_report(name, markdown)`,
-`write_report(name, "body", markdown)`), where an agent block is the line
-`<?cairn agent SLOT?>` or `<?cairn agent SLOT "suggested request"?>`, a figure is a
-paragraph holding only `![caption](cairn:REF)`, a view is a ```` ```view ```` fence and a
-callout is `::: {.callout-KIND}`. `GET /ui-api/report-templates` lists the built-in
-documents a new report can start from.
-
-Readers support these references, in figures and in agents' Markdown:
-
-- `![caption](cairn:REF#CAPTURE)`: the file captured as `CAPTURE`, or a file of that
-  name, of the artifact `REF` resolves to; images, video and audio display inline,
-  Plotly figures as interactive charts, and other typed captures (tables, arrays) as
-  values.
-- `![caption](cairn:REF)`: the artifact's value.
-
-Export/import, integrity checks and the migrations cover reports, their revisions and
-comments. The migration from schema 8 converts every Markdown body revision into a
-document; an agent div of schema 8 becomes its request text followed by an agent block. Earlier report artifacts (`report/bundle`) remain ordinary
-artifacts with their files and comments; nothing renders them as reports.
+v0.14 to v0.17 kept reports, comments and workspaces in the repository. Cairn no longer
+has an interface to them. Schema 11 keeps their tables, and export, import, checks and
+migrations preserve them unchanged until they are exported and removed. The browser still
+saves its workspaces there, through routes private to it (`/ui-api`), which are not part
+of this contract.

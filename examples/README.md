@@ -2,7 +2,7 @@
 
 | Example | Shows |
 | --- | --- |
-| [`report-showcase/`](report-showcase/) | A run with media and a report that plans it and shows its results |
+| [`showcase/`](showcase/) | A run with metrics, media, a dataset and a viewer |
 | [`training/`](training/) | A Hydra project: a dataset, one run per configuration and seed, sweeps, and the same sweep submitted with Slurm, PBS, submitit and HyperQueue |
 | [`pipeline/`](pipeline/) | Stages that pass exact artifact versions to each other, run by Make or Snakemake |
 

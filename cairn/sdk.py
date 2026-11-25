@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
-from . import documents, liveness
+from . import liveness
 from .contract import PUBLICATION_METADATA_LIMIT, PUBLICATION_VALUE_LIMIT
 from .delivery import Delivery, _binary_source
 from .liveness import Terminated
@@ -225,140 +225,6 @@ class Client:
             expected_etag=expected_etag,
             target=target,
             request_id=new_id("request"),
-        )
-
-    def comments(self, ref=None, *, scope="name", include_resolved=False):
-        """Comments on every version of the name, or with scope="artifact" on this one.
-
-        Without a reference, every comment in the project; a name pattern such as
-        reports/** lists the comments on every name it matches.
-        """
-        ref = _identifier(ref)
-        if ref is None or "*" in ref:
-            if scope != "name":
-                raise ValidationError("A comment listing covers every version of each name")
-            comments, cursor = [], None
-            while True:
-                page = self.backend.list_comments(
-                    ref,
-                    project=self.project,
-                    include_resolved=include_resolved,
-                    limit=1000,
-                    cursor=cursor,
-                )
-                comments += page["items"]
-                cursor = page["next_cursor"]
-                if cursor is None:
-                    return comments
-        artifact = self.backend.resolve(ref, project=self.project)
-        return self.backend.comments(artifact["id"], scope=scope, include_resolved=include_resolved)
-
-    def reply_comment(self, comment_id, body, *, by=None):
-        return self.backend.reply_comment(comment_id, body, author=by, request_id=new_id("request"))
-
-    def send_comment(self, comment_id):
-        """Send a comment marked for an agent; an edit unsends it until it is sent again."""
-        return self.backend.send_comment(comment_id, request_id=new_id("request"))
-
-    def resolve_comment(self, comment_id, *, note=None, by=None):
-        return self.backend.resolve_comment(
-            comment_id, note=note, by=by, request_id=new_id("request")
-        )
-
-    def reopen_comment(self, comment_id):
-        return self.backend.resolve_comment(
-            comment_id, resolved=False, request_id=new_id("request")
-        )
-
-    def _report_id(self, name):
-        for report in self.backend.reports(project=self.project):
-            if report["name"] == name:
-                return report["id"]
-        raise NotFound(f"Unknown report: {name}")
-
-    def reports(self):
-        return self.backend.reports(project=self.project)
-
-    def report(self, name):
-        """The report's parts: the author's body and the agent's slots, each with its revision.
-
-        The body's source is its document; its markdown shows each agent block as
-        <?cairn agent SLOT?>."""
-        report = self.backend.report(self._report_id(name))
-        body = report["parts"].get("body")
-        if body:
-            body["markdown"] = documents.to_markdown(documents.loads(body["source"]))
-        return report
-
-    def create_report(self, name, body=None, *, by=None, owner="user", origin=None, slot=None):
-        """Create a report from Markdown or a document.
-
-        An agent's report (owner="agent") names the report, and its slot, that asked for it."""
-        return self.backend.create_report(
-            self.project,
-            name,
-            body=None if body is None else _document(body),
-            author=by,
-            owner=owner,
-            origin_id=None if origin is None else self._report_id(origin),
-            origin_slot=slot,
-            request_id=new_id("request"),
-        )
-
-    def set_report_owner(self, name, owner):
-        """Hand a report's body to the user or to an agent."""
-        return self.backend.set_report_owner(
-            self._report_id(name), owner, request_id=new_id("request")
-        )
-
-    def write_report(self, name, part, source, *, expected_revision=None, by=None):
-        """Save one part; agents write the slots the body leaves them, never the body.
-
-        The body takes Markdown or a document; slots take Markdown."""
-        return self.backend.write_report(
-            self._report_id(name),
-            part,
-            _document(source) if part == "body" else source,
-            expected_revision=expected_revision,
-            author=by,
-            request_id=new_id("request"),
-        )
-
-    def delete_report(self, name):
-        return self.backend.delete_report(self._report_id(name), request_id=new_id("request"))
-
-    def _workspace_id(self, name):
-        for workspace in self.backend.workspaces(project=self.project):
-            if workspace["name"] == name:
-                return workspace["id"]
-        raise NotFound(f"Unknown workspace: {name}")
-
-    def workspaces(self):
-        return self.backend.workspaces(project=self.project)
-
-    def workspace(self, name):
-        """A workspace with its current layout and revision."""
-        return self.backend.workspace(self._workspace_id(name))
-
-    def write_workspace(self, name, layout, *, expected_revision=None, by=None):
-        """Save a workspace's layout, creating the workspace when it does not exist yet."""
-        return self.backend.write_workspace(
-            self.project,
-            name,
-            layout,
-            expected_revision=expected_revision,
-            author=by,
-            request_id=new_id("request"),
-        )
-
-    def delete_workspace(self, name):
-        return self.backend.delete_workspace(self._workspace_id(name), request_id=new_id("request"))
-
-    def comment_report(self, name, body, *, quote=None, part="body", by=None):
-        """Comment on a part, on the passage quote when given."""
-        anchor = {"path": part, **({"quote": quote} if quote else {})}
-        return self.backend.add_report_comment(
-            self._report_id(name), anchor, body, author=by, request_id=new_id("request")
         )
 
     def flush(self, *, timeout=None):
@@ -736,14 +602,6 @@ class Artifact:
                 exc.add_note(
                     f"Cairn cleanup also raised {type(close_error).__name__}: {close_error}"
                 )
-
-
-def _document(body):
-    """A body as stored: a document given as a dict, or Markdown."""
-    if isinstance(body, dict):
-        documents.validate(body)
-        return documents.dumps(body)
-    return documents.dumps(documents.from_markdown(body))
 
 
 def _identifier(ref):

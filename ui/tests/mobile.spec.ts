@@ -1,11 +1,10 @@
 import {test, expect, type Page} from '@playwright/test';
-import {reportPage} from './fixtures';
 
 async function fits(page: Page, width: number) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
 }
     for (const viewport of [{width:320,height:568}, {width:390,height:844}, {width:768,height:1024}, {width:844,height:390}]) {
-      test(`mobile navigation, lists, reports and lightbox ${viewport.width}`, async ({page, request}) => {
+      test(`mobile navigation, lists and runs ${viewport.width}`, async ({page, request}) => {
         await page.setViewportSize(viewport);
         const {items} = await (await request.get('/v1/artifacts?project=neural-rendering')).json();
         const run = items.find((item:any) => item.namespace === 'runs');
@@ -29,41 +28,5 @@ async function fits(page: Page, width: number) {
           await page.getByRole('tab',{name:tab,exact:true}).tap();
           await fits(page,viewport.width);
         }
-        await page.goto(reportPage);
-        await expect(page.locator('article.native-document')).toBeVisible();
-        await fits(page,viewport.width);
-        if (viewport.width <= 760) {
-          const toc = page.getByRole('navigation',{name:'Table of contents'});
-          await toc.getByRole('button').tap();
-          await toc.getByRole('link').first().tap();
-          await expect(toc.getByRole('button')).toHaveAttribute('aria-expanded','false');
-        }
-        await page.getByRole('button',{name:'Enlarge video',exact:true}).tap();
-        const dialog = page.getByRole('dialog');
-        await expect(dialog).toBeVisible();
-        await dialog.getByRole('button',{name:'Zoom in',exact:true}).tap();
-        await expect(dialog.getByLabel('Zoom level')).toHaveText('125%');
-        const controls = await dialog.locator('button').evaluateAll(buttons => buttons.filter(b=>b.getBoundingClientRect().width).map(b=>({label:b.getAttribute('aria-label'),r:b.getBoundingClientRect().toJSON()})));
-        for (const {label,r} of controls) {
-          expect(r.left, label || '').toBeGreaterThanOrEqual(0);
-          expect(r.right, label || '').toBeLessThanOrEqual(viewport.width+1);
-          expect(r.bottom, label || '').toBeLessThanOrEqual(viewport.height+1);
-        }
-        await dialog.getByRole('button',{name:'Comment on media',exact:true}).tap();
-        await page.setViewportSize({width:viewport.width,height:330});
-        const composer = page.getByRole('group',{name:'Add report comment',exact:true});
-        await expect(composer).toBeVisible();
-        await expect.poll(async () => (await composer.boundingBox())!.y + (await composer.boundingBox())!.height).toBeLessThanOrEqual(330);
-        await composer.getByRole('button',{name:'Delete comment',exact:true}).tap();
-        await page.setViewportSize(viewport);
-        const close = dialog.getByRole('button',{name:'Close media viewer',exact:true});
-        expect((await close.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-        await close.tap();
-        await expect(dialog).toHaveCount(0);
-        await page.getByRole('button',{name:'Enlarge Field at the start',exact:true}).first().tap();
-        await expect(dialog).toBeVisible();
-        await dialog.getByRole('button',{name:'Zoom in',exact:true}).tap();
-        await expect(dialog.getByLabel('Zoom level')).toHaveText('125%');
-        await dialog.getByRole('button',{name:'Close media viewer',exact:true}).tap();
       });
     }

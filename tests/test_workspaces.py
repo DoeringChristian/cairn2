@@ -1,13 +1,9 @@
-import io
-import json
 import sqlite3
 from contextlib import closing
 
 import pytest
-from test_http import serve
 
-from cairn import Client, Conflict, NotFound, Unsupported, ValidationError
-from cairn.cli import main
+from cairn import Conflict, NotFound, Unsupported, ValidationError
 from cairn.ops import export_repository, import_repository
 from cairn.storage import Repository
 
@@ -124,51 +120,3 @@ def test_schema_10_repositories_gain_workspaces(tmp_path):
     with closing(Repository(tmp_path, migrate=True)) as repo:
         assert repo.report(report["id"])["name"] == "study"
         assert repo.write_workspace("demo", "training", layout())["revision"] == 1
-
-
-def test_clients_write_workspaces_by_name_over_http(tmp_path, monkeypatch):
-    monkeypatch.setenv("CAIRN_STATE_DIR", str(tmp_path / "state"))
-    repository = Repository(tmp_path / "repository")
-    try:
-        with serve(repository) as url, Client(url, token="test-token", project="demo") as client:
-            written = client.write_workspace("training", layout(), expected_revision=0, by="agent")
-            assert written["revision"] == 1
-            with pytest.raises(Conflict):
-                client.write_workspace("training", layout(search="x"), expected_revision=0)
-            with pytest.raises(ValidationError, match="unknown keys"):
-                client.write_workspace("training", layout(colour="red"))
-            assert client.workspace("training")["layout"] == layout()
-            assert [item["name"] for item in client.workspaces()] == ["training"]
-            client.delete_workspace("training")
-            with pytest.raises(NotFound):
-                client.workspace("training")
-    finally:
-        repository.close()
-
-
-def test_workspace_cli_writes_layouts_from_json(tmp_path, capsys, monkeypatch):
-    base = ["--repo", str(tmp_path / "repo"), "--project", "demo", "workspace"]
-    source = tmp_path / "layout.json"
-    value = layout()
-    del value["name"]
-    source.write_text(json.dumps(value))
-    assert main([*base, "write", "training", str(source), "--revision", "0", "--by", "agent"]) == 0
-    assert json.loads(capsys.readouterr().out)["revision"] == 1
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(layout(search="x"))))
-    assert main([*base, "write", "training", "--revision", "1"]) == 0
-    assert json.loads(capsys.readouterr().out)["revision"] == 2
-    assert main([*base, "show", "training"]) == 0
-    shown = json.loads(capsys.readouterr().out)
-    assert (shown["revision"], shown["layout"]["search"]) == (2, "x")
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(shown)))
-    assert main([*base, "write", "training", "--revision", "2"]) == 0
-    assert json.loads(capsys.readouterr().out)["revision"] == 2
-    monkeypatch.setattr("sys.stdin", io.StringIO("{not json"))
-    assert main([*base, "write", "training"]) != 0
-    assert "not JSON" in capsys.readouterr().err
-    assert main([*base, "list"]) == 0
-    assert [item["name"] for item in json.loads(capsys.readouterr().out)] == ["training"]
-    assert main([*base, "delete", "training"]) == 0
-    capsys.readouterr()
-    assert main([*base, "list"]) == 0
-    assert json.loads(capsys.readouterr().out) == []

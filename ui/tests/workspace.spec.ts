@@ -14,8 +14,8 @@ const stored=(page:Page,name:string,inProject=project,repository='workspace-test
 async function workspaceServer(page:Page){
   const server={repository:'workspace-tests',items:[] as Stored[]};servers.set(page,server);
   const mine=()=>server.items.filter(i=>i.repository===server.repository);
-  await page.route('**/v1/workspaces?*',r=>r.fulfill({json:mine().filter(i=>i.project===new URL(r.request().url()).searchParams.get('project')).map(({layout,repository,...summary})=>summary)}));
-  await page.route('**/v1/workspaces/*',r=>{const item=mine().find(i=>r.request().url().endsWith(i.id));return item?r.fulfill({json:item}):r.fulfill({status:404,json:{error:{message:'Unknown workspace'}}});});
+  await page.route('**/ui-api/workspaces?*',r=>r.fulfill({json:mine().filter(i=>i.project===new URL(r.request().url()).searchParams.get('project')).map(({layout,repository,...summary})=>summary)}));
+  await page.route('**/ui-api/workspaces/*',r=>{const item=mine().find(i=>r.request().url().endsWith(i.id));return item?r.fulfill({json:item}):r.fulfill({status:404,json:{error:{message:'Unknown workspace'}}});});
   await page.route('**/ui-api/workspaces',r=>{
     const body=r.request().postDataJSON(),item=mine().find(i=>i.project===body.project&&i.name===body.name),revision=item?.revision||0;
     if(body.expected_revision!==revision)return r.fulfill({status:409,json:{error:{message:'Workspace changed since it was read'}}});
@@ -40,13 +40,13 @@ async function serveRecords(page:Page,records:(id:string)=>any[],state='finished
 async function fixture(page:Page,projects=[project]){
   await workspaceServer(page);
   await page.route('**/ui-api/session',r=>r.fulfill({json:{authenticated:true,no_auth:true,repository_id:'workspace-tests'}}));
-  await page.route('**/ui-api/projects',r=>r.fulfill({json:projects.map(name=>({name,runs:name===project?3:0,reports:0,artifacts:name===project?3:0}))}));
+  await page.route('**/ui-api/projects',r=>r.fulfill({json:projects.map(name=>({name,runs:name===project?3:0,artifacts:name===project?3:0}))}));
   await page.route('**/ui-api/artifacts?*',r=>{const offset=Number(new URL(r.request().url()).searchParams.get('offset'));return r.fulfill({json:{items:runs.slice(offset,offset+2),total:runs.length}});});
   await page.route('**/ui-api/artifacts/*/history',r=>r.fulfill({json:runs.filter(a=>a.name===runs.find(item=>r.request().url().includes(`/artifacts/${item.id}/`))?.name)}));
   await page.route('**/v1/resolutions',r=>r.fulfill({json:runs.filter(a=>r.request().postDataJSON().refs.includes(a.id))}));
   await serveRecords(page,id=>[{step:0,loss:3,quality:30,elapsed:0,camera:'front',camera_angle:0,image,video,figure},...(id==='b'?[]:[{step:1,loss:2,quality:20,elapsed:10,camera:'front',camera_angle:0,image,video,figure}]),{step:2,loss:1,quality:10,elapsed:20,camera:'front',camera_angle:0,image,video,figure}]);
   await page.route('**/v1/blobs/test-png',r=>r.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64')}));
-  await page.route('**/v1/blobs/test-mp4',r=>r.fulfill({contentType:'application/octet-stream',body:readFileSync(new URL('../../examples/report-showcase/assets/wave-evolution.mp4',import.meta.url))}));
+  await page.route('**/v1/blobs/test-mp4',r=>r.fulfill({contentType:'application/octet-stream',body:readFileSync(new URL('../../examples/showcase/assets/wave-evolution.mp4',import.meta.url))}));
   await page.goto(`/p/${project}/workspace?example=cards`);
   await expect(page.locator('.workspace-data-status')).toContainText('2 runs · 5 records');
 }

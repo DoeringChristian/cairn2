@@ -1,7 +1,7 @@
 # Cairn2
 
-Cairn stores experiments, files, datasets and models using one artifact
-lifecycle, and reports that plan and explain them. Choose one repository: a local SQLite database with files, or an HTTP
+Cairn logs experiments and stores files, datasets and models using one artifact
+lifecycle, with fast lookups. Choose one repository: a local SQLite database with files, or an HTTP
 server backed by SQLite or PostgreSQL and a filesystem or S3 object store.
 An artifact keeps one ID throughout its lifetime: writable while live, immutable
 once finished. Version labels and aliases point directly to artifacts.
@@ -13,10 +13,11 @@ determine how their contents are interpreted and rendered. Names can include
 further slashes, as in `models/training/checkpoint@latest`.
 
 This repository contains the Python API, storage implementation, authenticated
-HTTP API, CLI, and the browser UI with its report editor.
+HTTP API, CLI, and the browser explorer.
 
 [`examples/`](examples/) has small projects: a Hydra training sweep submitted
-with Slurm, PBS, submitit or HyperQueue, a Make/Snakemake pipeline, and a report tour.
+with Slurm, PBS, submitit or HyperQueue, a Make/Snakemake pipeline, and a tour of
+records, media and viewers.
 
 ## Install
 
@@ -345,38 +346,6 @@ cairn --repo ./results --project study artifact list --namespace runs --state fi
   --where '{"path":"/annotations/tags","op":"contains","value":"paper"}'
 ```
 
-## Comments
-
-Comments made in the UI anchor to a report passage (part, lines, quote) or a
-figure, or to an exact artifact version. An agent or script can pull the open ones,
-answer, address them and mark them resolved:
-
-```sh
-cairn comments list 'reports/**'                # open comments on every report
-cairn comments list 'reports/**' --json         # full anchors for agents
-cairn comments list                             # open comments in the whole project
-cairn comments reply c_123 "Narrowed the sweep" --by agent
-cairn comments resolve c_123 --note "Now 5 learning rates" --by agent
-cairn comments reopen c_123
-cairn comments watch 'reports/**'               # threads as they are sent to an agent
-```
-
-Replies form a thread under the comment they answer; resolving, reopening or
-deleting the first comment covers its replies. In the UI, Enter or the send button queues a message for the agent; Shift+Enter
-inserts a newline. Clicking away saves an editable draft without sending it,
-including for replies. Sent messages are read-only in the floating conversation.
-`cairn comments watch` prints each open thread whenever a comment in it is sent,
-so an agent running it in the background is woken by every comment you finish;
-`--json` prints each batch as one line. `--once` waits for threads with a comment sent after
-their last reply, prints them and exits, for agents that are woken when a command ends.
-
-`--all` includes resolved comments and `--exact` limits the list to the referenced
-version. Python offers `client.comments(ref=None, scope="name", include_resolved=False)`,
-`client.reply_comment(id, body, by=...)`, `client.send_comment(id)`,
-`client.resolve_comment(id, note=..., by=...)` and `client.reopen_comment(id)`.
-The UI hides resolved comments unless "Show resolved comments" is on. Authors and
-resolvers are free text; Cairn has no user accounts.
-
 ## Select a repository and authenticate
 
 A project configures Cairn with a `.cairn.toml` file:
@@ -527,121 +496,35 @@ cairn --repo ./results server
 
 The server serves the bundled React UI and prints an immediate login link.
 Browser sessions end after 7 days without use. Use `--no-ui` for API-only operation or
-`--no-auth` for local development without a token. Reports are the project's
-start page: Markdown you edit in place, where only the block under the cursor shows its source, with the agent's answers, figures
-and media from artifacts, a table of contents, source copying, and comments.
-Artifact/run pages include lineage, records, files, editable tags for one version
+`--no-auth` for local development without a token. Artifact/run pages include lineage, records, files, editable tags for one version
 or all versions, and click-to-copy IDs. The project Workspace displays scalar,
 image, video, and Plotly cards directly from run records, with comparisons, galleries,
 axis sliders, resizable sections, and layouts saved in the project, shared by everyone
 who opens it. See the
 [training card tour](examples/training/README.md#workspace-card-tour).
 
-Agents and scripts read and write the same layouts as JSON (its fields are listed in
-[the contract](docs/CONTRACT.md#workspaces)); every save is a revision:
-
-```sh
-cairn workspace list
-cairn workspace show training > layout.json            # a layout to start from
-cairn workspace write training layout.json --revision 2 --by agent
-cairn workspace write sweep sweep.json --revision 0    # a new one
-cairn workspace delete sweep
-```
-
 The UI source lives in [ui/](ui/README.md). Rebuild the bundled assets after
 changes with `npm ci --prefix ui && npm run build --prefix ui`.
 
-## Reports
+## Viewers
 
-A report is where you write down a project: its goal, the direction, the
-experiments to run and what to show. It is a document you edit in the browser as you
-read it, and it runs no code. It edits like Obsidian: everything renders, and only what
-the cursor is in shows its Markdown, as text you edit and delete like any other. Type
-`@agent ` on a line of its own where the agent should work: an agent block appears, you
-write the request, and the agent's answer shows in that block, with your conversation
-folded below it. A new report can start blank, from a template (a research direction, an
-inspection, a comparison) or as a copy of another.
+A viewer is an artifact's HTML file, for example a three.js mesh viewer published as
+`viewers/mesh` with its libraries beside `index.html`. A workspace Viewer card shows one:
 
-Agents read and write the same document as Markdown, where an agent block is a line of
-its own:
-
-```markdown
-# Thin-shell SDF
-
-Goal: beat the baseline on thin features without losing training speed.
-
-<?cairn agent baseline?>
-```
-
-Figures, video, audio and values come from artifacts, never from the report:
-`![Error on the test mesh](cairn:runs/train@latest#plots/err.png)` on a line of its
-own shows the file captured as `plots/err.png` by the latest `runs/train`, and
-`![](cairn:runs/train@v3)` shows that version's value. Plotly figures stay interactive,
-and captured tables show as tables. Reports also have tables, math, callouts
-(`::: {.callout-warning}`) and code.
-
-A viewer is an artifact's HTML file; agents write them, for example a three.js mesh
-viewer published as `viewers/mesh` with its libraries beside `index.html`. A `view`
-block shows one with settings:
-
-````markdown
-```view
+```yaml
 viewer: cairn:viewers/mesh@v1#index.html
 caption: Lucy decimated to 250k and 50k triangles
-up: z
 meshes:
   - label: 250k triangles
     file: cairn:datasets/lucy@v2#lucy-250k.obj
-  - label: 50k triangles
-    file: cairn:datasets/lucy@v2#lucy-50k.obj
 ```
-````
 
 `viewer` and `caption` are reserved; every other key is the viewer's own setting. The
-viewer runs in a sandboxed frame that cannot reach the report or the session, and
+viewer runs in a sandboxed frame that cannot reach the page or the session, and
 reads its settings as JSON from its URL fragment
 (`JSON.parse(decodeURIComponent(location.hash.slice(1)))`), each `cairn:REF#file`
 string replaced by a link to that file. It loads its own files by relative path and
-may post `{type: "cairn-html-size", height}` to its parent. Without settings,
-`![](cairn:viewers/mesh@v1#index.html)` shows a viewer directly, and a workspace
-Viewer card takes the same YAML, so a figure and a card are interchangeable.
-
-Each agent block shows its request and the agent's result; the rest of the
-conversation folds away below it. That conversation is the block's comments without a
-quote, and its first message is the request: `cairn report comment study "…" --part baseline` adds to it, `report watch`
-wakes on what you send there, and `cairn comments reply` answers.
-
-A report is not an artifact: it has no versions or lineage, but every saved text of
-each part is kept as a revision, and an edit made against an older revision is
-refused instead of overwriting. Agents work on reports by name:
-
-```sh
-cairn report list
-cairn report new study body.md                  # Markdown, or create it in the UI
-cairn report new study/grids notes.md --owner agent --origin study --slot directions
-cairn report owner study/grids user             # take an agent's report over
-cairn report show study                         # every part; the body also as markdown
-cairn report write study baseline answer.md --by agent   # or - for standard input
-cairn report comment study "Three rates may miss the optimum" \
-  --quote "Train the baseline at 3 learning rates" --by agent
-cairn report watch study --after 4              # wait for edits or sent comments
-cairn report delete study
-```
-
-An agent's report (`--owner agent`) is the agent's to write: the UI shows it read-only,
-you steer it with comments, and **Take over** makes it yours to edit. `--origin` and
-`--slot` place it under the report and agent block that asked for it; the UI shows
-such reports as cards there, and as a tree under their origin in the report list.
-
-`report watch` prints the report and its waiting threads as one JSON line and
-exits when the body passes revision `--after` (by default the current one) and has
-rested for `--settle` seconds (30), or when a thread has a comment sent after its
-last reply, so an agent running it in the background is woken by both. Python
-offers the same through `client.reports()`, `client.report(name)`,
-`client.create_report(name, body)`, `client.write_report(name, part, source,
-expected_revision=..., by=...)`, `client.comment_report(name, body, quote=...)` and
-`client.delete_report(name)`. Analyses that used to run inside a report are runs
-now: they record what they read and log their figures, which the report references.
+may post `{type: "cairn-html-size", height}` to its parent.
 
 ## Transfer and maintain a repository
 
@@ -668,7 +551,7 @@ cairn repo \
 For another SQLite/files destination, use
 `cairn --repo ./restored repo import ./cairn-transfer`. Export requires a new
 destination directory. Artifact, writer and record identities, version labels,
-aliases, annotations, comments and dependencies are preserved. The destination keeps its own
+aliases, annotations and dependencies are preserved. The destination keeps its own
 repository identity. Conflicting data fails rather than merging silently;
 reimporting identical data is idempotent. Imported producer handles are closed.
 Live artifacts remain live under the same IDs and can attach new producers;
@@ -723,7 +606,7 @@ tools are excluded from that runtime count. PostgreSQL integration tests use
 against an existing service.
 
 The API provides one artifact lifecycle, multiple producers, alias compare-and-swap,
-typed values, comments, SQL-filtered record queries, streaming blobs and explicit
+typed values, SQL-filtered record queries, streaming blobs and explicit
 transfer/maintenance. Runs automatically capture client-side provenance and console output. The
 backend has one shared token and ordinal query ordering; no code execution
 or AI integration. Unknown schemas fail explicitly: repository schema **11**, HTTP

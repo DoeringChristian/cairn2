@@ -27,111 +27,12 @@ def _json(value: str):
         raise argparse.ArgumentTypeError(f"Invalid JSON: {exc}") from exc
 
 
-def _watch_comments(client, reference, interval, as_json, once=False):
-    """Open threads with comments sent to an agent, printed again whenever one is (re)sent.
-
-    With ``once``, wait for threads with a comment sent after their last reply, print them and stop.
-    """
-    import time
-
-    import httpx
-
-    from .model import Pending
-
-    seen = set()
-    while True:
-        try:
-            found = client.comments(reference, include_resolved=False)
-        except (Pending, httpx.TransportError) as exc:
-            print(f"cairn: {exc}; retrying", file=sys.stderr)
-            found = []
-        threads = {}
-        for comment in found:
-            threads.setdefault(comment["reply_to"] or comment["id"], []).append(comment)
-        batch = [
-            thread
-            for thread in threads.values()
-            if any(c["sent_at"] and (c["id"], c["sent_at"]) not in seen for c in thread)
-            and (not once or _unanswered(thread))
-        ]
-        seen.update((c["id"], c["sent_at"]) for thread in batch for c in thread if c["sent_at"])
-        if batch:
-            if as_json:
-                print(json.dumps(batch, ensure_ascii=False), flush=True)
-            else:
-                print("\n".join(_comment_line(c) for thread in batch for c in thread), flush=True)
-            if once:
-                return 0
-        time.sleep(interval)
-
-
-def _watch_report(client, name, after, settle, interval):
-    """Wait for body edits past revision ``after`` that rested ``settle`` seconds, or for threads
-    with a comment sent after their last reply; print the report with them and stop."""
-    import time
-    from datetime import UTC, datetime
-
-    import httpx
-
-    from .model import Pending
-
-    report_id = client._report_id(name)
-    while True:
-        try:
-            report = client.report(name)
-            found = client.backend.report_comments(report_id, include_resolved=False)
-        except (Pending, httpx.TransportError) as exc:
-            print(f"cairn: {exc}; retrying", file=sys.stderr)
-            time.sleep(interval)
-            continue
-        body = report["parts"]["body"]
-        after = body["revision"] if after is None else after
-        rested = datetime.now(UTC) - datetime.fromisoformat(body["updated_at"])
-        edited = body["revision"] > after and rested.total_seconds() >= settle
-        threads = {}
-        for comment in found:
-            threads.setdefault(comment["reply_to"] or comment["id"], []).append(comment)
-        waiting = [thread for thread in threads.values() if _unanswered(thread)]
-        if edited or waiting:
-            print(
-                json.dumps({"report": report, "edited": edited, "threads": waiting}),
-                flush=True,
-            )
-            return 0
-        time.sleep(interval)
-
-
-def _unanswered(thread):
-    answered = max((c["created_at"] for c in thread if not c["for_agent"]), default="")
-    return any(c["sent_at"] and c["sent_at"] > answered for c in thread)
-
-
 def _source(path):
     return sys.stdin.read() if path == "-" else Path(path).read_text("utf-8")
 
 
 def _print(value):
     print(json.dumps(value, ensure_ascii=False, allow_nan=False, indent=2, default=str))
-
-
-def _comment_line(comment):
-    anchor, where = comment["anchor"], comment["anchor"].get("path", "-")
-    if "line_start" in anchor:
-        end = anchor.get("line_end", anchor["line_start"])
-        where += f":{anchor['line_start']}" + (f"-{end}" if end != anchor["line_start"] else "")
-    target = f"{comment['namespace']}/{comment['name']}"
-    parts = [comment["id"], target + (f"@v{comment['number']}" if comment["number"] else ""), where]
-    if comment.get("reply_to"):
-        parts[1:] = [f"↳ {comment['reply_to']}"]
-    if comment.get("author"):
-        parts.append(f"({comment['author']})")
-    if "time" in anchor.get("media", {}):
-        parts.append(f"@{anchor['media']['time']:.1f}s")
-    if anchor.get("quote"):
-        parts.append(json.dumps(anchor["quote"], ensure_ascii=False))
-    if comment["resolved_at"]:
-        parts.append("[resolved]")
-    return "  ".join(parts) + "  → " + comment["body"].replace("\n", "\n    ")
 
 
 def _start_arguments(parser, namespace="artifacts"):
@@ -185,7 +86,7 @@ def _storage_arguments(parser):
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(
-        prog="cairn", description="Versioned artifacts, Python runs, and reports."
+        prog="cairn", description="Log runs, store versioned artifacts, and find them again."
     )
     root.add_argument(
         "--repo", metavar="PATH|URL", help="Repository path or server URL (otherwise discovery)"
@@ -225,40 +126,6 @@ def parser() -> argparse.ArgumentParser:
     gc.add_argument("--grace-seconds", type=int, default=3600)
     gc.add_argument("--apply", action="store_true", help="Delete; otherwise print a dry run")
     gc.set_defaults(action="gc")
-    comments = commands.add_parser(
-        "comments", help="List and resolve comments made in the UI"
-    ).add_subparsers(dest="comments_command", required=True)
-    listing = comments.add_parser(
-        "list", help="Open comments on every version of a name, or in the whole project"
-    )
-    listing.add_argument("reference", nargs="?", help="A reference or name pattern; default all")
-    listing.add_argument("--all", action="store_true", help="Include resolved comments")
-    listing.add_argument("--exact", action="store_true", help="Only the referenced version")
-    listing.add_argument("--json", action="store_true", help="Print full comment objects")
-    listing.set_defaults(action="comments")
-    reply = comments.add_parser("reply", help="Answer a comment in its thread")
-    reply.add_argument("comment_id")
-    reply.add_argument("body")
-    reply.add_argument("--by", help="Who answers, e.g. an agent name")
-    reply.set_defaults(action="comment-reply")
-    watch = comments.add_parser(
-        "watch", help="Print comment threads as they are sent to an agent, until interrupted"
-    )
-    watch.add_argument("reference", nargs="?", help="A reference or name pattern; default all")
-    watch.add_argument("--interval", type=float, default=5.0, help="Seconds between checks")
-    watch.add_argument("--json", action="store_true", help="Print each batch as one JSON line")
-    watch.add_argument(
-        "--once", action="store_true", help="Stop after the first batch of unanswered threads"
-    )
-    watch.set_defaults(action="comment-watch")
-    resolve = comments.add_parser("resolve", help="Mark a comment as addressed")
-    resolve.add_argument("comment_id")
-    resolve.add_argument("--note", help="What was done, shown beside the comment")
-    resolve.add_argument("--by", help="Who resolved it, e.g. an agent name")
-    resolve.set_defaults(action="comment-resolve")
-    reopen = comments.add_parser("reopen", help="Mark a resolved comment as open again")
-    reopen.add_argument("comment_id")
-    reopen.set_defaults(action="comment-reopen")
 
     artifacts = commands.add_parser(
         "artifact", help="Artifact lifecycle and records"
@@ -319,83 +186,6 @@ def parser() -> argparse.ArgumentParser:
     update.add_argument("writer")
     update.add_argument("data", type=_json)
     update.set_defaults(action="log", kind="metadata", sequence=None)
-
-    reports = commands.add_parser(
-        "report", help="Reports: the author's text with slots that agents fill"
-    ).add_subparsers(dest="report_command", required=True)
-    reports.add_parser("list", help="Reports of the project").set_defaults(action="report-list")
-    for operation, text in (
-        ("show", "Print a report's parts with their revisions"),
-        ("delete", "Remove a report with its revisions and comments"),
-    ):
-        sub = reports.add_parser(operation, help=text)
-        sub.add_argument("name")
-        sub.set_defaults(action="report-" + operation)
-    new = reports.add_parser("new", help="Create a report")
-    new.add_argument("name")
-    new.add_argument(
-        "source", nargs="?", help="Markdown file with the body, or - for standard input"
-    )
-    new.add_argument("--by", help="Who writes it")
-    new.add_argument(
-        "--owner", choices=["user", "agent"], default="user", help="Who writes the body"
-    )
-    new.add_argument("--origin", help="The report that asked for this one")
-    new.add_argument("--slot", help="The origin's agent slot that asked for it")
-    new.set_defaults(action="report-new")
-    owner = reports.add_parser("owner", help="Hand a report's body to the user or an agent")
-    owner.add_argument("name")
-    owner.add_argument("owner", choices=["user", "agent"])
-    owner.set_defaults(action="report-owner")
-    write = reports.add_parser("write", help="Save a new revision of one part")
-    write.add_argument("name")
-    write.add_argument("part", help="An agent slot, or body for the author's Markdown")
-    write.add_argument("source", nargs="?", default="-", help="File, or - for standard input")
-    write.add_argument("--revision", type=int, help="Fail unless the part is at this revision")
-    write.add_argument("--by", help="Who writes it, e.g. an agent name")
-    write.set_defaults(action="report-write")
-    comment = reports.add_parser("comment", help="Comment on a part, e.g. to flag a problem")
-    comment.add_argument("name")
-    comment.add_argument("body")
-    comment.add_argument("--quote", help="The passage the comment is about")
-    comment.add_argument("--part", default="body")
-    comment.add_argument("--by", help="Who comments, e.g. an agent name")
-    comment.set_defaults(action="report-comment")
-    watch = reports.add_parser(
-        "watch", help="Wait for edits to the body or comments sent to an agent, print them, stop"
-    )
-    watch.add_argument("name")
-    watch.add_argument(
-        "--after", type=int, help="Body revision already handled; default the current one"
-    )
-    watch.add_argument(
-        "--settle", type=float, default=30.0, help="Seconds an edit rests before it counts"
-    )
-    watch.add_argument("--interval", type=float, default=5.0, help="Seconds between checks")
-    watch.set_defaults(action="report-watch")
-    workspaces = commands.add_parser(
-        "workspace", help="Workspaces: named layouts of cards over a project's runs"
-    ).add_subparsers(dest="workspace_command", required=True)
-    workspaces.add_parser("list", help="Workspaces of the project").set_defaults(
-        action="workspace-list"
-    )
-    for operation, text in (
-        ("show", "Print a workspace's layout and revision"),
-        ("delete", "Remove a workspace with every revision of its layout"),
-    ):
-        sub = workspaces.add_parser(operation, help=text)
-        sub.add_argument("name")
-        sub.set_defaults(action="workspace-" + operation)
-    write = workspaces.add_parser("write", help="Save a layout, creating the workspace if needed")
-    write.add_argument("name")
-    write.add_argument(
-        "source", nargs="?", default="-", help="Layout JSON file, or - for standard input"
-    )
-    write.add_argument(
-        "--revision", type=int, help="Fail unless the workspace is at this revision; 0: new"
-    )
-    write.add_argument("--by", help="Who writes it, e.g. an agent name")
-    write.set_defaults(action="workspace-write")
 
     repository_parser = commands.add_parser(
         "repo", help="Repository transfer, integrity checks and garbage collection"
@@ -657,25 +447,6 @@ def _dispatch(args, client):
             target="name" if args.name else "artifact",
             request_id=args.request_id,
         )
-    if action == "comments":
-        found = client.comments(
-            args.reference,
-            scope="artifact" if args.exact else "name",
-            include_resolved=args.all,
-        )
-        if args.json:
-            return found
-        for comment in found:
-            print(_comment_line(comment))
-        return 0
-    if action == "comment-reply":
-        return client.reply_comment(args.comment_id, args.body, by=args.by)
-    if action == "comment-watch":
-        return _watch_comments(client, args.reference, args.interval, args.json, args.once)
-    if action == "comment-resolve":
-        return client.resolve_comment(args.comment_id, note=args.note, by=args.by)
-    if action == "comment-reopen":
-        return client.reopen_comment(args.comment_id)
     if action == "versions":
         return backend.versions(args.artifact_id, project=client.project)
     if action == "writer":
@@ -692,47 +463,6 @@ def _dispatch(args, client):
                 _close_writer(backend, args.artifact_id, args.writer)
             kwargs.update(outcome=args.outcome)
         return getattr(backend, action)(args.artifact_id, **kwargs)
-    if action == "report-list":
-        return client.reports()
-    if action == "report-show":
-        return client.report(args.name)
-    if action == "report-delete":
-        return client.delete_report(args.name)
-    if action == "report-new":
-        body = _source(args.source) if args.source else ""
-        return client.create_report(
-            args.name, body, by=args.by, owner=args.owner, origin=args.origin, slot=args.slot
-        )
-    if action == "report-owner":
-        return client.set_report_owner(args.name, args.owner)
-    if action == "report-write":
-        return client.write_report(
-            args.name, args.part, _source(args.source), expected_revision=args.revision, by=args.by
-        )
-    if action == "report-comment":
-        return client.comment_report(
-            args.name, args.body, quote=args.quote, part=args.part, by=args.by
-        )
-    if action == "report-watch":
-        return _watch_report(client, args.name, args.after, args.settle, args.interval)
-    if action == "workspace-list":
-        return client.workspaces()
-    if action == "workspace-show":
-        return client.workspace(args.name)
-    if action == "workspace-delete":
-        return client.delete_workspace(args.name)
-    if action == "workspace-write":
-        try:
-            layout = json.loads(_source(args.source))
-        except ValueError as exc:
-            raise ValidationError(f"The layout is not JSON: {exc}") from None
-        if isinstance(layout, dict) and isinstance(layout.get("layout"), dict):
-            layout = layout["layout"]  # as `workspace show` prints it
-        if isinstance(layout, dict):
-            layout.setdefault("name", args.name)
-        return client.write_workspace(
-            args.name, layout, expected_revision=args.revision, by=args.by
-        )
     if action.startswith("repo-"):
         from .ops import check_repository, export_repository, import_repository
         from .storage import Repository

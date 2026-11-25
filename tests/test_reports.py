@@ -1,13 +1,10 @@
-import json
 import sqlite3
 from contextlib import closing
 
 import pytest
 import sqlalchemy as sa
-from test_http import serve
 
-from cairn import CapacityError, Client, Conflict, NotFound, Unsupported, ValidationError, documents
-from cairn.cli import main
+from cairn import CapacityError, Conflict, NotFound, Unsupported, ValidationError, documents
 from cairn.ops import check_repository, export_repository, import_repository
 from cairn.storage import Repository, annotations_table, report_parts
 
@@ -170,84 +167,3 @@ def test_schema_9_reports_gain_an_owner_and_origin(tmp_path):
         assert repo.report(report["id"])["owner"] == "user"
         child = repo.create_report("demo", "study/a", owner="agent", origin_id=report["id"])
         assert child["origin_id"] == report["id"]
-
-
-def test_clients_edit_reports_by_name_over_http(tmp_path):
-    repository = Repository(tmp_path / "repository")
-    try:
-        with serve(repository) as url, Client(url, token="test-token", project="demo") as client:
-            client.create_report("study", "# Plan\n\n<?cairn agent baseline?>\n")
-            written = client.write_report("study", "baseline", "Chamfer 0.41.", by="agent")
-            assert written["revision"] == 1
-            with pytest.raises(Conflict):
-                client.write_report("study", "baseline", "Stale.", expected_revision=0)
-            comment = client.comment_report("study", "Seeds?", quote="Plan", by="agent")
-            assert comment["anchor"] == {"path": "body", "quote": "Plan"}
-            report = client.report("study")
-            assert report["parts"]["baseline"]["author"] == "agent"
-            assert report["parts"]["body"]["markdown"] == "# Plan\n\n<?cairn agent baseline?>\n"
-            assert [item["name"] for item in client.reports()] == ["study"]
-            assert [c["body"] for c in client.comments("reports/**")] == ["Seeds?"]
-            client.delete_report("study")
-            with pytest.raises(NotFound):
-                client.report("study")
-    finally:
-        repository.close()
-
-
-def test_report_cli_writes_parts_and_waits_for_edits_and_sent_comments(
-    tmp_path, capsys, monkeypatch
-):
-    path = tmp_path / "repo"
-    base = ["--repo", str(path), "--project", "demo", "report"]
-    source = tmp_path / "body.md"
-    source.write_text("# Plan\n")
-    assert main([*base, "new", "study", str(source)]) == 0
-    report = json.loads(capsys.readouterr().out)
-    monkeypatch.setattr("sys.stdin", __import__("io").StringIO("Queued."))
-    assert main([*base, "write", "study", "baseline", "--by", "agent"]) == 0
-    assert json.loads(capsys.readouterr().out)["revision"] == 1
-    assert main([*base, "comment", "study", "Too broad", "--quote", "Plan"]) == 0
-    capsys.readouterr()
-    checks = []
-
-    def sleep(seconds):
-        checks.append(seconds)
-        with closing(Repository(path)) as repo:
-            if len(checks) == 1:
-                repo.write_report(report["id"], "body", doc("# Plan v2"))
-            elif len(checks) == 2:
-                question = repo.report_comments(report["id"])[0]
-                repo.update_comment(question["id"], "Too broad?", for_agent=True)
-                repo.send_comment(question["id"])
-
-    monkeypatch.setattr("time.sleep", sleep)
-    assert main([*base, "watch", "study", "--settle", "3600", "--interval", "0.1"]) == 0
-    woken = json.loads(capsys.readouterr().out)
-    assert len(checks) == 2 and not woken["edited"]
-    assert [[c["body"] for c in thread] for thread in woken["threads"]] == [["Too broad?"]]
-    assert woken["report"]["parts"]["body"]["revision"] == 2
-    with closing(Repository(path)) as repo:
-        question = repo.report_comments(report["id"])[0]
-        repo.reply_comment(question["id"], "Narrowed it.", author="agent")
-    assert main([*base, "watch", "study", "--after", "1", "--settle", "0"]) == 0
-    woken = json.loads(capsys.readouterr().out)
-    assert woken["edited"] and woken["threads"] == []
-    assert main([*base, "show", "study"]) == 0
-    assert json.loads(capsys.readouterr().out)["parts"]["baseline"]["source"] == "Queued."
-
-
-def test_report_cli_creates_agent_reports_under_their_origin(tmp_path, capsys):
-    base = ["--repo", str(tmp_path / "repo"), "--project", "demo", "report"]
-    assert main([*base, "new", "plan"]) == 0
-    plan = json.loads(capsys.readouterr().out)
-    child = [*base, "new", "plan/grids", "--owner", "agent", "--origin", "plan", "--slot", "ideas"]
-    assert main([*child, "--by", "agent"]) == 0
-    created = json.loads(capsys.readouterr().out)
-    assert (created["owner"], created["origin_id"], created["origin_slot"]) == (
-        "agent",
-        plan["id"],
-        "ideas",
-    )
-    assert main([*base, "owner", "plan/grids", "user"]) == 0
-    assert json.loads(capsys.readouterr().out)["owner"] == "user"

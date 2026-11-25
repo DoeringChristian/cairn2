@@ -6,7 +6,6 @@ import { useEffect, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, useResource, artifactPath, when, type Project, type ArtifactSummary } from '../api';
-import { ReportsPage } from '../report/ReportPage';
 import { ActionIcon, Button, Crumbs, DataTable, ErrorNote, Hero, Hint, Loading, MetricCard, MetricGrid, Pill, ProjectCard, SearchInput, Section, Toolbar } from '../components';
 export function ProjectsPage() {
   const [revision, refresh] = useState(0), [search, setSearch] = useState('');
@@ -15,21 +14,21 @@ export function ProjectsPage() {
   useEffect(() => {document.title = 'Projects · Cairn';}, []);
   const filtered = data?.filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
   return <main><Hero eyebrow="Repository" title="Projects" subtitle="A home for your experiments and the evidence behind them." status="Cairn explorer"/>
-    {data && <MetricGrid><MetricCard label="Projects" value={data.length}/><MetricCard label="Artifacts" value={data.reduce((n,p) => n+p.artifacts, 0)} note="Across all namespaces"/><MetricCard label="Reports" value={data.reduce((n,p) => n+p.reports, 0)}/></MetricGrid>}
+    {data && <MetricGrid><MetricCard label="Projects" value={data.length}/><MetricCard label="Artifacts" value={data.reduce((n,p) => n+p.artifacts, 0)} note="Across all namespaces"/><MetricCard label="Runs" value={data.reduce((n,p) => n+p.runs, 0)}/></MetricGrid>}
     <Section title="Your projects" actions={<ActionIcon label="Refresh" onClick={() => refresh(n=>n+1)}><RefreshCw size={17} aria-hidden="true"/></ActionIcon>}><Toolbar><SearchInput label="Search projects" value={search} onChange={setSearch}/></Toolbar>
     {loading && <Loading/>}{error && <ErrorNote error={error}/>}{data?.length === 0 && <Hint>No projects yet. Record an experiment or publish an artifact to get started.</Hint>}
     {!!filtered?.length && <div className="project-grid">{filtered.map(p=><ProjectCard key={p.name} project={p}/>)}</div>}
     {!!data?.length && !filtered?.length && <Hint>No projects match “{search}”.</Hint>}</Section></main>;
 }
 export function ProjectPage() {
-  const [params] = useSearchParams();
-  return (params.get('view') ?? 'reports') === 'reports' ? <ReportsPage/> : <ArtifactList/>;
+  return <ArtifactList/>;
 }
 function ArtifactList() {
   const {project = ''} = useParams();
   const paused = useRefreshMode();
   const [params, setParams] = useSearchParams();
-  const tab = params.get('view') ?? 'runs';
+  const view = params.get('view');
+  const tab = view === 'artifacts' || view === 'all' ? view : 'runs';
   const [search, setSearch] = useState(''), [revision, refresh] = useState(0);
   const [querySearch, setQuerySearch] = useState('');
   useEffect(() => {const timer = window.setTimeout(() => setQuerySearch(search), 200); return () => clearTimeout(timer);}, [search]);
@@ -81,7 +80,7 @@ function ArtifactList() {
   function toggleTag(tag:string){const next=new URLSearchParams(params);next.delete('page');next.delete('tag');for(const value of selectedTags.includes(tag)?selectedTags.filter(t=>t!==tag):[...selectedTags,tag])next.append('tag',value);setParams(next);}
   function changePage(value: number) {const next=new URLSearchParams(params);next.set('page', String(value));setParams(next);}
   const filtered = items;
-  return <main><Hero eyebrow={<Crumbs items={[{label:'Projects',to:'/'},{label:project}]}/>} title={project} subtitle="Reports, experiments, and the evidence that connects them."/>
+  return <main><Hero eyebrow={<Crumbs items={[{label:'Projects',to:'/'},{label:project}]}/>} title={project} subtitle="Runs, artifacts, and what connects them."/>
     <Section title={tab==='runs'?'Experiment runs':tab==='artifacts'?'Artifact library':'Everything'} actions={<ActionIcon label="Refresh" onClick={refreshList}><RefreshCw size={17} aria-hidden="true"/></ActionIcon>}>
     <Toolbar><SearchInput label="Search artifacts" value={search} onChange={value=>{setSearch(value);if(page)changePage(0);}}/><form onSubmit={e=>{e.preventDefault();const tag=tagDraft.trim();if(tag&&!selectedTags.includes(tag))toggleTag(tag);setTagDraft('');}}><SearchInput label="Filter by tag" value={tagDraft} onChange={setTagDraft}/></form></Toolbar>
     {(!!availableTags.length||!!selectedTags.length)&&<div className="tag-filters" aria-label="Filter by tags"><span className="muted">Tags</span>{[...new Set([...availableTags,...selectedTags])].map(tag=><button type="button" className="tag-chip" key={tag} aria-pressed={selectedTags.includes(tag)} onClick={()=>toggleTag(tag)}>{tag}</button>)}{!!selectedTags.length&&<button type="button" className="tag-clear" onClick={()=>{const next=new URLSearchParams(params);next.delete('tag');next.delete('page');setParams(next);}}>Clear tags</button>}</div>}

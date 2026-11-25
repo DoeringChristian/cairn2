@@ -125,21 +125,12 @@ def test_comments_span_versions_resolve_and_follow_deletion(repo):
 
 
 @pytest.mark.parametrize("backend_fixture", ["backends", "postgres_backends"])
-def test_name_annotations_and_comments_across_transports(request, backend_fixture):
+def test_name_annotations_across_transports(request, backend_fixture):
     direct, remote = request.getfixturevalue(backend_fixture)
     identifier = create(direct)
     remote.annotate(identifier, {"tags": ["paper"]}, target="name")
     later = create(direct)
     assert remote.annotation_layers(later)["name"] == {"tags": ["paper"]}
-    comment = remote.add_comment(identifier, {"path": "r.qmd"}, "Check", author="reviewer")
-    reply = remote.reply_comment(comment["id"], "Why?", for_agent=True)
-    assert remote.send_comment(reply["id"]) == direct.comments(later, scope="name")[1]
-    remote.delete_comment(reply["id"])
-    assert remote.comments(later, scope="name") == direct.comments(later, scope="name")
-    assert remote.comments(later, scope="name") == [comment]
-    assert remote.list_comments(project="study") == direct.list_comments(project="study")
-    assert remote.resolve_comment(comment["id"])["resolved_at"]
-    assert remote.list_comments("runs/**", project="study", include_resolved=False)["items"] == []
     assert check_repository(direct)["ok"]
 
 
@@ -174,60 +165,6 @@ def test_replies_join_threads_and_marked_comments_are_sent_until_edited(repo):
     repo.delete_comment(question["id"])
     assert [item["id"] for item in repo.comments(second, scope="name")] == [aside["id"]]
     assert check_repository(repo)["ok"]
-
-
-def test_comment_cli_replies_and_watches_sent_threads(tmp_path, capsys, monkeypatch):
-    path = tmp_path / "repo"
-    with closing(Repository(path)) as repo:
-        identifier = create(repo)
-        question = repo.add_comment(identifier, {"path": "r.qmd"}, "Why?", for_agent=True)
-        repo.add_comment(identifier, {"path": "r.qmd"}, "Note to self")
-    base = ["--repo", str(path), "--project", "study", "comments"]
-    checks = []
-
-    def sleep(seconds):
-        checks.append(seconds)
-        with closing(Repository(path)) as repo:
-            if len(checks) == 1:
-                repo.send_comment(question["id"])
-            elif len(checks) == 3:
-                reply = repo.reply_comment(question["id"], "More detail", for_agent=True)
-                repo.send_comment(reply["id"])
-            elif len(checks) == 5:
-                repo.update_comment(question["id"], "Why exactly?")
-                repo.send_comment(question["id"])
-            elif len(checks) == 7:
-                raise KeyboardInterrupt
-
-    monkeypatch.setattr("time.sleep", sleep)
-    with pytest.raises(KeyboardInterrupt):
-        main([*base, "watch", "--json", "--interval", "0.1"])
-    batches = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert [[c["body"] for c in thread] for batch in batches for thread in batch] == [
-        ["Why?"],
-        ["Why?", "More detail"],
-        ["Why exactly?", "More detail"],
-    ]
-    assert main([*base, "reply", question["id"], "Done in v2", "--by", "agent"]) == 0
-    assert json.loads(capsys.readouterr().out)["reply_to"] == question["id"]
-    assert main([*base, "list"]) == 0
-    assert "↳ " + question["id"] in capsys.readouterr().out
-
-    checks.clear()
-
-    def resend(seconds):
-        checks.append(seconds)
-        with closing(Repository(path)) as repo:
-            repo.update_comment(question["id"], "Why, in v2?")
-            repo.send_comment(question["id"])
-
-    monkeypatch.setattr("time.sleep", resend)
-    assert main([*base, "watch", "--json", "--once", "--interval", "0.1"]) == 0
-    [batch] = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert len(checks) == 1
-    assert [[c["body"] for c in thread] for thread in batch] == [
-        ["Why, in v2?", "More detail", "Done in v2"]
-    ]
 
 
 def test_comment_listings_cover_a_project_and_name_patterns_in_pages(repo):
@@ -331,48 +268,6 @@ def test_explicit_migration_from_schema_6(request, backend_fixture, tmp_path, ca
         reopen(migrate=True)
     with pytest.raises(NotFound):
         Repository(tmp_path / "empty", migrate=True)
-
-
-def test_comment_cli_lists_resolves_and_reopens(tmp_path, capsys):
-    path = tmp_path / "repo"
-    with closing(Repository(path)) as repo:
-        identifier = create(repo)
-        anchor = {"path": "report.qmd", "line_start": 4, "line_end": 6, "quote": "loss"}
-        comment = repo.add_comment(identifier, anchor, "Explain this\nplease")
-    base = ["--repo", str(path), "--project", "study", "comments"]
-    assert main([*base, "list", "runs/training"]) == 0
-    line = (
-        f'{comment["id"]}  runs/training@v1  report.qmd:4-6  "loss"  → Explain this\n    please\n'
-    )
-    assert capsys.readouterr().out == line
-    assert main([*base, "list"]) == 0
-    assert capsys.readouterr().out == line
-    assert main([*base, "resolve", comment["id"], "--note", "Rewrote it", "--by", "agent"]) == 0
-    assert json.loads(capsys.readouterr().out)["resolution"]["note"] == "Rewrote it"
-    assert main([*base, "list", "runs/training"]) == 0
-    assert capsys.readouterr().out == ""
-    assert main([*base, "list", "runs/training", "--all", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)[0]["resolution"]["by"] == "agent"
-    assert main([*base, "reopen", comment["id"]]) == 0
-    assert json.loads(capsys.readouterr().out)["resolved_at"] is None
-    patch = '{"tags": ["paper"]}'
-    assert (
-        main(
-            [
-                "--repo",
-                str(path),
-                "--project",
-                "study",
-                "artifact",
-                "annotate",
-                "runs/training",
-                patch,
-                "--name",
-            ]
-        )
-        == 0
-    )
-    assert json.loads(capsys.readouterr().out)["annotations"] == {"tags": ["paper"]}
 
 
 @pytest.mark.parametrize("answer", ["n", "y"])

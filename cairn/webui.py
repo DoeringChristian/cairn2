@@ -1,6 +1,6 @@
 """Optional browser explorer: signed browser sessions and packaged React assets.
 
-Browser sessions authorize reads, report text and comments, and tag edits. Other storage
+Browser sessions authorize reads, saved workspaces, tag edits and stopping or removing artifacts. Other storage
 mutations continue to require the server bearer token.
 """
 
@@ -11,7 +11,7 @@ import secrets
 import time
 import zlib
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import quote
 
 import sqlalchemy as sa
@@ -23,8 +23,10 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
+from pydantic import Field
 
-from .model import Conflict, NotFound, Unauthorized, ValidationError, safe_path
+from .model import NotFound, Unauthorized, ValidationError, safe_path
+from .server import RequestID, StrictBody
 
 STATIC = Path(__file__).with_name("ui_static")
 COOKIE = "cairn_browser"
@@ -35,9 +37,21 @@ READ_POSTS = {
     "/v1/resolutions",
     "/v1/records/query",
     "/v1/blobs/availability",
-    "/ui-api/markdown",
     "/ui-api/observations",
 }
+
+
+class WorkspaceLayout(RequestID):
+    project: str = "default"
+    name: str
+    layout: dict[str, Any]
+    expected_revision: int | None = None
+    author: str | None = None
+
+
+class Observations(StrictBody):
+    project: str = "default"
+    after: dict[str, int] = Field(max_length=1000)
 
 
 def _gzip(chunks):
@@ -119,22 +133,6 @@ class BrowserAccess:
                 method == "POST" and path in READ_POSTS | {"/ui-api/logout"}
             )
             parts = path.split("/")
-            comment = (
-                path.startswith("/ui-api/reports/")
-                and len(parts) in {5, 6, 7}
-                and parts[4] == "comments"
-                and (
-                    (method == "POST" and len(parts) == 5)
-                    or (method in {"PUT", "DELETE"} and len(parts) == 6)
-                    or (method == "PUT" and len(parts) == 7 and parts[6] == "resolution")
-                    or (method == "POST" and len(parts) == 7 and parts[6] in {"replies", "sending"})
-                )
-            )
-            report_edit = parts[1:3] == ["ui-api", "reports"] and (
-                (method == "POST" and len(parts) == 3)
-                or (method == "PUT" and len(parts) == 5 and parts[4] in {"body", "owner"})
-                or (method == "DELETE" and len(parts) == 4)
-            )
             workspace_edit = method == "PUT" and path == "/ui-api/workspaces"
             tag_edit = (
                 method == "PATCH"
@@ -150,7 +148,7 @@ class BrowserAccess:
             )
             explicit = b"authorization" in dict(scope["headers"])
             session = (
-                read or comment or report_edit or workspace_edit or tag_edit or stopping or removal
+                read or workspace_edit or tag_edit or stopping or removal
             ) and self.sessions.valid(request)
             renew = (
                 session
@@ -285,20 +283,11 @@ def install(app, repository, token, *, no_auth=False):
     @app.get("/ui-api/projects")
     def projects():
         # Projects are artifact groupings, not a new domain object or storage table.
-        from .storage import reports
-
-        counted = (
-            sa.select(sa.func.count())
-            .where(reports.c.project == artifacts.c.project)
-            .correlate(artifacts)
-            .scalar_subquery()
-        )
         statement = (
             sa.select(
                 artifacts.c.project.label("name"),
                 sa.func.count().label("artifacts"),
                 sa.func.sum(sa.case((artifacts.c.namespace == "runs", 1), else_=0)).label("runs"),
-                counted.label("reports"),
                 sa.func.max(
                     sa.func.coalesce(artifacts.c.finished_at, artifacts.c.created_at)
                 ).label("updated"),
@@ -488,17 +477,6 @@ def install(app, repository, token, *, no_auth=False):
                 pending.extend((child, distance + 1) for child in [*inputs[:150], *consumers[:150]])
         return {"nodes": nodes, "truncated": truncated}
 
-    from .server import (
-        Comment,
-        NewReport,
-        Observations,
-        Owner,
-        Reply,
-        ReportPart,
-        Resolution,
-        WorkspaceLayout,
-    )
-
     @app.post("/ui-api/observations")
     def observations(body: Observations, request: Request):
         """Records of several runs after the given ordinals, as one compressed stream."""
@@ -513,27 +491,17 @@ def install(app, repository, token, *, no_auth=False):
         sessions.require(request)
         origin = request.headers.get("origin")
         if origin and origin != str(request.base_url).rstrip("/"):
-            raise Unauthorized("Report edits must come from this server's origin")
+            raise Unauthorized("Changes must come from this server's origin")
         if request.headers.get("content-type", "").split(";")[0] != "application/json":
-            raise ValidationError("Report edits require JSON")
+            raise ValidationError("Changes require JSON")
 
-    from . import documents
+    @app.get("/ui-api/workspaces")
+    def workspaces(project: str = "default"):
+        return repository.workspaces(project=project)
 
-    @app.post("/ui-api/markdown")
-    def markdown(body: dict):
-        """Markdown pasted into a report, as document blocks."""
-        return documents.from_markdown(str(body.get("markdown", "")))
-
-    @app.get("/ui-api/report-templates")
-    def report_templates():
-        return documents.templates()
-
-    @app.post("/ui-api/reports")
-    def create_report(body: NewReport, request: Request):
-        # The browser writes the user's own reports; agents create theirs through the API.
-        check_write(request)
-        fields = {**body.model_dump(), "owner": "user", "origin_id": None, "origin_slot": None}
-        return repository.create_report(**fields)
+    @app.get("/ui-api/workspaces/{workspace_id}")
+    def workspace(workspace_id: str):
+        return repository.workspace(workspace_id)
 
     @app.post("/ui-api/artifacts/{artifact_id}/stop")
     def stop_artifact(artifact_id: str, request: Request):
@@ -544,86 +512,6 @@ def install(app, repository, token, *, no_auth=False):
     def write_workspace(body: WorkspaceLayout, request: Request):
         check_write(request)
         return repository.write_workspace(**body.model_dump())
-
-    @app.get("/ui-api/reports/{report_id}/markdown")
-    def report_markdown(report_id: str):
-        """The body as the Markdown the browser edits."""
-        body = repository.report(report_id)["parts"]["body"]
-        return {
-            "markdown": documents.to_markdown(documents.loads(body["source"])),
-            "revision": body["revision"],
-        }
-
-    @app.put("/ui-api/reports/{report_id}/body")
-    def write_report_body(report_id: str, body: ReportPart, request: Request):
-        # Browsers write the author's Markdown, stored as a document; slots belong to agents.
-        check_write(request)
-        if repository.report(report_id)["owner"] != "user":
-            raise Conflict("An agent writes this report; comment on it, or take it over to edit it")
-        if body.source.lstrip().startswith('{"type":"doc"'):
-            # A page from before Markdown editing sends the document itself; saving it as text would lose the report.
-            raise ValidationError("This page is out of date. Reload it to keep editing.")
-        current = repository.report(report_id)["parts"]["body"]
-        document = documents.from_markdown(body.source, previous=documents.loads(current["source"]))
-        return repository.write_report(
-            report_id, "body", **{**body.model_dump(), "source": documents.dumps(document)}
-        )
-
-    @app.put("/ui-api/reports/{report_id}/owner")
-    def set_report_owner(report_id: str, body: Owner, request: Request):
-        check_write(request)
-        return repository.set_report_owner(report_id, **body.model_dump())
-
-    @app.delete("/ui-api/reports/{report_id}")
-    def delete_report(report_id: str, request: Request):
-        sessions.require(request)
-        origin = request.headers.get("origin")
-        if origin and origin != str(request.base_url).rstrip("/"):
-            raise Unauthorized("Removals must come from this server's origin")
-        return repository.delete_report(report_id)
-
-    @app.get("/ui-api/reports/{report_id}/comments")
-    def report_comments(report_id: str):
-        return repository.report_comments(report_id)
-
-    @app.post("/ui-api/reports/{report_id}/comments")
-    def add_report_comment(report_id: str, body: Comment, request: Request):
-        check_write(request)
-        return repository.add_report_comment(report_id, **body.model_dump())
-
-    def check_comment_write(request, report_id, comment_id):
-        sessions.require(request)
-        origin = request.headers.get("origin")
-        if origin and origin != str(request.base_url).rstrip("/"):
-            raise Unauthorized("Comments must come from this server's origin")
-        if all(comment["id"] != comment_id for comment in repository.report_comments(report_id)):
-            raise NotFound("Comment not found in this report")
-
-    @app.put("/ui-api/reports/{report_id}/comments/{comment_id}")
-    def update_report_comment(report_id: str, comment_id: str, body: Comment, request: Request):
-        check_comment_write(request, report_id, comment_id)
-        agent = body.for_agent if "for_agent" in body.model_fields_set else None
-        return repository.update_comment(comment_id, body.body, for_agent=agent)
-
-    @app.post("/ui-api/reports/{report_id}/comments/{comment_id}/replies")
-    def reply_report_comment(report_id: str, comment_id: str, body: Reply, request: Request):
-        check_comment_write(request, report_id, comment_id)
-        return repository.reply_comment(comment_id, **body.model_dump())
-
-    @app.post("/ui-api/reports/{report_id}/comments/{comment_id}/sending")
-    def send_report_comment(report_id: str, comment_id: str, request: Request):
-        check_comment_write(request, report_id, comment_id)
-        return repository.send_comment(comment_id)
-
-    @app.put("/ui-api/reports/{report_id}/comments/{comment_id}/resolution")
-    def resolve_report_comment(report_id: str, comment_id: str, body: Resolution, request: Request):
-        check_comment_write(request, report_id, comment_id)
-        return repository.resolve_comment(comment_id, **body.model_dump())
-
-    @app.delete("/ui-api/reports/{report_id}/comments/{comment_id}")
-    def remove_report_comment(report_id: str, comment_id: str, request: Request):
-        check_comment_write(request, report_id, comment_id)
-        return repository.delete_comment(comment_id)
 
     from itsdangerous import BadSignature, URLSafeTimedSerializer
 
@@ -697,7 +585,7 @@ def install(app, repository, token, *, no_auth=False):
         try:
             artifact_id = viewers.loads(signed, max_age=VIEWER_SECONDS)
         except BadSignature:
-            raise Unauthorized("Viewer link expired; reload the report") from None
+            raise Unauthorized("Viewer link expired; reload the page") from None
         origin = f"{request.url.scheme}://{request.url.netloc}"
         policy = (
             "sandbox allow-scripts; default-src 'none'; "

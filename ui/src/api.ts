@@ -14,7 +14,7 @@ export type ArtifactSummary = Pick<Artifact, 'id' | 'project' | 'namespace' | 'n
 export type Descriptor = Artifact;
 export type RecordEntry = { artifact_id: string; ordinal: number; sequence: number; writer_id: string; kind: string; data: Record<string, Json>; created_at: string };
 export type RecordPage = { items: RecordEntry[]; next_cursor: string | null; cutoff: number; artifact_id: string };
-export type Project = { name: string; artifacts: number; runs: number; reports: number; updated: string };
+export type Project = { name: string; artifacts: number; runs: number; updated: string };
 export class ApiError extends Error { constructor(message: string, public status: number) { super(message); } }
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(path, { ...options, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...options.headers } });
@@ -70,4 +70,3 @@ export function chunkedFiles(artifact: Artifact): (BlobRef & {href: string})[] {
     return t?.format === 'file' && t.version === 2 && data?.sha256 ? [{name, size: data.size || 0, digest: data.sha256, href: `/ui-api/artifacts/${encodeURIComponent(artifact.id)}/files/${name.split('/').map(encodeURIComponent).join('/')}`}] : [];
   });
 }
-export const reportPath = (project: string, name: string) => `${projectPath(project)}/r/${name.split('/').map(encodeURIComponent).join('/')}`;

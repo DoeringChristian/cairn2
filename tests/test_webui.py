@@ -6,13 +6,8 @@ from fastapi.testclient import TestClient
 from test_workspaces import layout
 
 import cairn
-from cairn import documents
 from cairn.server import create_app
 from cairn.storage import Repository
-
-
-def doc(markdown):
-    return documents.dumps(documents.from_markdown(markdown))
 
 
 def test_browser_sessions_and_plain_artifact_identity(tmp_path):
@@ -53,24 +48,6 @@ def test_browser_sessions_and_plain_artifact_identity(tmp_path):
             assert browser.get("/ui-api/projects").status_code == 200
 
 
-def test_browsers_comment_on_agent_reports_and_edit_them_once_taken_over(tmp_path):
-    with closing(Repository(tmp_path)) as repo:
-        plan = repo.create_report("demo", "plan")
-        direction = repo.create_report("demo", "plan/grids", owner="agent", origin_id=plan["id"])
-        with TestClient(create_app(repo, token="test-token", ui=True)) as browser:
-            browser.post("/ui-api/login", json={"token": "test-token"})
-            path = f"/ui-api/reports/{direction['id']}"
-            edit = {"source": "# Mine now", "expected_revision": 1}
-            assert browser.put(f"{path}/body", json=edit).status_code == 409
-            comment = {"anchor": {"path": "body"}, "body": "Try 64 cells", "for_agent": True}
-            assert browser.post(f"{path}/comments", json=comment).status_code == 200
-            assert browser.put(f"{path}/owner", json={"owner": "user"}).json()["owner"] == "user"
-            assert browser.put(f"{path}/body", json=edit).json()["revision"] == 2
-            created = {"project": "demo", "name": "mine", "owner": "agent", "origin_id": plan["id"]}
-            report = browser.post("/ui-api/reports", json=created).json()
-            assert (report["owner"], report["origin_id"]) == ("user", None)
-
-
 def test_browsers_save_workspaces_only_within_their_session(tmp_path):
     with closing(Repository(tmp_path)) as repo:
         written = {
@@ -88,57 +65,9 @@ def test_browsers_save_workspaces_only_within_their_session(tmp_path):
             )
             assert browser.put("/ui-api/workspaces", json=written).json()["revision"] == 1
             assert browser.put("/ui-api/workspaces", json=written).status_code == 409
-            assert browser.put("/v1/workspaces", json=written).status_code == 401
-            [summary] = browser.get("/v1/workspaces?project=demo").json()
-            stored = browser.get(f"/v1/workspaces/{summary['id']}").json()
+            [summary] = browser.get("/ui-api/workspaces?project=demo").json()
+            stored = browser.get(f"/ui-api/workspaces/{summary['id']}").json()
             assert (stored["layout"], stored["revision"]) == (layout(), 1)
-
-
-def test_browsers_write_report_bodies_and_comments_but_not_slots(tmp_path):
-    with closing(Repository(tmp_path)) as repo:
-        other = repo.create_report("other", "findings")["id"]
-        with TestClient(create_app(repo, token="test-token", ui=True)) as browser:
-            created = {"project": "demo", "name": "findings", "body": doc("# Plan")}
-            assert browser.post("/ui-api/reports", json=created).status_code == 401
-            browser.post("/ui-api/login", json={"token": "test-token"})
-            foreign = {"origin": "https://other.test"}
-            assert browser.post("/ui-api/reports", json=created, headers=foreign).status_code == 401
-            report = browser.post("/ui-api/reports", json=created).json()
-            path = f"/ui-api/reports/{report['id']}"
-            edit = {"source": "# Plan\n\n<?cairn agent baseline?>", "expected_revision": 1}
-            assert browser.put(f"{path}/body", json=edit).json()["revision"] == 2
-            assert browser.put(f"{path}/body", json=edit).status_code == 409
-            stale = {"source": doc("# Plan"), "expected_revision": 2}
-            assert browser.put(f"{path}/body", json=stale).status_code == 400
-            markdown = browser.get(f"{path}/markdown").json()
-            assert markdown == {"markdown": "# Plan\n\n<?cairn agent baseline?>\n", "revision": 2}
-            slot = f"/v1/reports/{report['id']}/parts/baseline"
-            assert browser.put(slot, json=edit).status_code == 401
-            repo.write_report(report["id"], "baseline", "Done.", author="agent")
-            parts = browser.get(f"/v1/reports/{report['id']}").json()["parts"]
-            assert parts["baseline"]["source"] == "Done."
-            assert parts["body"]["revision"] == 2
-            listed = browser.get("/v1/reports", params={"project": "demo"}).json()
-            assert [item["name"] for item in listed] == ["findings"]
-            body = {
-                "anchor": {"quote": "Plan", "path": "body", "line_start": 1},
-                "body": "Too broad?",
-                "for_agent": True,
-                "request_id": "comment-1",
-            }
-            comment = browser.post(f"{path}/comments", json=body).json()
-            assert comment["report_id"] == report["id"] and comment["artifact_id"] is None
-            assert browser.post(f"{path}/comments", json=body).json()["id"] == comment["id"]
-            elsewhere = f"/ui-api/reports/{other}/comments/{comment['id']}"
-            assert browser.post(f"{elsewhere}/sending").status_code == 404
-            assert browser.post(f"{path}/comments/{comment['id']}/sending").json()["sent_at"]
-            listed = browser.get(f"/v1/reports/{report['id']}/comments").json()
-            assert [item["body"] for item in listed] == ["Too broad?"]
-            assert browser.post("/v1/reports", json=created).status_code == 401
-            assert browser.delete(path, headers=foreign).status_code == 401
-            assert browser.delete(path).json()["deleted"]
-            assert browser.get(f"/v1/reports/{report['id']}").status_code == 404
-            assert repo.list_comments("reports/**", project="demo")["items"] == []
 
 
 def test_browser_tags_use_annotations_and_reject_conflicts_and_foreign_origins(tmp_path):

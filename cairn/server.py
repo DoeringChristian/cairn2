@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
@@ -130,66 +130,8 @@ class Digests(StrictBody):
     digests: list[str]
 
 
-class Comment(RequestID):
-    anchor: dict[str, Any]
-    body: str
-    author: str | None = None
-    for_agent: bool = False
-
-
-class Reply(RequestID):
-    body: str
-    author: str | None = None
-    for_agent: bool = False
-
-
-class CommentEdit(RequestID):
-    body: str
-    expected_revision: int | None = None
-    for_agent: bool | None = None
-
-
-class Resolution(RequestID):
-    resolved: bool = True
-    note: str | None = None
-    by: str | None = None
-
-
-class NewReport(RequestID):
-    project: str = "default"
-    name: str
-    body: str | None = None
-    author: str | None = None
-    owner: str = "user"
-    origin_id: str | None = None
-    origin_slot: str | None = None
-
-
-class Owner(RequestID):
-    owner: str
-
-
-class ReportPart(RequestID):
-    source: str
-    expected_revision: int | None = None
-    author: str | None = None
-
-
-class Observations(StrictBody):
-    project: str = "default"
-    after: dict[str, int] = Field(max_length=1000)
-
-
 class Stop(StrictBody):
     force: bool = False
-
-
-class WorkspaceLayout(RequestID):
-    project: str = "default"
-    name: str
-    layout: dict[str, Any]
-    expected_revision: int | None = None
-    author: str | None = None
 
 
 class GarbageCollection(StrictBody):
@@ -275,12 +217,8 @@ def _queries(request: Request):
         allowed = ("project", "namespace", "where", "state", "limit", "cursor")
     elif path == "/v1/blobs" and request.method == "PUT":
         allowed = ("digest", "size")
-    elif path in ("/v1/reports", "/v1/workspaces", "/v1/liveness") and request.method == "GET":
+    elif path == "/v1/liveness" and request.method == "GET":
         allowed = ("project",)
-    elif path == "/v1/comments" and request.method == "GET":
-        allowed = ("pattern", "project", "include_resolved", "limit", "cursor")
-    elif path.endswith("/comments") and request.method == "GET":
-        allowed = ("scope", "include_resolved")
     keys = list(request.query_params.keys())
     repeated = any(len(request.query_params.getlist(key)) > 1 for key in keys)
     if set(keys) - set(allowed) or repeated:
@@ -359,16 +297,11 @@ def create_app(
             "features": [
                 "writers",
                 "aliases",
-                "comments",
-                "comment_listing",
-                "comment_threads",
                 "annotations",
                 "streaming_blobs",
                 "paged_datasets",
                 "search",
                 "links",
-                "reports",
-                "workspaces",
                 "liveness",
             ],
         }
@@ -514,105 +447,6 @@ def create_app(
     @app.post("/v1/maintenance/gc")
     def collect_garbage(body: GarbageCollection):
         return repository.collect_garbage(**body.model_dump())
-
-    @app.post("/v1/artifacts/{artifact_id}/comments")
-    def add_comment(artifact_id: str, body: Comment):
-        return repository.add_comment(artifact_id, **body.model_dump())
-
-    @app.get("/v1/artifacts/{artifact_id}/comments")
-    def comments(
-        artifact_id: str,
-        request: Request,
-        scope: Literal["artifact", "name"] = "artifact",
-        include_resolved: bool = True,
-    ):
-        return repository.comments(artifact_id, scope=scope, include_resolved=include_resolved)
-
-    @app.get("/v1/comments")
-    def list_comments(
-        request: Request,
-        pattern: str | None = None,
-        project: str = "default",
-        include_resolved: bool = True,
-        limit: int = Query(default=100, ge=1),
-        cursor: str | None = None,
-    ):
-        return repository.list_comments(
-            pattern,
-            project=project,
-            include_resolved=include_resolved,
-            limit=limit,
-            cursor=cursor,
-        )
-
-    @app.post("/v1/comments/{comment_id}/sending")
-    def send_comment(comment_id: str, body: RequestID):
-        return repository.send_comment(comment_id, **body.model_dump())
-
-    @app.post("/v1/comments/{comment_id}/replies")
-    def reply_comment(comment_id: str, body: Reply):
-        return repository.reply_comment(comment_id, **body.model_dump())
-
-    @app.put("/v1/comments/{comment_id}")
-    def update_comment(comment_id: str, body: CommentEdit):
-        return repository.update_comment(comment_id, **body.model_dump())
-
-    @app.put("/v1/comments/{comment_id}/resolution")
-    def resolve_comment(comment_id: str, body: Resolution):
-        return repository.resolve_comment(comment_id, **body.model_dump())
-
-    @app.delete("/v1/comments/{comment_id}")
-    def delete_comment(comment_id: str, request: Request, body: RequestID | None = None):
-        repository.delete_comment(comment_id, request_id=body.request_id if body else None)
-        return Response(status_code=204)
-
-    @app.post("/v1/reports")
-    def create_report(body: NewReport):
-        return repository.create_report(**body.model_dump())
-
-    @app.get("/v1/reports")
-    def reports(request: Request, project: str = "default"):
-        return repository.reports(project=project)
-
-    @app.get("/v1/reports/{report_id}")
-    def report(report_id: str, request: Request):
-        return repository.report(report_id)
-
-    @app.put("/v1/reports/{report_id}/parts/{part}")
-    def write_report(report_id: str, part: str, body: ReportPart):
-        return repository.write_report(report_id, part, **body.model_dump())
-
-    @app.put("/v1/reports/{report_id}/owner")
-    def set_report_owner(report_id: str, body: Owner):
-        return repository.set_report_owner(report_id, **body.model_dump())
-
-    @app.delete("/v1/reports/{report_id}")
-    def delete_report(report_id: str, body: RequestID):
-        return repository.delete_report(report_id, **body.model_dump())
-
-    @app.get("/v1/workspaces")
-    def workspaces(request: Request, project: str = "default"):
-        return repository.workspaces(project=project)
-
-    @app.get("/v1/workspaces/{workspace_id}")
-    def workspace(workspace_id: str, request: Request):
-        return repository.workspace(workspace_id)
-
-    @app.put("/v1/workspaces")
-    def write_workspace(body: WorkspaceLayout):
-        return repository.write_workspace(**body.model_dump())
-
-    @app.delete("/v1/workspaces/{workspace_id}")
-    def delete_workspace(workspace_id: str, body: RequestID):
-        return repository.delete_workspace(workspace_id, **body.model_dump())
-
-    @app.post("/v1/reports/{report_id}/comments")
-    def add_report_comment(report_id: str, body: Comment):
-        return repository.add_report_comment(report_id, **body.model_dump())
-
-    @app.get("/v1/reports/{report_id}/comments")
-    def report_comments(report_id: str, request: Request, include_resolved: bool = True):
-        return repository.report_comments(report_id, include_resolved=include_resolved)
 
     if ui:
         from .webui import install

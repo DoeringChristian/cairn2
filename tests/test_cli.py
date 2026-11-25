@@ -103,7 +103,7 @@ def test_python_module_cli_help():
     result = subprocess.run(
         [sys.executable, "-m", "cairn", "--help"], capture_output=True, text=True, check=True
     )
-    assert "report" in result.stdout and "server" in result.stdout
+    assert "artifact" in result.stdout and "server" in result.stdout
 
 
 def test_cli_uses_shared_repo_discovery(tmp_path, monkeypatch, capsys):

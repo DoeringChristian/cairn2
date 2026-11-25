@@ -19,112 +19,55 @@ npm run dev --prefix ui -- --host 0.0.0.0
 `CAIRN_DEV_API` overrides the Vite API proxy. `npm run build --prefix ui` typechecks
 and writes the packaged assets into `cairn/ui_static`.
 
-Build the media/report demo with:
+Build the media demo with:
 
 ```sh
-cd examples/report-showcase
+cd examples/showcase
 uv run --extra all python run.py
 uv run --extra all cairn server --no-auth --port 18765
 ```
 
 The script records a run with figure, video and audio captures in the
-`neural-rendering` project and writes the `field-guide` report, whose body and agent
-slots reference them with `cairn:` links. Rerun it to add a run version and reset
-the report.
+`neural-rendering` project. Rerun it to add a run version.
 
-Against that running server, `npm test --prefix ui` checks reports (editing, agent
-slots, artifact media, comments), plain IDs, image zoom, real video playback, the TOC,
-and lineage. `CAIRN_UI_URL` overrides the default test URL `http://localhost:18765`.
+Against that running server, `npm test --prefix ui` checks lists, plain IDs, tags,
+media zoom, video, lineage, live runs and the workspace. `CAIRN_UI_URL` overrides the default test URL `http://localhost:18765`.
 Python integration tests are in `tests/test_webui.py`.
 
 ## Shared components
 
 Use `src/components` for buttons, fields, selects, cards, status, tables, metrics,
-charts and Markdown rendering. `/palette` previews the base components. Use CSS tokens
+and charts. `/palette` previews the base components. Use CSS tokens
 from Cairn Report (`--paper`, `--card`, `--ink`, `--muted`, `--line`, `--accent`) rather
-than introducing colors per viewer. Project/report card structure comes from Prism2;
-report layout and typography come from Cairn Report.
+than introducing colors per viewer. Project card structure comes from Prism2.
 
 `ZoomImage` and `MediaPlayback` compose one `MediaLightbox`, using shared
-`MediaIconButton` controls. The modal is portaled outside report content to prevent
-prose styles from leaking into media. Wheel/pinch zoom, bounded pan, fit, fullscreen,
+`MediaIconButton` controls. The modal is portaled outside its page to prevent
+page styles from leaking into media. Wheel/pinch zoom, bounded pan, fit, fullscreen,
 frame stepping, clip marking, region selection and reference copying share this viewer.
 Frame stepping uses the selected FPS and browser time-based seeking.
 
-Reports (`src/report`) store their body as a document (`cairn/documents.py`) and edit it
-as Markdown: `/ui-api/reports/{id}/markdown` serves it and a body save sends Markdown,
-which the server converts, keeping the ids of unchanged blocks. `report/Editor.tsx` edits
-it in CodeMirror like Obsidian's live preview: every block renders through `nodesToReact`
-(`components/Markdown.tsx`) except the one under the cursor, and inside that one only the
-element the cursor is in shows its syntax as real text (`**`, `*`, `~~`, backticks and link
-targets hide around the others, and `$TeX$` renders until the cursor reaches it), so
-deleting a delimiter is deleting a character. Display math being edited keeps its rendering
-beneath its source. An agent block (`<?cairn agent SLOT?>`) is always rendered, moves as
-one piece, and only its own control or undo removes it; `@agent` and a space places one.
-It renders the slot's quote-less comments as one conversation whose first message is the
-request, and the agent's Markdown answer through `report/media.tsx`, which resolves
-`cairn:` references: images, video and audio inline, Plotly figures as charts, other typed
-captures as values. A `view` block (and a workspace Viewer
-card) is YAML read by `readView`; `ViewerFrame` runs its HTML file sandboxed from a
-signed `/ui-api/viewers/` link that serves the artifact's other files by relative path,
-and passes the settings as JSON in the URL fragment with each `cairn:REF#file` replaced
-by such a link. Large chunked files stream through the same route. `ReportToc` discovers rendered
-headings and uses the existing left rail without shrinking the report. On mobile it
-is collapsible above the report. `SelectionCopy` copies selected prose and its source
-location. Project and record views refresh every five seconds, with a global pause.
+A workspace Viewer card is YAML read by `readView`; `ViewerFrame` runs its HTML file
+sandboxed from a signed `/ui-api/viewers/` link that serves the artifact's other files by
+relative path, and passes the settings as JSON in the URL fragment with each
+`cairn:REF#file` replaced by such a link. Large chunked files stream through the same route. Project and record views refresh every five seconds, with a global pause.
 
 `VideoTimeline` supports pointer-drag interval selection and keyboard-adjustable
 endpoints. The lightbox can combine that interval with a pixel region in one copied
 reference. `PlotlyFigure` renders Plotly MIME output with local, lazy-loaded Plotly,
 Cairn colors and typography, and interactive zoom/legend/export controls.
 
-Report comments are saved in the server repository. The UI comment routes group
-discussion by project, namespace and report name, so new published versions retain
-the discussion while each comment keeps its original artifact, quote and source
-anchor. Browser sessions may add report comments; other repository writes still
-require the bearer token. Select report text to reveal copy and comment icons, or
-click a highlighted passage to reopen its conversation. Normal text has no
-right-side comment marker.
-
-The floating chat follows the selected text or media region and stays within the
-visible viewport. Text copy/comment actions sit beside the selection; media keep
-their right-side buttons. Drafts (including replies) autosave after a short pause;
-clicking outside saves and closes without sending. Enter or the send button queues
-a message for the agent, and Shift+Enter inserts a newline. Sent messages appear
-read-only in the conversation with a fresh reply field. This is UI behavior; the
-comment API and persisted format are unchanged. A small delete icon removes the
-thread across all report versions. Commented quotations are highlighted
-without changing report layout. Highlight matching is scoped to the original
-source file; unmatched quotations remain accessible in the unplaced-comments list below the report.
-
-The report overview groups builds by report name and opens the latest finished
-version by default. The artifact detail selector retains access to older versions.
-
-Custom HTML containing scripts, styles or canvas runs in an opaque-origin iframe
-with scripts enabled and an independent CSP. It can use WebGPU in a browser that
-supports it on localhost/HTTPS. It cannot access the parent report/session DOM;
-external libraries/data can be loaded over HTTPS. Height messages are accepted only
-from the corresponding frame. The demo falls back to Canvas when no GPU adapter
-is available. Static HTML tables continue to render directly in the report.
-
-Code fences use the shared `SyntaxCode` renderer with escaped, language-aware
-highlighting. Plain fenced code is never executed. Image, video, audio, Plotly and
-HTML outputs support comments. Clearing an unsent draft and clicking outside deletes that draft.
-
 Artifact and run pages include editable tag chips stored as `annotations.tags`.
 Project lists offer matching-all tag filters, kept in the URL, and tag chips in
 artifact/run rows. Annotation ETags protect against overwriting concurrent edits.
 Displayed IDs copy their full value; code blocks copy the original code with a
-brief tick confirmation. Text, media, selection, and lightbox comment controls share `CommentButton`. Media controls appear on the right and reopen an existing comment when present.
+brief tick confirmation.
 
 Lightbox zoom controls and gesture hints occupy a separate row below the media.
-The annotation editor also reserves space when open, so neither covers the image.
-New figure anchors distinguish each output within a cell. Existing anchors fall
-back to their saved source line and label.
 
 ## Run workspace
 
-`/p/:project/workspace` displays run records without waiting for a report. Cards
+`/p/:project/workspace` displays run records as they arrive. Cards
 use the existing record-query, resolution, and blob APIs. Scalar cards use uPlot, as in Cairn 1, and select X,
 Y, split fields, point order, and independent legend order. Splitting preserves
 individual observations by default. Optional aggregation draws a mean, median,
