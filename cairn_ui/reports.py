@@ -12,7 +12,7 @@ import re
 import sqlite3
 import uuid
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from pycrdt import (
     Doc,
@@ -187,6 +187,9 @@ class Reports:
         root = self.folder / quote(project, safe=" ")
         found = [(path, path.stat().st_mtime) for path in root.rglob("*.md") if not any(part.startswith(".") for part in path.relative_to(root).parts)] if project else []
         return [{"name": path.relative_to(root).as_posix().removesuffix(".md"), "updated": stamp} for path, stamp in sorted(found, key=lambda item: -item[1])]
+
+    def counts(self):
+        return {unquote(folder.name): len(self.list(unquote(folder.name))) for folder in self.folder.iterdir() if folder.is_dir()} if self.folder.is_dir() else {}
 
     def state(self, project, name):
         return self._db.execute("SELECT epoch, state FROM texts WHERE project = ? AND name = ?", (project, name)).fetchone()

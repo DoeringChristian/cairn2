@@ -2,9 +2,10 @@ import { cachedList, cacheList, invalidateList } from '../listCache';
 import { ArtifactTags } from '../components/ArtifactTags';
 import { useRefresh, useRefreshMode } from '../refresh';
 import { useEffect, useState } from 'react';
+import { ReportsPage } from '../report/ReportsPage';
 import { RefreshCw } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { artifactPath, artifactsOf, condition, operate, runsOf, status, useProjects, when, type Artifact } from '../api';
+import { artifactPath, artifactsOf, condition, operate, status, useProjects, when, type Artifact } from '../api';
 import { ActionIcon, Button, Crumbs, DataTable, ErrorNote, Hero, Hint, Loading, MetricCard, MetricGrid, Pill, ProjectCard, SearchInput, Section, Select, Toolbar } from '../components';
 export function ProjectsPage() {
   const [revision, refresh] = useState(0), [search, setSearch] = useState('');
@@ -13,14 +14,15 @@ export function ProjectsPage() {
   useEffect(() => {document.title = 'Projects · Cairn';}, []);
   const filtered = data?.filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
   return <main><Hero eyebrow="Repository" title="Projects" subtitle="A home for your experiments and the evidence behind them." status="Cairn explorer"/>
-    {data && <MetricGrid><MetricCard label="Projects" value={data.length}/><MetricCard label="Artifacts" value={data.reduce((n,p) => n+artifactsOf(p), 0)} note="Across all namespaces"/><MetricCard label="Runs" value={data.reduce((n,p) => n+runsOf(p), 0)}/></MetricGrid>}
+    {data && <MetricGrid><MetricCard label="Projects" value={data.length}/><MetricCard label="Artifacts" value={data.reduce((n,p) => n+artifactsOf(p), 0)} note="Across all namespaces"/><MetricCard label="Reports" value={data.reduce((n,p) => n+p.reports, 0)}/></MetricGrid>}
     <Section title="Your projects" actions={<ActionIcon label="Refresh" onClick={() => refresh(n=>n+1)}><RefreshCw size={17} aria-hidden="true"/></ActionIcon>}><Toolbar><SearchInput label="Search projects" value={search} onChange={setSearch}/></Toolbar>
     {loading && <Loading/>}{error && <ErrorNote error={error}/>}{data?.length === 0 && <Hint>No projects yet. Record an experiment or publish an artifact to get started.</Hint>}
     {!!filtered?.length && <div className="project-grid">{filtered.map(p=><ProjectCard key={p.name} project={p}/>)}</div>}
     {!!data?.length && !filtered?.length && <Hint>No projects match “{search}”.</Hint>}</Section></main>;
 }
 export function ProjectPage() {
-  return <ArtifactList/>;
+  const [params] = useSearchParams();
+  return (params.get('view') ?? 'reports') === 'reports' ? <ReportsPage/> : <ArtifactList/>;
 }
 function ArtifactList() {
   const {project = ''} = useParams();
@@ -86,7 +88,7 @@ function ArtifactList() {
   function add(){try{condition(draft);}catch(e){setError(e as Error);return;}if(!conditions.includes(draft.trim()))toggle(draft.trim());setDraft('');}
   function changePage(value: number) {const next=new URLSearchParams(params);next.set('page', String(value));setParams(next);}
   const filtered = items;
-  return <main><Hero eyebrow={<Crumbs items={[{label:'Projects',to:'/'},{label:project}]}/>} title={project} subtitle="Runs, artifacts, and what connects them."/>
+  return <main><Hero eyebrow={<Crumbs items={[{label:'Projects',to:'/'},{label:project}]}/>} title={project} subtitle="Reports, experiments, and the evidence that connects them."/>
     <Section title={tab==='runs'?'Experiment runs':tab==='artifacts'?'Artifact library':'Everything'} actions={<ActionIcon label="Refresh" onClick={refreshList}><RefreshCw size={17} aria-hidden="true"/></ActionIcon>}>
     <Toolbar><SearchInput label="Search artifacts" value={search} onChange={value=>{setSearch(value);if(page)changePage(0);}}/><form onSubmit={e=>{e.preventDefault();add();}}><SearchInput label="Filter, e.g. loss &lt; 0.1 or tag:paper" value={draft} onChange={setDraft}/></form>{tab==='artifacts'&&namespaces.length>1&&<Select label="Namespace" value={namespace} choices={[{value:'',label:'All namespaces'},...namespaces.map(value=>({value,label:value}))]} onChange={choose}/>}</Toolbar>
     {(!!available.length||!!conditions.length)&&<div className="tag-filters" aria-label="Filters"><span className="muted">Filters</span>{[...new Set([...available,...conditions])].map(text=><button type="button" className="tag-chip" key={text} aria-pressed={conditions.includes(text)} onClick={()=>toggle(text)}>{text.replace(/^tag:/,'')}</button>)}{!!conditions.length&&<button type="button" className="tag-clear" onClick={()=>{const next=new URLSearchParams(params);next.delete('where');next.delete('page');setParams(next);}}>Clear filters</button>}</div>}

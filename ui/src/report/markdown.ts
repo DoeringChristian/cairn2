@@ -47,25 +47,38 @@ export const math: MarkdownConfig = {
   ],
 };
 
+/** A table ends at the first line without a `|`, and at a figure: what is written right under
+ * a table is not a row of it. From Pumice (packages/markdown/src/lezer.ts). */
+export const tableEnds: MarkdownConfig = {
+  parseBlock: [
+    {
+      name: 'TableEnds',
+      endLeaf(_cx, line, leaf) {
+        const inTable = leaf.parsers.some((parser) => Array.isArray((parser as { rows?: unknown }).rows));
+        const text = line.text.slice(line.pos);
+        return inTable && (!text.includes('|') || /^!\[(?:\\.|[^\]\\])*\]\(\s*cairn:/.test(text));
+      },
+    },
+  ],
+};
+
 export const callout = /^\[!(\w+)\]\s*/;
 export const calloutKinds = ['note', 'tip', 'warning', 'important'];
 
-/** Cells of a table's line: their trimmed text, and all between the bars. */
-export function cells(line: string): { from: number; to: number; start: number; end: number }[] {
-  const bars: number[] = [];
-  for (let i = 0; i < line.length; i++)
-    if (line[i] === '\\') i++;
-    else if (line[i] === '|') bars.push(i);
-  const first = line.search(/\S/);
-  const edges = bars[0] === first ? bars : [-1, ...bars];
-  if (bars.at(-1) !== line.trimEnd().length - 1 || bars.length < 2) edges.push(line.length);
-  return edges.slice(1).map((to, i) => {
-    const from = edges[i] + 1;
-    const text = line.slice(from, to);
-    const lead = text.length - text.trimStart().length;
-    const whole = { start: from, end: to };
-    return text.trim() ? { ...whole, from: from + lead, to: from + text.trimEnd().length } : { ...whole, from, to: from };
-  });
+/** Something of a run within a line, with its width as a share of the line: `![…](cairn:…){width=50%}`. */
+export type Embed = { from: number; to: number; caption: string; source: string; width?: number };
+const pattern = /!\[((?:\\.|[^\]\\\n])*)\]\(\s*cairn:([^)\s]+)\s*\)(?:\{\s*width\s*=\s*(\d+(?:\.\d+)?)%\s*\})?/g;
+export const embedsIn = (line: string, offset = 0): Embed[] =>
+  [...line.matchAll(pattern)].map((match) => ({ from: offset + match.index, to: offset + match.index + match[0].length, caption: match[1].replace(/\\(.)/g, '$1'), source: match[2], ...(match[3] ? { width: Number(match[3]) } : {}) }));
+export const embedText = ({ caption, source, width }: Pick<Embed, 'caption' | 'source' | 'width'>) =>
+  `![${caption.replace(/[\\\]]/g, '\\$&')}](cairn:${source})${width && width < 100 ? `{width=${Math.round(width)}%}` : ''}`;
+
+/** A fenced block with a line of its YAML set, or removed. */
+export function setting(source: string, key: string, value: string | number | undefined) {
+  const lines = source.split('\n');
+  const at = lines.findIndex((line, i) => i > 0 && i < lines.length - 1 && new RegExp(`^\\s*${key}\\s*:`).test(line));
+  const text = value === undefined || value === '' ? undefined : `${key}: ${typeof value === 'number' ? value : JSON.stringify(value)}`;
+  if (at >= 0) lines.splice(at, 1, ...(text ? [text] : []));
+  else if (text) lines.splice(lines.length - 1, 0, text);
+  return lines.join('\n');
 }
-export const cellText = (source: string) => source.replace(/\\\|/g, '|');
-export const cellSource = (text: string) => text.replace(/\s*\n\s*/g, ' ').replace(/\\?\|/g, '\\|');

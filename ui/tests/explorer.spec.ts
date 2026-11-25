@@ -14,17 +14,17 @@ test('tags are added, filter lists, and are removed',async({page})=>{
   await page.getByLabel('New tag',{exact:true}).fill(`${tag}=3`);
   await page.getByRole('button',{name:'Add tag',exact:true}).click();
   await expect(page.getByText(`${tag}=3`,{exact:true})).toBeVisible();
-  await page.goto(`/p/neural-rendering?where=${encodeURIComponent(`tag:${tag} > 2`)}`);
+  await page.goto(`/p/neural-rendering?view=runs&where=${encodeURIComponent(`tag:${tag} > 2`)}`);
   await expect(page.locator('.artifact-list tbody tr')).toHaveCount(1);
-  await page.goto(`/p/neural-rendering?where=${encodeURIComponent(`tag:${tag} > 3`)}`);
+  await page.goto(`/p/neural-rendering?view=runs&where=${encodeURIComponent(`tag:${tag} > 3`)}`);
   await expect(page.getByText('No matching artifacts in this view.')).toBeVisible();
-  await page.goto(`/p/neural-rendering?where=${encodeURIComponent(`tag:${tag}`)}`);
+  await page.goto(`/p/neural-rendering?view=runs&where=${encodeURIComponent(`tag:${tag}`)}`);
   await page.getByRole('button',{name:`Remove tag ${tag}`}).click();
   await expect(page.getByText('No matching artifacts in this view.')).toBeVisible();
 });
 
 test('lists filter by logged values',async({page})=>{
-  await page.goto('/p/neural-rendering');
+  await page.goto('/p/neural-rendering?view=runs');
   const filter=page.getByRole('searchbox',{name:/^Filter/});
   await filter.fill('psnr>3');await filter.press('Enter');
   await expect(page.getByText('Conditions read like')).toBeVisible();

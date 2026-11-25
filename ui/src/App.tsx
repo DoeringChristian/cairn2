@@ -14,7 +14,6 @@ import { useScrollMemory } from './components/useScrollMemory';
 import './styles/navigation.css';
 import './styles/report-editor.css';
 
-const ReportsPage = lazy(() => import('./report/ReportPage').then(module => ({default: module.ReportsPage})));
 const ReportPage = lazy(() => import('./report/ReportPage').then(module => ({default: module.ReportPage})));
 
 type Session = { no_auth: boolean; repository_id: string; now: number };
@@ -37,7 +36,7 @@ function Login({ onLogin }: {onLogin: () => void}) {
     try { await post('/ui-api/login', {token}); invalidateLists();clearViews();setToken(''); onLogin(); }
     catch (error) { setError(error as Error); } finally { setBusy(false); }
   }
-  return <main><Hero eyebrow="Your research, together" title="Welcome to Cairn." subtitle="Explore the runs and artifacts in your repository." />
+  return <main><Hero eyebrow="Your research, together" title="Welcome to Cairn." subtitle="Explore the experiments, artifacts, and reports in your repository." />
     <form className="login-form" onSubmit={submit}><Field label="Server token" type="password" autoComplete="current-password" autoFocus required value={token} onChange={e => setToken(e.target.value)} />
       <p className="hint">Use the same token as your Cairn server.</p>{error && <ErrorNote error={error} />}<Button primary type="submit" disabled={busy}>{busy ? 'Connecting…' : 'Open repository'}</Button></form></main>;
 }
@@ -45,19 +44,19 @@ function Rail({ authenticated, noAuth, logout }: {authenticated: boolean; noAuth
   const [open, setOpen] = useState(false), [expanded,setExpanded]=useState(false);
   const location = useLocation(), navigate = useNavigate();
   const project = matchPath('/p/:project/*', location.pathname)?.params.project || '';
-  const view = new URLSearchParams(location.search).get('view') || 'runs';
+  const view = new URLSearchParams(location.search).get('view') || 'reports';
   const inList = location.pathname === projectPath(project);
   const inWorkspace = !!matchPath('/p/:project/workspace',location.pathname);
-  const inReports = !!matchPath('/p/:project/reports',location.pathname) || !!matchPath('/p/:project/r/*',location.pathname);
   const pulse = useRefresh(authenticated), paused = useRefreshMode();
   const projects = useProjects(authenticated, pulse);
   useEffect(() => setOpen(false), [location.pathname, location.search]);
   return <aside className={`rail ${open ? 'open' : ''} ${expanded?'expanded':'collapsed'}`} aria-label="Main navigation"><Link className="brand" to="/"><span>C</span><span className="site-title">Cairn</span></Link><button className="rail-fold" aria-label={expanded?'Collapse navigation':'Expand navigation'} title={expanded?'Collapse navigation':'Expand navigation'} aria-expanded={expanded} onClick={()=>setExpanded(!expanded)}>{expanded?<PanelLeftClose size={18}/>:<PanelLeftOpen size={18}/>}</button>
     <button className="rail-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>Browse</button>
     {authenticated && <section className="report-list workspace-navigation">
-      <button className="rail-project-icon" aria-label="Choose project" title={project||"Choose project"} onClick={()=>setExpanded(true)}><FolderOpen size={18}/></button><div className="rail-project-picker"><Select label="Project" value={project} choices={[{value:'',label:'All projects'},...(projects.data||[]).map(p=>({value:p.name,label:p.name,note:`${runsOf(p)} runs`}))]}
-        onChange={value=>navigate(value ? (inWorkspace ? `${projectPath(value)}/workspace` : inReports ? `${projectPath(value)}/reports` : `${projectPath(value)}?view=${view}`) : '/')}/></div>
-      <nav aria-label="Project navigation"><Link aria-label="Workspace" title="Workspace" to={project ? `${projectPath(project)}/workspace` : "/"} aria-current={project && inWorkspace ? "page" : undefined}><LayoutDashboard size={18} aria-hidden="true"/><span className="rail-item-label">Workspace</span></Link><Link aria-label="Reports" title="Reports" to={project ? `${projectPath(project)}/reports` : "/"} aria-current={project && inReports ? "page" : undefined}><FileText size={18} aria-hidden="true"/><span className="rail-item-label">Reports</span></Link>{[
+      <button className="rail-project-icon" aria-label="Choose project" title={project||"Choose project"} onClick={()=>setExpanded(true)}><FolderOpen size={18}/></button><div className="rail-project-picker"><Select label="Project" value={project} choices={[{value:'',label:'All projects'},...(projects.data||[]).map(p=>({value:p.name,label:p.name,note:`${runsOf(p)} runs · ${p.reports} reports`}))]}
+        onChange={value=>navigate(value ? (inWorkspace ? `${projectPath(value)}/workspace` :  `${projectPath(value)}?view=${view}`) : '/')}/></div>
+      <nav aria-label="Project navigation"><Link aria-label="Workspace" title="Workspace" to={project ? `${projectPath(project)}/workspace` : "/"} aria-current={project && inWorkspace ? "page" : undefined}><LayoutDashboard size={18} aria-hidden="true"/><span className="rail-item-label">Workspace</span></Link>{[
+        {value:'reports',label:'Reports',Icon:FileText},
         {value:'runs',label:'Runs',Icon:FlaskConical},
         {value:'artifacts',label:'Artifacts',Icon:Boxes},
         {value:'all',label:'All',Icon:Layers},
@@ -84,6 +83,6 @@ export function App() {
     {error && <ErrorNote error={error}/>}{auth === null ? <main><Loading what="Connecting to Cairn"/></main> : auth === false ? <Login onLogin={() => {setError(undefined); setAuth(true);}}/> : <Routes>
       <Route path="/" element={<ProjectsPage/>}/><Route path="/login" element={<ProjectsPage/>}/><Route path="/p/:project" element={<ProjectPage/>}/>
       <Route path="/p/:project/a/:id" element={<ArtifactPage/>}/><Route path="/p/:project/v/:version" element={<ArtifactPage/>}/>
-      <Route path="/p/:project/reports" element={<Suspense fallback={<main><Loading/></main>}><ReportsPage/></Suspense>}/><Route path="/p/:project/r/*" element={<Suspense fallback={<main><Loading/></main>}><ReportPage/></Suspense>}/><Route path="/p/:project/workspace" element={<WorkspacePage/>}/><Route path="/p/:project/workspace/:runId" element={<RunWorkspaceRedirect/>}/><Route path="/palette" element={<PalettePage/>}/><Route path="*" element={<main><Hero title="Page not found"/><Link to="/">Back to projects</Link></main>}/>
+      <Route path="/p/:project/r/*" element={<Suspense fallback={<main><Loading/></main>}><ReportPage/></Suspense>}/><Route path="/p/:project/workspace" element={<WorkspacePage/>}/><Route path="/p/:project/workspace/:runId" element={<RunWorkspaceRedirect/>}/><Route path="/palette" element={<PalettePage/>}/><Route path="*" element={<main><Hero title="Page not found"/><Link to="/">Back to projects</Link></main>}/>
     </Routes>}</div></>;
 }

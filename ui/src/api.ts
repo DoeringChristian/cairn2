@@ -10,7 +10,7 @@ export type Artifact = {
   created_at: number; finished_at: number; heard_at: number; tags: Record<string, Json>; aliases: string[]; values: Record<string, Json>;
 };
 export type Run = Artifact & { config?: Json };
-export type Project = { name: string; artifacts: Record<string, number>; updated: number };
+export type Project = { name: string; artifacts: Record<string, number>; updated: number; reports: number };
 export type RecordEntry = { ordinal: number; data: Record<string, Json> };
 export type FoundFile = { artifact: string; path: string; blob: Content; ordinal: number; reference: string };
 export type Link = { path: string; artifact: Artifact };
@@ -82,7 +82,10 @@ export function useLoaded<T>(load: ((signal: AbortSignal) => Promise<T>) | null,
   return state.key === key ? state : {key, loading: !!load, data: undefined, error: undefined};
 }
 export const useProjects = (enabled: boolean, revision: number) =>
-  useLoaded(enabled ? async signal => (await operate<{items: Project[]}>('projects', {}, signal)).items : null, `projects:${enabled}`, revision);
+  useLoaded(enabled ? async signal => {
+    const [{items}, reports] = await Promise.all([operate<{items: Project[]}>('projects', {}, signal), api<Record<string, number>>('/ui-api/report-counts', {signal})]);
+    return items.map(item => ({...item, reports: reports[item.name] || 0}));
+  } : null, `projects:${enabled}`, revision);
 export const runsOf = (project: Project) => project.artifacts.runs || 0;
 export const artifactsOf = (project: Project) => Object.values(project.artifacts).reduce((sum, count) => sum + count, 0);
 export const projectPath = (project: string) => `/p/${encodeURIComponent(project)}`;

@@ -68,7 +68,9 @@ step for the cursor and shows its source when asked (`</>`); tables are edited i
 (`table.ts`). `elements.tsx` fills in what runs hold: `cairn:` references, `view` blocks and `card`
 blocks, which are workspace cards. The text is a Yjs text that the server (`cairn_ui/reports.py`)
 shares over a WebSocket and writes to the file half a second after a change; changes to the file
-by other programs are merged in. Before a report is drawn, `/ui-api/report/files` says the size of
+by other programs are merged in. What is
+selected, a figure or a cell can be copied as a reference, `name.md:12 "text"
+[cairn:reports/name]`, to tell an agent what to change. Before a report is drawn, `/ui-api/report/files` says the size of
 each image and video (`cairn_ui/sizes.py`), so that nothing moves when they load. Heights that are
 only known afterwards (tables, viewers) are remembered in the browser.
 

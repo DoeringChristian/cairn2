@@ -334,7 +334,7 @@ def test_sizes_of_images_and_videos(tmp_path):
 
 def test_a_report_says_the_size_of_what_it_shows(pages):
     login(pages)
-    text = "![v](cairn:runs/r@v1#v.mp4) ![s](cairn:runs/r@v1#a.svg) ![n](cairn:runs/none@v1#x.png) ![m](cairn:runs/r@v1#missing) [l](cairn:runs/r@v1#a.svg)"
+    text = "![v [1\\]](cairn:runs/r@v1#v.mp4){width=50%} ![s](cairn:runs/r@v1#a.svg) ![n](cairn:runs/none@v1#x.png) ![m](cairn:runs/r@v1#missing) [l](cairn:runs/r@v1#a.svg)"
     assert pages.put("/ui-api/report?project=demo&name=sized", json={"text": text}).status_code == 200
     found = pages.get("/ui-api/report/files?project=demo&name=sized").json()
     assert found.keys() == {"runs/r@v1#v.mp4", "runs/r@v1#a.svg"} and found["runs/r@v1#v.mp4"]["media_type"] == "video/mp4" and found["runs/r@v1#v.mp4"]["size"] == 25600
@@ -348,6 +348,7 @@ def test_reports_need_a_login_and_the_same_origin(pages):
     assert pages.put("/ui-api/report?project=p&name=r", json={"text": "x"}).json()["text"] == "x"
     assert pages.put("/ui-api/report?project=p&name=r", content="{}", headers={"content-type": "text/plain"}).status_code == 400
     assert pages.put("/ui-api/report?project=p&name=r", json={"text": 1}).status_code == 400
+    assert pages.get("/ui-api/report-counts").json() == {"p": 1}
     assert [r["name"] for r in pages.get("/ui-api/reports?project=p").json()] == ["r"] and pages.get("/ui-api/report?project=p&name=none").status_code == 404
     assert pages.delete("/ui-api/report?project=p&name=r", headers={"origin": "http://evil"}).status_code == 401
     assert pages.delete("/ui-api/report?project=p&name=r").status_code == 200 and pages.get("/ui-api/reports?project=p").json() == []

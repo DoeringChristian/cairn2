@@ -126,6 +126,8 @@ mesh: cairn:runs/training/mlp@v1#mesh.ply
 ```
 ````
 
+Select text, or point at a figure, to copy a reference that tells an agent what to change.
+
 The commands ask a running cairn-ui (`--url`, `CAIRN_UI`, or `ui` in `.cairn.toml`). Cairn itself
 knows nothing of reports and workspaces.
 

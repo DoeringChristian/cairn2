@@ -1,66 +1,19 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { snippetCompletion, type CompletionSource } from '@codemirror/autocomplete';
 import type { EditorView } from '@codemirror/view';
 import { List, Trash2 } from 'lucide-react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { WebsocketProvider } from 'y-websocket';
 import * as Y from 'yjs';
-import { api, artifactPath, operate, post, projectPath, reportPath, resolve, useLoaded, when, type Artifact, type FoundFile } from '../api';
-import { ActionIcon, Button, Crumbs, DataTable, ErrorNote, Field, Hero, Hint, Loading, Section } from '../components';
-import { useRefresh } from '../refresh';
+import { api, artifactPath, operate, projectPath, resolve, type Artifact, type FoundFile } from '../api';
+import { ActionIcon, Button, Crumbs, ErrorNote, Hero, Loading, Section } from '../components';
 import { Editor, type Heading } from './Editor';
 import { ReportElement, type Known } from './elements';
 import { calloutKinds } from './markdown';
+import { citing } from './reference';
+import { address, type Report } from './ReportsPage';
 
-type Report = { name: string; text: string; epoch: string };
-const address = (project: string, name: string) => `/ui-api/report?${new URLSearchParams({ project, name })}`;
-
-export function ReportsPage() {
-  const { project = '' } = useParams();
-  const navigate = useNavigate();
-  const pulse = useRefresh();
-  const { data, error, loading } = useLoaded((signal) => api<{ name: string; updated: number }[]>(`/ui-api/reports?${new URLSearchParams({ project })}`, { signal }), `reports:${project}`, pulse);
-  const [name, setName] = useState('');
-  const [failure, setFailure] = useState<Error>();
-  useEffect(() => {
-    document.title = `Reports · ${project} · Cairn`;
-  }, [project]);
-  async function create(event: FormEvent) {
-    event.preventDefault();
-    try {
-      const made = await post<Report>(address(project, name.trim()), {});
-      navigate(reportPath(project, made.name));
-    } catch (e) {
-      setFailure(e as Error);
-    }
-  }
-  return (
-    <main>
-      <Hero eyebrow={<Crumbs items={[{ label: 'Projects', to: '/' }, { label: project, to: projectPath(project) }]} />} title="Reports" subtitle="Notes you write together, with what your runs found." />
-      <Section title="Reports">
-        <form className="report-create" onSubmit={create}>
-          <Field label="New report" placeholder="Name" value={name} required onChange={(e) => setName(e.target.value)} />
-          <Button primary type="submit" disabled={!name.trim()}>Create</Button>
-        </form>
-        {failure && <ErrorNote error={failure} />}
-        {error && <ErrorNote error={error} />}
-        {loading && !data && <Loading />}
-        {data && !data.length && <Hint>No reports yet.</Hint>}
-        {!!data?.length && (
-          <DataTable head={['Name', 'Changed']}>
-            {data.map((report) => (
-              <tr key={report.name}>
-                <td data-label="Name"><Link to={reportPath(project, report.name)}><strong>{report.name}</strong></Link></td>
-                <td data-label="Changed" className="muted nowrap">{when(report.updated)}</td>
-              </tr>
-            ))}
-          </DataTable>
-        )}
-      </Section>
-    </main>
-  );
-}
 
 /** Completes references to artifacts and their files, figures, callouts and blocks. */
 const completions = (project: string): CompletionSource => async (context) => {
@@ -196,7 +149,7 @@ export function ReportPage() {
   async function remove() {
     try {
       await api(address(project, name), { method: 'DELETE' });
-      navigate(`${projectPath(project)}/reports`);
+      navigate(projectPath(project));
     } catch (e) {
       dialog.current?.close();
       setFailure(e as Error);
@@ -209,11 +162,7 @@ export function ReportPage() {
   }
   return (
     <main className="report-page">
-      <Hero eyebrow={<Crumbs items={[{ label: 'Projects', to: '/' }, { label: project, to: projectPath(project) }, { label: 'Reports', to: `${projectPath(project)}/reports` }]} />} title={name} />
-      <div className="report-bar">
-        <span className="muted" role="status">{status}</span>
-        <ActionIcon danger label="Delete report" onClick={() => dialog.current?.showModal()}><Trash2 size={17} aria-hidden="true" /></ActionIcon>
-      </div>
+      <Hero eyebrow={<Crumbs items={[{ label: 'Projects', to: '/' }, { label: project, to: projectPath(project) }, { label: 'Reports' }]} />} title={name} />
       <dialog ref={dialog} className="confirm-dialog" aria-label="Delete report">
         <h2>Delete <code>{name}</code>?</h2>
         <p>Its Markdown file is deleted. Runs and artifacts it shows stay as they are.</p>
@@ -223,12 +172,15 @@ export function ReportPage() {
       {failure && <ErrorNote error={failure} />}
       {!text && !error && <Loading what="Loading report" />}
       {text && provider && (
-        <div className="report-reader-layout">
+        <Section title="Report" actions={<div className="report-actions">
+          <span className="comment-save-status" role="status">{status}</span>
+          <ActionIcon danger label="Delete report" onClick={() => dialog.current?.showModal()}><Trash2 size={17} aria-hidden="true" /></ActionIcon>
+        </div>}><div className="report-reader-layout">
           <Outline headings={headings} onOpen={show} />
           <article className="native-document report-prose" aria-label={name}>
-            <Editor text={text} provider={provider} complete={completions(project)} follow={(href) => void follow(href)} onHeadings={setHeadings} onView={(made) => { view.current = made; }} render={(element) => <ReportElement element={element} project={project} known={files[element.source]} />} />
+            <Editor text={text} provider={provider} complete={completions(project)} follow={(href) => void follow(href)} cite={citing(name)} onHeadings={setHeadings} onView={(made) => { view.current = made; }} render={(element, actions, dom) => <ReportElement element={element} actions={actions} dom={dom} project={project} report={name} known={files[element.source]} />} />
           </article>
-        </div>
+        </div></Section>
       )}
     </main>
   );

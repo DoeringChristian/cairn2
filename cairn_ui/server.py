@@ -285,6 +285,9 @@ def create_app(client, workspaces, reports, *, token=None):
     async def list_reports(request):
         return JSONResponse(reports.list(request.query_params.get("project", "")))
 
+    async def count_reports(_request):
+        return JSONResponse(reports.counts())
+
     async def report(request):
         project, name = (request.query_params.get(key, "") for key in ("project", "name"))
         if request.method in ("GET", "HEAD"):
@@ -325,7 +328,7 @@ def create_app(client, workspaces, reports, *, token=None):
     def files_of(project, text):
         """What a report shows that is a file, with its size, so that space is there before it."""
         found = {}
-        for source in list(dict.fromkeys(re.findall(r"!\[[^\]\n]*\]\(\s*cairn:([^)\s]+#[^)\s]+)\s*\)", text)))[:500]:
+        for source in list(dict.fromkeys(re.findall(r"!\[(?:\\.|[^\]\\\n])*\]\(\s*cairn:([^)\s]+#[^)\s]+)\s*\)", text)))[:500]:
             ref, _, path = source.partition("#")
             try:
                 artifact = backend.resolve(pb.Resolve(project=project, refs=[ref])).items[0].id
@@ -396,6 +399,7 @@ def create_app(client, workspaces, reports, *, token=None):
         Route("/ui-api/workspaces/{id}", route(read_workspace)),
         Route("/ui-api/workspaces/{id}", route(delete_workspace, change=True), methods=["DELETE"]),
         Route("/ui-api/reports", route(list_reports)),
+        Route("/ui-api/report-counts", route(count_reports)),
         Route("/ui-api/report", route(report), methods=["GET", "PUT", "POST", "DELETE"]),
         Route("/ui-api/report/files", route(report_files)),
         WebSocketRoute("/ui-api/live/report", live),
