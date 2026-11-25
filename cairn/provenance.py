@@ -1,6 +1,4 @@
-"""Best-effort client-side provenance; captures never read the process environment."""
-
-from __future__ import annotations
+"""What made a run: its code, packages and command. The environment is never read."""
 
 import gzip
 import importlib.metadata
@@ -15,6 +13,8 @@ import tarfile
 import tempfile
 import time
 from pathlib import Path
+
+from .types import File
 
 FILE_LIMIT = 4 * 1024 * 1024
 SOURCE_LIMIT = 32 * 1024 * 1024
@@ -223,36 +223,30 @@ def _command():
 
 
 def collect(*, capture_source=True):
-    """Return JSON metadata and named bytes; unavailable evidence is explicitly recorded.
+    """A value with the files of a run's provenance; what is unavailable is said.
 
     Source archives are bounded best-effort working-tree snapshots, not backups.
     Known credential paths are excluded; arbitrary secrets embedded in code cannot
-    be detected. Set capture_source=False to disable source and diff collection.
+    be detected. capture_source=False leaves out source and diff.
     """
-    captures, errors, omissions = {}, [], []
-    provenance = {
-        "format_version": 1,
+    errors, omissions = [], []
+    found = {
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "executable": sys.executable,
+        "command": _command(),
         "source_enabled": capture_source,
         "errors": errors,
         "omissions": omissions,
         "git": None,
     }
-    metadata = {
-        "environment": {
-            "python": platform.python_version(),
-            "platform": platform.platform(),
-            "executable": sys.executable,
-            "command": {"argv": _command()},
-        },
-        "provenance": provenance,
-    }
     try:
         root = cwd = Path.cwd()
-        metadata["environment"]["cwd"] = str(cwd)
+        found["cwd"] = str(cwd)
     except OSError:
         errors.append("working directory unavailable")
-        provenance["complete"] = False
-        return metadata, captures
+        found["complete"] = False
+        return found
     packages = []
     try:
         for package in importlib.metadata.distributions():
@@ -267,14 +261,14 @@ def collect(*, capture_source=True):
         ).encode()
         if len(payload) > FILE_LIMIT:
             raise ValueError("package inventory exceeds 4 MiB")
-        captures["provenance/packages.json"] = payload
+        found["packages.json"] = File(payload, "application/json")
     except Exception as error:  # noqa: BLE001 - provenance must not prevent a run
         errors.append(f"package inventory unavailable: {type(error).__name__}")
     names = []
     try:
         root = Path(os.fsdecode(_git(cwd, ["rev-parse", "--show-toplevel"])).strip())
     except (OSError, RuntimeError, TimeoutError, ValueError) as error:
-        provenance["scope"] = "entry-script-and-cwd-dependency-files"
+        found["scope"] = "entry-script-and-cwd-dependency-files"
         errors.append(f"git root unavailable: {type(error).__name__}")
         try:
             names = [p.name for p in cwd.iterdir() if _lockfile(p.name)]
@@ -285,8 +279,8 @@ def collect(*, capture_source=True):
         except OSError:
             errors.append("fallback source enumeration failed")
     else:
-        provenance["scope"] = "git-working-tree"
-        git = provenance["git"] = {"root": str(root), "head": None, "branch": None}
+        found["scope"] = "git-working-tree"
+        git = found["git"] = {"root": str(root), "head": None, "branch": None}
         for key, args in [
             ("head", ["rev-parse", "--verify", "HEAD"]),
             ("branch", ["symbolic-ref", "--quiet", "--short", "HEAD"]),
@@ -320,7 +314,7 @@ def collect(*, capture_source=True):
             try:
                 base = ["HEAD"] if git["head"] else ["--cached"]
                 if safe:
-                    captures["provenance/git.diff"] = _git(
+                    diff = _git(
                         root,
                         [
                             "--literal-pathspecs",
@@ -334,9 +328,10 @@ def collect(*, capture_source=True):
                         ],
                     )
                 else:
-                    captures["provenance/git.diff"] = b""
+                    diff = b""
+                found["git.diff"] = File(diff, "text/x-diff")
                 if not git["head"]:
-                    provenance["diff_scope"] = (
+                    found["diff_scope"] = (
                         "staged-unborn-tree; source archive captures working files"
                     )
             except (OSError, RuntimeError, TimeoutError, ValueError) as error:
@@ -344,10 +339,10 @@ def collect(*, capture_source=True):
     selected = names if capture_source else [name for name in names if _lockfile(Path(name).name)]
     try:
         payload, statistics = _archive(root, selected, omissions)
-        provenance["source"] = statistics
-        name = "provenance/source.tar.gz" if capture_source else "provenance/lockfiles.tar.gz"
-        captures[name] = payload
+        found["source"] = statistics
+        name = "source.tar.gz" if capture_source else "lockfiles.tar.gz"
+        found[name] = File(payload, "application/gzip")
     except (OSError, ValueError, UnicodeError) as error:
         errors.append(f"source archive unavailable: {type(error).__name__}")
-    provenance["complete"] = not errors and not omissions
-    return metadata, captures
+    found["complete"] = not errors and not omissions
+    return found

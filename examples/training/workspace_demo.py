@@ -1,9 +1,9 @@
-"""Log a small, synthetic workspace tour through the existing Cairn SDK.
+"""Log a small, synthetic workspace tour for the pages of cairn-ui.
 
 From the repository root:
     uv run --extra all python examples/training/workspace_demo.py
+    uv run --extra all cairn-ui --no-auth
 
-The default destination is the running training-example server on port 8765.
 Repeated invocations create new run versions; existing experiments are untouched.
 """
 
@@ -82,21 +82,17 @@ def figure(step, model):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", default="http://127.0.0.1:8765")
+    parser.add_argument("--repo", default=".cairn/repo")
     parser.add_argument("--project", default="training-example")
     args = parser.parse_args()
-    client = cairn.Client(args.repo, project=args.project)
-    try:
+    with cairn.Client(args.repo, project=args.project) as client:
         for model, name in enumerate(["baseline", "regularized", "improved"]):
             with client.run(
                 f"workspace-demo/{name}",
                 config={"model": name, "learning_rate": [0.01, 0.03, 0.05][model], "seed": 17},
-                metadata={
-                    "description": "Synthetic example for scalar, image and Plotly workspace cards",
-                    "synthetic": True,
-                },
+                about={"description": "Synthetic example for scalar, image and Plotly workspace cards"},
                 provenance=False,
-                capture_output=False,
+                console=False,
             ) as run:
                 for step in range(41):
                     loss = (
@@ -136,11 +132,8 @@ def main():
                         run.log(
                             step=step, elapsed=step * 1.5, figure=cairn.Figure(figure(step, model))
                         )
-                run.finish(value={"final_loss": loss, "example": "workspace-cards"})
                 print(f"Logged {name}: {run.id}")
-    finally:
-        client.close()
-    print(f"Open {args.repo}/p/{args.project}/workspace?example=cards")
+    print(f"Open http://127.0.0.1:8766/p/{args.project}/workspace?example=cards")
 
 
 if __name__ == "__main__":

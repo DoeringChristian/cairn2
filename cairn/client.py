@@ -30,7 +30,7 @@ from .values import encode
 
 CONVENTIONS = {"_time", "_use", "_config", "_about", "_console", "_outcome", "_error"}
 OUTCOMES = ("completed", "failed", "cancelled", "incomplete")
-_current = contextvars.ContextVar("cairn_next_artifact", default=None)
+_current = contextvars.ContextVar("cairn_artifact", default=None)
 
 
 def settings():
@@ -70,7 +70,7 @@ class Client:
         self._limit = int(float(known.get("outbox_gb", LIMIT / 1e9)) * 1e9)
         if self.remote:
             base = state or os.environ.get("CAIRN_STATE_DIR") or Path.home() / ".local/state/cairn"
-            self._boxes = Path(base) / "next" / hashlib.sha256(repo.encode()).hexdigest()[:24]
+            self._boxes = Path(base) / "v1" / hashlib.sha256(repo.encode()).hexdigest()[:24]
 
     @property
     def outbox(self):

@@ -11,18 +11,13 @@ import time
 import pytest
 import uvicorn
 
-import cairn_next as cairn
-from cairn_next import cairn_pb2 as pb
-from cairn_next import values
-from cairn_next.__main__ import main
-from cairn_next.outbox import Outbox
-from cairn_next.server import create_app
-from cairn_next.store import SEGMENT_RECORDS, Repository
-
-
-@pytest.fixture(autouse=True)
-def without_provenance(monkeypatch):
-    monkeypatch.setenv("CAIRN_PROVENANCE", "0")
+import cairn
+from cairn import cairn_pb2 as pb
+from cairn import values
+from cairn.__main__ import main
+from cairn.outbox import Outbox
+from cairn.server import create_app
+from cairn.store import SEGMENT_RECORDS, Repository
 
 
 @pytest.fixture
@@ -368,7 +363,7 @@ def test_the_server_checks_tokens_content_and_messages(tmp_path, serve):
 
 
 JOB = """
-import sys, cairn_next as cairn
+import sys, cairn
 client = cairn.Client(sys.argv[1], project="demo", token="secret", state=sys.argv[2])
 run = client.run("job")
 for i in range(200): run.log(i=i)
@@ -429,7 +424,7 @@ def test_changed_records_are_noticed(tmp_path):
 
 
 def test_many_threads_and_processes_log_at_once(tmp_path):
-    code = "import sys, cairn_next as c\nwith c.Client(sys.argv[1], project='p') as k:\n  with k.run('a') as r:\n    for i in range(100): r.log(i=i)\n"
+    code = "import sys, cairn as c\nwith c.Client(sys.argv[1], project='p') as k:\n  with k.run('a') as r:\n    for i in range(100): r.log(i=i)\n"
     jobs = [subprocess.Popen([sys.executable, "-c", code, str(tmp_path)], env={**os.environ, "PYTHONPATH": os.getcwd()}) for _ in range(4)]
     assert [j.wait() for j in jobs] == [0] * 4
     with cairn.Client(tmp_path, project="p") as client:
@@ -628,7 +623,7 @@ def test_a_later_spelling_of_a_path_replaces_the_earlier_in_searches(client):
 
 
 def program(code, *args, **options):
-    return subprocess.Popen([sys.executable, "-c", "import sys, os, time, cairn_next as cairn\n" + code, *map(str, args)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    return subprocess.Popen([sys.executable, "-c", "import sys, os, time, cairn as cairn\n" + code, *map(str, args)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             env={**os.environ, "PYTHONPATH": os.getcwd(), "CAIRN_TOKEN": "secret"}, **options)
 
 
@@ -692,7 +687,7 @@ print('after')
 
 
 def test_large_content_goes_in_pieces_and_continues(tmp_path, serve, monkeypatch):
-    from cairn_next import remote
+    from cairn import remote
 
     monkeypatch.setattr(remote, "PIECE", 1 << 20)
     repository = Repository(tmp_path / "repo")
@@ -736,7 +731,7 @@ def test_large_content_goes_in_pieces_and_continues(tmp_path, serve, monkeypatch
 
 
 def test_the_outbox_does_not_fill_the_disk(tmp_path, serve, monkeypatch):
-    from cairn_next import outbox
+    from cairn import outbox
 
     monkeypatch.setattr(outbox, "PATIENCE", 1)
     repository = Repository(tmp_path / "repo")
@@ -842,8 +837,8 @@ def test_logging_from_scripts(tmp_path, serve, monkeypatch, capsys, kind):
 
 
 def test_projects_and_the_token_of_a_server(tmp_path, monkeypatch, capsys):
-    from cairn_next.__main__ import new_token
-    from cairn_next.client import settings
+    from cairn.__main__ import new_token
+    from cairn.client import settings
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("CAIRN_TOKEN", raising=False)
@@ -866,3 +861,36 @@ def test_projects_and_the_token_of_a_server(tmp_path, monkeypatch, capsys):
         assert {k: v["artifacts"] for k, v in client.projects().items()} == {"default": {"datasets": 1}, "p": {"runs": 2}, "q": {"runs": 1}}
     capsys.readouterr()
     assert main(["--repo", str(tmp_path / "repo"), "projects"]) == 0 and "p\truns=2\n" in capsys.readouterr().out
+
+
+def test_the_protocol_is_frozen():
+    """What programs and repositories hold stays readable: fields are only ever added, under
+    new numbers, and then here too."""
+    from pathlib import Path
+
+    from google.protobuf.descriptor_pb2 import FileDescriptorProto
+
+    from cairn.operations import ANSWERS, REQUESTS
+
+    file = FileDescriptorProto.FromString(pb.DESCRIPTOR.serialized_pb)
+    lines = [f"{message.name} {field.number} {field.name} {field.type} {field.label} {field.type_name}".rstrip() for message in file.message_type for field in message.field]
+    lines += [f"{name}({REQUESTS[name].DESCRIPTOR.name}) {ANSWERS[name].DESCRIPTOR.name}" for name in sorted(REQUESTS)]
+    frozen = Path(__file__).with_name("protocol_v1.txt").read_text().splitlines()
+    assert sorted(lines) == frozen and REQUESTS.keys() == ANSWERS.keys()
+
+
+FROZEN = (
+    "0a070a016e120208010a070a0162120210010a070a0169120218030a0e0a0166120921000000000000e03f0a090a017412042a02c3a90a080a017912"
+    "033201ff0a0b0a016c12063a040a0218020a100a016d120b42090a070a016b120218020a3a0a04626c6f6212324a300a20000102030405060708090a"
+    "0b0c0d0e0f101112131415161718191a1b1c1d1e1f10051a0a746578742f706c61696e0a0d0a03726566120652040a026162"
+)
+
+
+def test_records_keep_their_bytes():
+    blob = pb.Blob(digest=bytes(range(32)), size=5, media_type="text/plain")
+    record = {"n": None, "b": True, "i": -2, "f": 0.5, "t": "é", "y": b"\xff", "l": [1], "m": {"k": 1}, "blob": blob, "ref": pb.Ref(artifact="ab")}
+    data = bytes.fromhex(FROZEN)
+    assert values.record(record) == data
+    read = values.read(data)
+    assert {k: read[k] for k in record if k not in ("blob", "ref")} == {k: v for k, v in record.items() if k not in ("blob", "ref")}
+    assert read["blob"] == blob and read["ref"].artifact == "ab"

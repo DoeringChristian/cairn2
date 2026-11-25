@@ -9,7 +9,7 @@ from pathlib import Path
 
 import plotly.graph_objects as go
 
-import cairn_next as cairn
+import cairn
 
 ASSETS = Path(__file__).parent / "assets"
 

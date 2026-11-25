@@ -5,7 +5,7 @@ from pathlib import Path
 
 from google.protobuf.descriptor_pb2 import FileDescriptorProto
 
-from cairn_next import cairn_pb2 as pb
+from cairn import cairn_pb2 as pb
 
 TARGET = Path(__file__).parents[1] / "ui/src/schema.ts"
 KINDS = {1: "double", 4: "uint64", 8: "bool", 9: "string", 11: "message", 12: "bytes", 13: "uint32", 18: "sint64"}

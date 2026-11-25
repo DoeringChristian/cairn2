@@ -8,7 +8,7 @@ import time
 import uuid
 from pathlib import Path
 
-from cairn_next import Conflict, NotFound
+from cairn import Conflict, NotFound
 
 from .layouts import validate_layout
 

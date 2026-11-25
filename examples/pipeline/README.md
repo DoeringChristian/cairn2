@@ -1,9 +1,9 @@
 # Pipeline
 
-Three stages: `prepare.py` publishes `datasets/points`, `fit.py` fits a line to
+Three stages: `prepare.py` stores `datasets/points`, `fit.py` fits a line to
 it, and `evaluate.py` measures the fit. Each prints the ID of the version it
-published. The next stage gets that ID as an argument and records it with
-`cairn.use`.
+made. The next stage gets that ID as an argument and records it with
+`run.use`.
 
 ```sh
 make                    # or: snakemake --cores 1

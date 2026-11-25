@@ -5,7 +5,7 @@ by an agent never breaks the page; unknown keys are refused so a misspelt settin
 
 import json
 
-from cairn_next import Invalid
+from cairn import Invalid
 
 LAYOUT_LIMIT = 1024 * 1024
 KINDS = ("scalar", "image", "video", "plotly", "viewer")

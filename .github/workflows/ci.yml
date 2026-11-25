@@ -21,6 +21,7 @@ jobs:
           enable-cache: true
       - run: uv sync --locked --extra all
       - run: uv run pytest -q
+      - run: uv run ruff check --select F,B,I .
       - name: Run the example projects
         run: |
           cd examples/training

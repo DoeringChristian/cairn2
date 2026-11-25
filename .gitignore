@@ -13,3 +13,4 @@ ui/test-results/
 ui/playwright-report/
 
 build/
+test-results/

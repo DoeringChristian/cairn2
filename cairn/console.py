@@ -1,8 +1,5 @@
-"""Best-effort run console capture; output still reaches the terminal unchanged."""
+"""What a program prints, logged while it still reaches the terminal unchanged."""
 
-from __future__ import annotations
-
-import atexit
 import contextlib
 import errno
 import os
@@ -20,13 +17,11 @@ _active = threading.Lock()
 
 
 class Console:
-    """Store stdout and stderr of a run as console/NNNNNN.log captures.
+    """Logs stdout and stderr as `_console`, in pieces.
 
-    Descriptors 1 and 2 are redirected, so extensions and subprocesses are
-    included; a terminal is kept a terminal through a pseudo-terminal. Without
-    descriptors (e.g. Jupyter) sys.stdout and sys.stderr are wrapped instead.
-    Chunks are stored less often as a run grows to preserve capture capacity.
-    """
+    Descriptors 1 and 2 are redirected, so extensions and subprocesses are included; a
+    terminal stays one through a pseudo-terminal. Without descriptors (e.g. Jupyter)
+    sys.stdout and sys.stderr are wrapped instead. Pieces get rarer as a run grows."""
 
     def __init__(self, artifact):
         self.artifact = artifact
@@ -62,19 +57,17 @@ class Console:
                     stream = getattr(sys, name)
                     setattr(sys, name, _Tee(stream, self._write))
                     self.restore.append(lambda name=name, stream=stream: setattr(sys, name, stream))
-        except Exception:  # noqa: BLE001 - capture must not prevent a run
+        except Exception:  # noqa: BLE001 - a program runs on without it
             self._undo()
             _active.release()
             return False
         for thread in self.threads:
             thread.start()
-        atexit.register(self.stop)
         return True
 
     def stop(self):
         if self.stopped.is_set() or os.getpid() != self.pid:
             return
-        atexit.unregister(self.stop)
         with contextlib.suppress(OSError, ValueError):
             sys.stdout.flush()
             sys.stderr.flush()
@@ -108,10 +101,10 @@ class Console:
                 self.stored = LIMIT
                 data += b"\n[cairn: console output truncated]\n"
             try:
-                self.artifact._add(data, f"console/{self.chunks:06d}.log")
-            except Exception as error:  # noqa: BLE001 - capture must not prevent a run
+                self.artifact._log({"_console": data})
+            except Exception as error:  # noqa: BLE001 - a program runs on without it
                 self.failed = True
-                print(f"Cairn stopped storing console output: {error}", file=sys.stderr)
+                print(f"cairn: console output is no longer logged: {error}", file=sys.stderr)
 
     def _tick(self):
         while not self.stopped.is_set():

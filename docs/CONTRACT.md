@@ -1,252 +1,102 @@
-# Repository contract
+# Contract
 
-`cairn/contract.py` declares `RepositoryProtocol` and JSON result shapes. The direct
-repository and HTTP adapter implement the same methods. Protocol version **4**,
-repository schema **11**, durable outbox schema **4**. Other schemas are rejected;
-schema 6 to 10 repositories convert only through the explicit `cairn repo migrate`.
-A schema 3 outbox upgrades in place when opened; older clients reject schema 4.
+What programs, readers and stored repositories can rely on. The order of priorities is
+stability, performance, features. `cairn/cairn.proto` is the protocol; tests fail when it, its
+operations or the bytes of a record change.
 
-## One artifact lifecycle
+## Data
 
-An artifact has one permanent hexadecimal ID. It starts live, accepts records,
-metadata and files, then finishes and becomes immutable under that same ID.
-There are no revision objects or separately identified version objects.
-`closing` is an internal draining state: existing producers may finish delivering
-accepted work, but new producers cannot join.
+**Artifact.** An append-only list of records with one permanent ID (32 hexadecimal digits) and
+a name `project/namespace/name`. While *live* it accepts records; *finished* it never changes.
+A run is an artifact in the namespace `runs`; namespaces have no other meaning to the server.
 
-Every start creates a new artifact, even under an existing name. An identical
-`request_id` retries that creation instead of creating another artifact. A name
-is scoped by `(project, namespace, name)`. Namespaces are arbitrary conventions:
-`runs`, `datasets`, and `viewers` have no special backend behavior. 
+**Record.** A map, numbered from 1 without gaps, at most 64 MiB. Records of one process keep
+their order. A record is encoded once, by the program that logs it; its bytes are kept.
 
-On finish, the artifact receives the next `vN` label for its name and becomes
-that name's `latest`. Concurrent finishes receive distinct numbers; the last
-finish to commit becomes latest. Neither relabeling nor starting another artifact
-changes an earlier artifact's data.
+**Value.** Null, boolean, 64-bit integer, 64-bit float (with NaN and the infinities), text,
+bytes, list, map with text keys, blob, or reference.
 
-References accepted by `resolve` and `query`:
+**Blob.** Bytes, stored once per SHA-256 digest. The value holds digest, size and media type.
 
-- Full artifact ID, or an unambiguous hexadecimal prefix of at least 8 characters.
-- `runs/training@v3` or `runs/training@latest` (the selector may be omitted).
-- `runs/training@best`, for an explicitly assigned alias.
-- `runs/training@live`, only when exactly one unfinished artifact has that name.
+**Reference.** The ID of a finished artifact.
 
-IDs are random identifiers, not hashes of artifact content. A direct ID resolves
-the same artifact before and after finish. Version labels and aliases resolve
-to that ID. Dependencies store full IDs of finished artifacts.
+Blobs and references may appear anywhere in a record. What they name is kept for as long as
+the record is. The server knows records, blobs and references, and nothing else of a value.
 
-## Operations
+**Current value.** Of a key, the value in the last record that has it. Logging a key again
+replaces its whole value. A key `a/b` and the `b` inside `a` share a path; the later is found.
 
-All results are JSON dictionaries/lists except streamed blob reads. Times are
-UTC ISO strings; errors have a stable code, message and details.
+**Finishing** appends a last record, seals the artifact, says whether it completed, and gives
+it the next version of its name, all at once. `latest` is the newest completed version.
 
-| Method | Result and behavior |
-| --- | --- |
-| `info()` | Repository identity, schema/protocol versions and supported limits. |
-| `start(project, namespace, name, *, request_id=None)` | `{artifact, writer}`; minimal identity creation, no configuration parameter. |
-| `register_writer(artifact_id, *, request_id=None)` | Another producer handle for a live artifact. |
-| `writer(artifact_id, writer_id)` | Producer acknowledgement, next sequence and closed state. |
-| `append_batch(artifact_id, writer_id, entries)` | `{acknowledged, cutoff}`; atomic, contiguous producer sequences; exact retry accepted, changed content rejected. |
-| `close_writer(artifact_id, writer_id, final_sequence)` | Closes producer only after its final sequence is acknowledged. |
-| `finish(artifact_id, *, value=None, metadata=None, outcome='completed', request_id=None)` | The finished artifact descriptor, with the original ID. Pending while producers remain open. One exact persisted finish intent; retries cannot change it. |
-| `resolve(ref, *, project='default')` | Artifact descriptor, live or finished. |
-| `resolve_many(refs, *, project='default')` | Descriptors in input order, from one read transaction. |
-| `list_artifacts(*, project=None, namespace=None, where=None, state=None, limit=100, cursor=None)` | `{items, next_cursor}`; each item is an artifact, not a name-group object. |
-| `find(pattern, *, project='default', where=None, order=None, limit=100, cursor=None)` | `{items, next_cursor}`: descriptors of the finished artifacts a reference pattern names, filtered and ordered in SQL. Without `order`, results are sorted by namespace, then name with runs of digits compared as numbers, then version. |
-| `annotate(artifact_id, patch, *, expected_etag=None, target='artifact', request_id=None)` | Atomic JSON Merge Patch with optional concurrency check; `target='name'` patches the properties of every version of the artifact's name. Returns the artifact descriptor. |
-| `annotation_layers(artifact_id)` | `{name, artifact, annotations, annotations_etag}`: the name-level and exact properties and their projection. |
-| `versions(ref, *, project='default')` | Finished artifacts sharing the referenced name, ordered by numeric label. |
-| `heartbeat(artifact_id, writer_id)` | Records that an open writer's process is alive; `open` is false once it is closed. |
-| `liveness(*, project="default")` | For each unfinished artifact: `last_seen` (its latest heartbeat or record), whether it sent a `heartbeat`, and `lost` after 120 silent seconds. |
-| `stop(artifact_id, *, force=False)` | Closes an abandoned artifact's writers and finishes it as `incomplete`, or with the completion already requested. Refused while its process is heard from, unless forced. |
-| `set_alias(artifact_id, alias, *, expected_id=None, request_id=None)` | Assigns an alias within the artifact's name; compare-and-swap against its previous target. `latest` is allowed; `live` and `vN` are reserved. |
-| `query(ref, *, project='default', where=None, fields=None, limit=100, cursor=None, kind=None)` | `{items, next_cursor, cutoff, artifact_id}`; cursor pins artifact and acknowledged cutoff. |
-| `put_blob(source, *, digest=None, size=None)` | Verified immutable content descriptor `{digest, size}`. |
-| `link_blob(path)` | `{digest, size}` of a file the repository can read, registered in place without a copy. Only absolute paths under the repository's link roots are accepted, otherwise Unsupported; the stored entry records the file's modification time, and opening it raises IntegrityError when size or time changed. |
-| `has_blobs(digests)` | Mapping of digest to availability. |
-| `open_blob(digest)` | Binary stream context manager, caller closes it. |
-| `delete(artifact_id, *, request_id=None)` | Soft deletion: `{id, deleted, retained_by}`. Names and aliases stop resolving it; `latest` falls back to the highest remaining finished version. Finished IDs stay readable for provenance until garbage collection. |
-| `collect_garbage(*, grace_seconds=3600, dry_run=True)` | `{dry_run, pinned, artifacts, candidates, removed, orphans}`. Purges artifacts deleted before the grace period that only other purged artifacts reference, then unreferenced content. |
+**Labels** are outside the log and may change at any time. A *tag* is a key with one value
+(null, boolean, number or text up to 256 characters) per artifact. An *alias* belongs to a
+finished artifact and to one version of a name; setting it moves it. Deletion hides an
+artifact until it is restored; `collect` frees what is deleted and not referred to.
 
-There is no snapshot operation. A separate finished checkpoint must be a separate
-artifact. Writer handles and sequence numbers exist only for reliable delivery.
+## Conventions
 
-## Records and values
+Keys starting with `_` belong to Cairn. The SDK refuses others of them; the server does not
+interpret them, except that files below them are listed only when a pattern asks for them.
 
-Entries are `{sequence, kind, data}`. Kinds are `record`, `metadata`, `capture`,
-and `dependency`. The Python client’s `log()` and `track()` add `_wall_time` to record data
-when absent: floating-point Unix seconds from the client clock at the log call.
-Explicit values are preserved; durable delivery/retries retain the recorded value.
-Low-level repository/HTTP writes do not inject it. This is distinct from the
-server-assigned record `created_at`. Record data is an arbitrary JSON object; `step` is optional and
-has no special storage semantics. Metadata shallow-merges. Captures are
-`{name, value}`; dependencies are `{artifact_id, role}`. The repository assigns
-one monotonically increasing ordinal across all producers of an artifact.
+| Key | Meaning | Written by |
+|---|---|---|
+| `_time` | client clock, Unix seconds | every `log` |
+| `_use` | reference read, by role | `use` |
+| `_config` | configuration | start |
+| `_about` | provenance: code, packages, command, machine | start of a run |
+| `_console` | a piece of output, as bytes | the run's process |
+| `_outcome` | `completed`, `failed`, `cancelled` or `incomplete` | finish |
+| `_error` | type and message | finish after an error |
 
-Queries use JSON-pointer field paths and structured predicates:
-`{path:'/loss', op:'lt', value:0.1}`, or `{and:[...]}` / `{or:[...]}`.
-Missing and type-incompatible values do not match comparisons. Record pages
-are in ordinal order. Live queries freeze the first page's cutoff.
+A map with `_type` says how readers interpret it: `directory`, `image`, `array`, `table`,
+`figure`, whose content is under `data`. Unknown types stay maps.
 
-Typed values use `{$cairn:1, format, version, data, blobs, refs}`. Codecs normally
-use version 1; `file` and `directory` also support version 2. Here `version`
-is a codec-format version, not an artifact identity. Blob descriptors contain
-`digest`, `size`, and optional `name`/`media_type`; refs contain `artifact_id` and
-optional `role`. Only finished artifact dependencies are accepted. No arbitrary
-pickle deserialization is performed.
+Only completed artifacts are used, or any finished one when the caller says `incomplete`. The
+server refuses references to live artifacts whatever the client says.
 
-Version 2 directories contain `{name, node, count, size}`; files contain
-`{name, size, sha256, media_type}` and either one matching blob or a `node` for
-their chunk index. Every node is retained by an explicit artifact reference.
-Index parts are ordinary finished artifacts with version 1 `cairn/files`,
-`cairn/chunks`, or `cairn/index` values. Their `data.entries` are ordered inclusive
-`first`/`last` ranges. Leaf entries contain `value`; branch entries contain a
-`cairn/index-ref` value in `child`, with `data.id` and an explicit reference.
-Directory ranges compare path components; chunk ranges compare byte offsets.
-The HTTP capability `paged_datasets` advertises support. See
-[large datasets](datasets.md) for transfer, checkpoint, cache and cleanup behavior.
+## Writing
 
-A finished artifact's manifest contains `metadata`, `value`, `captures`, `blobs`,
-`dependencies`, and `outcome`. Its data and records cannot change after finish.
-The artifact descriptor also carries `number`, timestamps, cutoff and state.
+- A batch of records is accepted completely or not at all. Sending it again changes nothing:
+  each writer numbers its records, and the server skips what it has.
+- Records are refused (`pending`) until the content they name is stored.
+- Finishing waits (`pending`) while other writers have not left, unless it is forced.
+- Content sent in pieces continues where it broke off, and is there only once its digest is
+  right.
+- A linked file is checked against its digest when it is registered, and its size and time
+  whenever it is read; a changed one is missing, never wrong. A server links only below the
+  folders given with `--link-root`; the client uploads anything else.
+- What a program logged to a server is on its disk when `log` returns, and reaches the server
+  in order, also after the program or the server was killed (`recover`).
 
-## Capacity and reliable publication
+## Finding
 
-Individual entries are limited to 1 MiB; batches to 4 MiB and 10,000 entries.
-Final merged metadata and final value are each limited to 1 MiB. Large payloads
-belong in blobs. Captures plus unique retained blob/dependency descriptors have
-a conservative cumulative 6 MiB minus 1 KiB budget; capture replacements count
-cumulatively. Blob contents and ordinary scalar record volume do not consume
-that collection budget. The artifact's `publication_bytes` reports usage.
+Paths name places in records: `loss`, `_config/lr`, `image/width`. Records of one artifact are
+read in order from any position, all or those with a key; numbers at a path are read as
+columns. Artifacts are found by name, labels, and for each path by the last, smallest and
+largest value. Files are found by path, glob, or part of the path. Numbers, booleans and text
+up to 256 characters are found; lists and longer text are not.
 
-Capacity is checked before batch acknowledgement and before accepting finish
-intent. Rejected batches do not advance records, producer sequences or budgets.
-Definitive rejected finishes can be corrected; uncertain deliveries preserve
-exact retry intent. The 8 MiB final manifest bound is a defensive check.
+Conditions read `path operator value` with `=`, `!=`, `<`, `<=`, `>`, `>=`, `contains`, or are
+a path alone. Paths may be `min(path)`, `max(path)`, `tag:key` and `alias:name`. In names, `*`
+stays within a level and `**` crosses slashes.
 
-## HTTP and SDK
+Indexes are derived from the records and can be rebuilt without changing any artifact.
 
-Routes are named REST resources: `POST /v1/artifacts`, artifact-scoped writers,
-entries, finalization, aliases and annotations; `POST /v1/resolutions`, `POST /v1/searches`, `POST /v1/links`,
-`POST /v1/records/query`, `GET /v1/history?ref=...&project=...`,
-`DELETE /v1/artifacts/{id}`, and `POST /v1/maintenance/gc`.
-Blob uploads/downloads stream bytes. There are no revision, snapshot or separate
-version resources, and no code execution.
+## HTTP
 
-`Client(path)` calls SQLite/files directly. `Client(url)` calls the selected
-server. Remote writing uses a durable outbox; read-only clients never start or
-resume delivery. `flush()` waits for acknowledgement; reads never merge queued
-writes into server results.
+`POST /v1/{operation}` takes and returns a message of `cairn.proto`;
+`cairn/operations.py` lists which. `PUT` and `GET /v1/content/{digest}` carry plain bytes; a
+piece has the parameters `offset` and `size`. `GET /v1` describes the server and needs no
+token; everything else takes `Authorization: Bearer`. Errors are an `Error` message with the
+code `invalid`, `unauthorized`, `not_found`, `conflict`, `pending` or `corrupt`.
 
-`Client.start(namespace, name)` returns a writable `Artifact`; `Client.run()` and
-`cairn.init()` add config and client-captured provenance through ordinary metadata
-and captures. Unless `capture_output=False`, they also store the process's stdout and
-stderr as `console/NNNNNN.log` file captures until the run finishes or closes.
-Capture names under `provenance/` and `console/` are reserved for Cairn. `finish()` returns the finished descriptor; `.id` stays unchanged.
-On a run or artifact, `find(pattern, where=, order=, limit=)` returns
-`Reader`s for finished artifacts and records each with role `input`;
-`use(ref, role=)` returns one and records it with the role. Each artifact and
-role is recorded once per run; recording after finish raises Conflict. The top-level
-`cairn.find` and `cairn.use` require a run. `Client.get(ref)` and
-`Client.find(...)` read without recording. `Reader.dependencies` lists an
-artifact's inputs and `Reader.inputs(role=...)` those recorded with one role. Patterns are references with
-shell-style wildcards: `*` matches within one level of the name and `**` across
-levels; without a selector they match each name's `latest`. Names and aliases
-cannot contain `*`. `Reader.query` pages raw entries with a cursor. No revision
-ID or snapshot API is exposed.
+## Frozen, and not
 
-`cairn.artifact(namespace, name, *, repo=None, project=None, token=None,
-outbox=None)` starts an independently owned artifact handle. Unspecified
-repo/project inherit the context-local artifact or run, falling back to
-normal repo and project discovery (`CAIRN_PROJECT`, `.cairn.toml`). Its context manager temporarily
-installs it as the default, restores the previous handle on exit, and finishes
-on normal exit or records failure on exceptional exit unless already finished;
-the same holds for `cairn.init()` contexts and `cairn.run`.
-The Python `add()` method replaces `capture()` without an alias; the persisted
-`capture` entry kind is unchanged. `add(path, immutable=True)` records the file's
-path, size and modification time in the outbox instead of staging a copy and
-uploads it from there; a file that changed or disappeared before delivery raises
-`IntegrityError`. Without an outbox it behaves like `add(path)`.
-`new_file(name, mode="w", encoding=None)` (`"w"` or `"wb"`) and `new_dir(name)`
-are context managers on artifacts and at top level that yield a temporary file or
-empty folder and add it under `name` when the block exits normally; an exception
-adds nothing. Both remove their temporary copy afterwards. `cairn.init()` remains the run entry point.
-`cairn.run(...)` takes `init()`'s arguments and decorates a function: each call runs
-inside its own `init()` context and restores the previous default handle afterwards.
-Without `config=`, an OmegaConf `DictConfig` first argument becomes the resolved config.
+Frozen: the values and their encoding, the messages and operations of `/v1`, references and
+conditions, and the conventions above. Fields, operations and conventions may be added.
 
-Repository export/import preserves artifact IDs, labels, records and retained
-bytes. Imported producer handles are closed; live artifacts can register a new
-producer. Imports never silently merge conflicting evidence. Integrity checks
-reconstruct records, manifests and capacity accounting. GC and purge respect
-retention and active transfer leases.
+Not frozen: the repository's tables and indexes (a schema number guards them), the outbox,
+which keeps only what a program has not sent yet, and `cairn-ui`.
 
-## Discovery and mutable annotations
-
-Mutable information lives in one annotation store, separate from captured content.
-Each annotation is a property (one top-level key) and targets either
-an exact artifact or a name: every version of `namespace/name`, including later
-ones. Aliases are never targets; `@latest` resolves to its exact version when written.
-
-Artifact descriptors include `annotations` (a JSON object) and `annotations_etag`:
-the artifact's effective properties, its name's overlaid key by key by its own.
-They are stored on the artifact as a projection so discovery stays indexed.
-Captured metadata/records/files remain immutable after finish; annotations can be
-edited on live or finished artifacts. Tags, titles and review status are ordinary
-annotation fields, not backend-specific exceptions. Deleted artifacts reject edits.
-
-`annotate` accepts a top-level object using JSON Merge Patch semantics: nested
-objects merge, arrays replace and null removes a key. It patches the selected
-target's own properties, so removing an exact key reveals the name's value again. `expected_etag` compares with
-the current annotation ETag under the artifact lock. A stale ETag raises Conflict;
-a missing ETag allows an atomic patch against the latest state. `request_id` provides
-exact retry receipts. No new artifact identity or version label is created.
-Annotation objects are capped at 1 MiB and their scalar array membership index at
-10,000 entries; a name-level patch must keep every version within these limits.
-Updates, projections, ETags and index rows commit or roll back together.
-
-Discovery predicates use explicit roots `/metadata/...` and `/annotations/...`;
-`find` also accepts `/value/...`.
-`contains` tests scalar array membership with JSON type semantics (booleans differ
-from numbers; numerically equal integers/floats match). It works on arbitrary
-array fields and on record queries. It is not substring or object containment.
-SQLite uses a derived annotation-member index keyed by path/value; PostgreSQL
-uses a GIN index for eligible annotation containment predicates. Other metadata
-and scalar predicates use the common query compiler and may require specialized
-indexes for large workloads. Filters execute in SQL before pagination, never in
-the Python client. Cursors bind project, namespace, state and predicate.
-
-HTTP annotation edits use `PATCH /v1/artifacts/{id}/annotations` with
-`{patch, expected_etag, target, request_id}`; `GET` on the same path returns the
-layers. `/v1/capabilities` lists the `search` feature, which `find` requires, the `links`
-feature, which `link_blob` requires, the `liveness` feature, which heartbeats and `stop`
-require, and the `annotations` feature; clients check it before using name targets or
-layers. Discovery passes
-JSON `where` and optional `state` to `GET /v1/artifacts`. Python exposes
-`Client.annotate` and `Client.find`; the CLI exposes `artifact annotate [--name]` and
-`artifact list --where`.
-
-Export/import preserves the annotation store and validates projections, ETags and
-the membership index against it. Purge removes an artifact's exact annotations
-and its index rows; name-level annotations remain. Annotation writes are
-synchronous and do not enter a writer's record-upload journal.
-
-## Runs whose process ends
-
-Runs started by the SDK send a heartbeat every 10 seconds. Losing contact changes no
-state: a run that is heard from again is live again. SIGTERM unwinds the main thread as
-`SystemExit` (143) when runs are open and the application left SIGTERM at its default; a
-run's context then finishes as `cancelled`, and a second SIGTERM ends the process at
-once. `cairn.init()` runs still open at interpreter exit finish as `cancelled` after
-SIGTERM, `failed` after an uncaught exception or `sys.exit` with an error, and otherwise
-`completed`. Runs of an explicit `Client` outside a context, other artifacts, forked
-children and writers that were closed are left as they are. A killed process finishes
-nothing; `stop` closes its runs.
-
-## What older versions stored
-
-v0.14 to v0.17 kept reports, comments and workspaces in the repository. Cairn no longer
-has an interface to them. Schema 11 keeps their tables, and export, import, checks and
-migrations preserve them unchanged until they are exported and removed. The browser still
-saves its workspaces there, through routes private to it (`/ui-api`), which are not part
-of this contract.
+Repositories of Cairn before this contract are refused untouched; the tag `v0.17.1` reads them.

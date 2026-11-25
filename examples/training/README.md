@@ -4,7 +4,7 @@ Fits a polynomial to noisy samples of a sine wave by gradient descent. It is pla
 Python, so it runs anywhere.
 
 ```sh
-python data.py                                                 # publishes datasets/points
+python data.py                                                 # stores datasets/points
 python train.py                                                # one run: runs/fit/linear-lr0.1/seed0
 python train.py -m model=linear,cubic learning_rate=0.03,0.3   # four runs
 python train.py -m model=cubic learning_rate=0.3 seed=1,2,3,4  # four more seeds of one of them
@@ -12,13 +12,12 @@ python train.py -m model=cubic learning_rate=0.3 seed=1,2,3,4  # four more seeds
 
 Each configuration and seed has its own run name, `fit/<model>-lr<rate>/seed<seed>`.
 Running the same one again, for example after fixing a bug, publishes its next
-version, which replaces the previous one in every search. Seeds are separate runs
+version; `find(..., latest=True)` shows only that one. Seeds are separate runs
 side by side, not versions of one run.
 
 The Workspace compares the runs, grouped by configuration with the spread over the
-seeds. `cairn.find("runs/fit/**")` finds the latest version of every run below
-`runs/fit/`, and `cairn.find(..., order="/value/loss", limit=1)` the best one, which
-the database evaluates.
+seeds. `client.find("runs/fit/**", latest=True)` finds the latest version of every run
+below `runs/fit/`, and `client.find(..., order="final/loss", limit=1)` the best one.
 
 The Hydra config is in `conf/`. Cairn stores the resolved config and the console
 output with every run, so Hydra writes no output folder for single runs and keeps
@@ -49,8 +48,8 @@ server instead: jobs on different nodes would share one database file over a
 network filesystem, and SQLite's locking is not reliable there.
 
 1. Start a server that the nodes can reach, for example `cairn server --host 0.0.0.0`.
-2. Copy its token to `~/.config/cairn/token` on the cluster, readable only by you.
-3. `export CAIRN_REPO=https://cairn.example.org`, then publish the dataset there
+2. Copy its token to `.cairn/token` in this folder on the cluster, readable only by you.
+3. `export CAIRN_REPO=https://cairn.example.org`, then store the dataset there
    with `python data.py` and submit. Slurm passes the environment on by default,
    PBS with `-V`, and HyperQueue with `--env`.
 
@@ -59,27 +58,28 @@ results until the server has acknowledged them, and `finish()` waits for that, s
 a job ends only once its results are on the server. The default outbox lives in
 the home folder, which is a network filesystem on most clusters.
 
-Runs show up in the server's UI while they log, with their console output, so
+Runs show up in `cairn-ui` while they log, with their console output, so
 the scheduler's log files only matter for jobs that fail before Cairn starts.
 
 ## Workspace card tour
 
-With the server running on port 8765, from the repository root:
+From the repository root:
 
 ```sh
 uv run --extra all python examples/training/workspace_demo.py
+uv run --extra all cairn-ui --no-auth
 ```
 
 This adds three synthetic `workspace-demo/*` runs to `training-example`, using
-only the existing logging API. Each includes scalar loss/validation records,
+only the logging API. Each includes scalar loss/validation records,
 blob-backed reconstruction images at two camera angles, and interactive Plotly
 fits. Step, elapsed time, camera angle, and quality are ordinary record fields.
 One image observation is deliberately absent so exact and previous-value
 comparison can be explored. Re-running the script creates new run versions.
 Use `--repo` and `--project` to choose another destination.
 
-Open [the card tour](http://127.0.0.1:8765/p/training-example/workspace?example=cards)
+Open [the card tour](http://127.0.0.1:8766/p/training-example/workspace?example=cards)
 for scalar plots, image comparisons, a quality-sorted gallery, an elapsed-time
 slider, and Plotly comparisons/galleries. Use card settings to change fields and
-ordering. Save keeps the layout in this browser; the logged records stay in the
+ordering. Save keeps the layout in cairn-ui; the logged records stay in the
 Cairn repository.

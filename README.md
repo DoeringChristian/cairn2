@@ -1,623 +1,122 @@
-# Cairn2
+# Cairn
 
-Cairn logs experiments and stores files, datasets and models using one artifact
-lifecycle, with fast lookups. Choose one repository: a local SQLite database with files, or an HTTP
-server backed by SQLite or PostgreSQL and a filesystem or S3 object store.
-An artifact keeps one ID throughout its lifetime: writable while live, immutable
-once finished. Version labels and aliases point directly to artifacts.
+Cairn logs runs, stores files, datasets and models, and finds them again quickly. A
+repository is a folder; a server shares it over HTTP. The browser explorer, `cairn-ui`, is
+a separate program that reads either.
 
-References use `namespace/name@selector`: `runs/training@latest`,
-`artifacts/model@v3`, or `datasets/shapes@v2`. The prefix is an arbitrary namespace,
-not an object type. All of them are artifacts; typed value formats
-determine how their contents are interpreted and rendered. Names can include
-further slashes, as in `models/training/checkpoint@latest`.
-
-This repository contains the Python API, storage implementation, authenticated
-HTTP API, CLI, and the browser explorer.
-
-[`examples/`](examples/) has small projects: a Hydra training sweep submitted
-with Slurm, PBS, submitit or HyperQueue, a Make/Snakemake pipeline, and a tour of
-records, media and viewers.
+- [`docs/CONTRACT.md`](docs/CONTRACT.md): what programs and repositories can rely on.
+- [`examples/`](examples/): a Hydra sweep for Slurm, PBS and HyperQueue, a Make/Snakemake
+  pipeline, and a tour of media and viewers.
 
 ## Install
 
-Python 3.11 or newer is required. From this checkout:
+Python 3.11 or newer, on Linux or macOS. From this checkout:
 
 ```sh
 python -m pip install -e '.[all]'
 ```
 
-`all` installs every optional feature, including the browser UI. With uv:
+Logging alone needs no extra. `server`, `ui` and `media` (images, arrays, figures) are the
+parts of `all`.
 
-```sh
-uv run --extra all cairn server --host 0.0.0.0
-```
-
-Or install only the extras you need. The base package requires SQLAlchemy and
-HTTPX. `server` adds FastAPI/Uvicorn; `ui` adds the browser UI; `media` adds NumPy, Pillow, Arrow, Plotly, and Matplotlib;
-`postgres` adds Psycopg; `s3` adds Boto3. The command is `cairn`, and the Python
-module is `cairn`.
-
-## Record an experiment
-
-Python `log()` and `track()` automatically include `_wall_time` (Unix seconds
-from the client clock). It is queryable as `/_wall_time`, stays unchanged during
-upload retries, and can be supplied explicitly for imported measurements.
+## Log a run
 
 ```python
 import cairn
 
-run = cairn.init("baseline", repo="./results", config={"learning_rate": 0.01})
-cairn.log({"step": 0, "loss": 0.8})
-cairn.log({"step": 1, "loss": 0.3})
-cairn.update({"description": "Two recorded steps"})
-publication = cairn.finish(value={"final_loss": 0.3})
-assert publication["id"] == run.id
-print(run.id, run.version)
+with cairn.run("training/mlp", config={"lr": 1e-3}) as run:
+    data = run.use("datasets/shapes")                 # recorded as an input
+    for step in range(100):
+        run.log(step=step, loss=1 / (step + 1))
+    run.log({"prediction": cairn.Image(pixels), "mesh.ply": cairn.File("out.ply")})
+    run.add("checkpoints")                            # a folder, as one value
 ```
 
-`cairn.init()` installs a context-local default handle and returns that same
-explicit handle. `log`, `track`, `add`, `update`, `get`, `find`, `use`,
-`flush`, and `finish` also exist on the handle. Use explicit clients when working with
-several repositories or runs:
+- `log` is the only way to write; `add` and `use` are shorthand for it. Logging a key again
+  replaces its value; the earlier records remain.
+- Values are null, booleans, integers, floats (with NaN), text, bytes, lists, maps, files,
+  references, and `Image`, `Array`, `Table`, `Figure` (Matplotlib or Plotly) and `Directory`.
+- The run finishes when its `with` or the program ends: `completed`, `failed` after an error,
+  `cancelled` after Ctrl-C or SIGTERM. Finishing gives it the next version, `runs/training/mlp@v1`.
+- A run also keeps what it printed and what made it: Git commit, uncommitted changes, source
+  files, packages and command. Turn that off with `console=False`, `provenance=False`, or
+  `capture_source=False` (commit and packages, but no code).
+- `cairn.artifact("datasets", "shapes")` makes any other artifact; namespaces are yours.
+- A file may change once `log` returns. `File(path, immutable=True)` promises it stays
+  unchanged until the artifact is finished and saves a copy; `link=True` leaves it where it
+  lies for as long as the artifact exists.
+
+`cairn.Client(repo, project=...)` holds a connection for several artifacts. Another process
+logs to a live run with `client.attach(run.id)`; finishing waits until it leaves.
+
+## Read and find
 
 ```python
-from cairn import Client
-
-with Client("./results") as client:
-    with client.run("comparison", config={"learning_rate": 0.02}) as run:
-        baseline = run.use("runs/baseline@latest", role="baseline")
-        run.log(step=0, loss=0.25)
-        run.update({"baseline_loss": baseline.value["final_loss"]})
-    print(run.id, run.version)
+with cairn.Client() as client:
+    run = client.get("runs/training/mlp@v1")
+    run["loss"], run.config, run.outcome               # current values
+    run.series("loss", x="step")                       # pairs, quickly, also of a million records
+    run["prediction"].array(); run.read("mesh.ply"); run.download("copy")
+    for ordinal, record in run.follow(): ...           # records as they arrive
+    client.find("runs/training/**", where=["min(loss) < 0.1", "_config/lr = 0.001", "tag:paper"], order="-psnr", values=["psnr"])
+    client.files(text="mesh")                          # files of every artifact
 ```
 
-`cairn.run(...)` is the decorator form of `cairn.init()` with the same
-arguments. Every call starts its own run, finishes it when the function returns
-or records a failure and re-raises, and then restores the previous default
-handle. Without `config=`, a Hydra/OmegaConf `DictConfig` first argument is
-resolved and stored as the run config:
+References are `namespace/name@selector` or an ID. The selector is `v3`, an alias, `live`, or
+`latest` (the newest completed version), which is the default. Anything can be read; `use` and
+`Ref` take completed artifacts only, or any finished one with `incomplete=True`, such as the
+cancelled run whose checkpoint a new one continues.
 
-```python
-@hydra.main(config_path="conf", config_name="config", version_base="1.3")
-@cairn.run("train")
-def main(cfg):
-    cairn.log(loss=cfg.learning_rate)
-```
+Tags describe artifacts (`client.tag(run, "paper", topic="sdf")`). An alias points at one
+version of a name (`client.alias(run, "best")`).
 
-For a standalone dataset or other artifact, no explicit client is needed:
-
-```python
-with cairn.artifact("datasets", "samples") as dataset:
-    cairn.add(cairn.Table([{"sample": 0, "weight": 1.0}]), name="samples")
-cairn.use(dataset, role="training-data")
-```
-
-The artifact inherits the current run's repository and project, or uses normal
-discovery when no run exists. Optional `repo=` and `project=` override
-these defaults. Inside the block, top-level calls target the artifact; exiting
-restores the previous run. Use `cairn.finish(value=...)` inside the block to
-set its main value explicitly. Otherwise it finishes automatically.
-`add()` replaces the former Python `capture()` method; no alias is retained.
-It stores named files or typed values, not environment metadata.
-
-From the shell, `cairn add` does the same in one step. Each call publishes the
-next version of the name with every given file or folder, named by its base name:
+## From the shell
 
 ```sh
-cairn add datasets/shapes data/shapes data/labels.csv --metadata '{"source": "survey"}'
-cairn add models/resnet ckpt.pt --use datasets/shapes@v1
+cairn find 'runs/**' --where 'loss < 0.1' --show loss
+cairn show runs/a;  cairn records runs/a;  cairn console runs/a;  cairn files --text mesh
+cairn add datasets/scan scans/ --link;  cairn download datasets/scan copy/
+cairn tag runs/a paper topic=sdf;  cairn alias runs/a best;  cairn links datasets/scan
+ID=$(cairn start runs/job lr=0.1);  cairn log $ID step=1 loss=0.5;  cairn finish $ID
+cairn stop runs/a@live;  cairn delete runs/a@v1;  cairn check;  cairn collect
 ```
 
-Large data that already sits where the repository can read it can be linked
-instead of copied: `cairn add datasets/gonio /data/gonio --link`, or
-`dataset.add(path, link=True)` in Python. The repository records each file's
-location, size, modification time and SHA-256, hashing it in place, and keeps no
-copy. Readers on other machines download it through the server like any other
-file, and readers of a local repository use the files where they are:
-`download()` creates symbolic links to them. The repository needs to read the
-path: a local repository can link any file, a server only files under its
-`--link-root` folders; otherwise the files are uploaded as a copy, with a
-warning. Treat linked files as read-only: reading a changed or missing one raises
-`IntegrityError`, `cairn repo check` lists them, and garbage collection never
-deletes them. Export copies their bytes.
+## Settings
 
-An artifact context finishes on normal exit and requests a failed outcome when
-its body raises. A successfully finished `cairn.init()` handle closes the client
-it created. For explicit clients, `Client.close()` releases connections and stops
-remote delivery; use `flush()` or `finish()` to wait for acknowledgements before
-closing.
+`.cairn.toml`, the nearest one upward, or the environment:
 
-Public `init(config=...)` and `Client.run(config=...)` store configuration under
-`metadata["config"]`. They also capture run provenance on the client:
-Python/platform/executable/working directory, launch arguments, installed Python
-package versions, Git commit/branch/working-tree state, a dirty diff, dependency
-manifests/lockfiles, and a bounded source archive. These are ordinary metadata and
-named file captures, available through the same reader/download API as other data.
+| Key | Variable | |
+|---|---|---|
+| `repo` | `CAIRN_REPO` | a folder (`.cairn/repo` without) or a server's URL |
+| `project` | `CAIRN_PROJECT` | `default` without |
+| `token_file` | `CAIRN_TOKEN` | the file, or the token; `.cairn/token` is found by itself |
+| `provenance`, `capture_source` | `CAIRN_PROVENANCE`, `CAIRN_CAPTURE_SOURCE` | `false` turns them off |
+| `outbox_gb` | | what may wait for a server, per process; 20 without |
+| | `CAIRN_STATE_DIR` | where it waits; `~/.local/state/cairn` without |
 
-```python
-with cairn.init(repo="./results", capture_source=False) as run:
-    run.log({"loss": 0.2})  # Environment/dependencies, without source or diffs.
-
-with cairn.init(repo="./results", provenance=False) as run:
-    run.log({"loss": 0.1})  # Only explicit metadata, records and captures.
-```
-
-Source archives exclude repository internals, common credential paths and symlinks. They
-are bounded; provenance metadata records omissions and collection errors. Outside
-Git, capture is limited to the entry script and known dependency files in the
-working directory. Capture happens at initialization, so files changed later
-need an explicit `run.add(...)`. No raw environment-variable dump is taken.
-The archive records evidence; it does not promise a fully reproducible container.
-Generic `client.start(...)` performs no automatic provenance capture.
-
-Runs also store their console output. Standard output and error, including
-output from extensions and subprocesses, are stored as they happen under
-`console/` and still reach the terminal; a terminal stays a terminal, so colours
-and progress bars are unchanged. The two streams are merged in arrival order.
-Chunks are written every few seconds, less often as a run grows, and at finish
-or interpreter exit. Storage stops after 64 MiB with a truncation note. Only one
-run per process captures at a time. Everything printed is stored, so pass
-`capture_output=False` to `cairn.init`, `cairn.run` or `Client.run` when output
-may contain secrets. `reader.console()` returns the text, and the UI shows it in
-a run's Console tab.
-
-Internally, `start(project, namespace, name, request_id=...)` creates only
-one live artifact and its first writer. Metadata follows as ordinary ordered
-`metadata` entries. There is no separate experiment configuration column or
-run-specific storage table.
-
-## Find and read artifacts
-
-Whatever a run finds or uses becomes its input, so a downstream run can
-discover everything it depended on. Searches run in the repository's database, so
-only their results travel.
-
-```python
-import cairn
-
-with cairn.init("summary"):
-    runs = cairn.find("runs/fit/*")                                    # latest of each name
-    best = cairn.find("runs/fit/*", order="/value/loss", limit=1)[0]  # ranked in the database
-    data = cairn.use("datasets/points", role="training-data")
-    print(best.name, best.version, best.value["loss"])
-    for record in best.records(fields=["/step", "/loss"]):
-        print(record)
-```
-
-| Call | Returns | Recorded as inputs |
-| --- | --- | --- |
-| `cairn.find(pattern, where=None, order=None, limit=None)` | A list of readers | Every artifact it returns |
-| `cairn.use(ref, role="input")` | One reader | That artifact, with the role |
-
-References accept `namespace/name@latest`, `namespace/name@vN`,
-`namespace/name@alias`, a full artifact ID, or an unambiguous hexadecimal ID
-prefix of at least eight characters; omitting the selector means `latest`. A
-pattern is a reference with shell-style wildcards: `*` matches within one level
-of the name and `**` across levels. `runs/fit/*` is the latest version of every
-name one level below `runs/fit/`, `runs/fit/**` of every name below it,
-`runs/fit/*@*` every version, `runs/fit/*@best` each name's `best` alias and
-`*/baseline` every namespace's latest `baseline`. Names cannot contain `*`.
-Searches return finished artifacts only, sorted by name, with numbers in names
-compared as numbers (`seed2` before `seed10`), unless `order` names a field:
-`"/value/loss"` ascending, `"-/value/loss"` descending. `where` takes the
-predicates described under [Annotate and find artifacts](#annotate-and-find-artifacts);
-paths start with `/value`, `/metadata` or `/annotations`.
-
-A reader has `id`, `project`, `namespace`, `name`, `version`, `outcome`,
-`created_at`, `finished_at`, `annotations`, `value`, `config`, `metadata`,
-`dependencies`, `inputs(role=...)` (the dependencies recorded with that role),
-`files`, `file(name)`, `download()`, `console()` and
-`records(where=None, fields=None)`, which streams the logged data page by page;
-`str(reader)` is `runs/fit/cubic@v2`. Files and records are fetched only when
-asked for.
-
-Whatever `find` returns is recorded, because whatever the code learns from it can
-shape the result; artifacts a `where` or `order` only compared in the database
-are not. Like `cairn.log`, `cairn.find` and `cairn.use` belong to
-the current run or artifact and raise without one; a run's own
-`run.find` and `run.use` record to that run. A finished run can no longer record
-and raises `Conflict`. To read without recording, use a `Client`, with
-`client.get(ref)` and `client.find(pattern, ...)`:
-
-```python
-from cairn import Client, Table
-
-with Client("./results") as client:
-    dataset = client.start("datasets", "small-sample")
-    dataset.finish(value=Table([{"x": 1, "y": 2}, {"x": 2, "y": 4}]))
-    rows = client.get("datasets/small-sample").value.load()
-    baseline = client.get("runs/baseline")
-    print(rows, list(baseline.records(where={"path": "/loss", "op": "lt", "value": 0.5})))
-```
-
-A run whose process is killed cannot finish itself. The UI shows "lost contact" two
-minutes after its last heartbeat; **Mark as stopped** there, or
-`cairn artifact stop runs/train@live`, finishes it as incomplete. A run open at SIGTERM
-finishes as cancelled, and a `cairn.init()` run without a `with` block finishes when
-Python exits.
-
-Readers pin the exact finished artifact. Direct IDs are stable before and after
-finish. Live inspection/querying uses the backend; SDK readers and run inputs
-require finished artifacts. There is no revision or snapshot API. Starting again
-under the same name creates a new artifact ID; finishing assigns the next label.
-
-`File`, `Directory`, `Image`, `Array`, `Table`, and `Figure` wrap common media.
-`add(path)` records a named file or directory snapshot. `track(value,
-metadata=None, key="value")` writes a record containing a value. `TypedValue`
-supports custom formats with explicit blob and artifact references; unknown
-formats remain inspectable through `StoredValue`. No pickle-based object codec
-is used.
-
-Files that exist only to be added need no output folder: `new_file` and `new_dir`
-yield a temporary file or folder and add it under the name when the block exits.
-
-```python
-with cairn.new_file("plots/loss.svg", "wb") as stream:
-    figure.savefig(stream, format="svg")
-with cairn.new_dir("frames") as folder:
-    render_frames(folder)
-```
-
-Readers list added names with `reader.files` and return one as a value with
-`reader.file(name)` (`.load()`, `.open()`, `.download()`). `reader.download(name=None,
-to=None)` returns one path: the artifact folder, or the named file or folder in
-it. Added items keep their names; final-value files sit at the top level. Without
-`to`, the folder is `<cache>/artifacts/<id>/`. `<cache>` is `$CAIRN_CACHE_DIR`,
-else `$XDG_CACHE_HOME/cairn` or `~/.cache/cairn`. Content is fetched once into
-`<cache>/blobs/<sha256>`, verified, made read-only and hard-linked (or copied
-across filesystems) into the target; copy a file before editing it.
-
-Large path-backed files and directories use [paged datasets](docs/datasets.md)
-automatically: bounded chunk uploads, durable resume checkpoints, and selective
-reads on other machines. A directory's `value.iter_files()` lists its files
-lazily; `reader.file("images/frame.png")` reads one file from an `images` capture.
-Chunked downloads use a separate, evictable cache and assemble verified files in
-the destination. Both client and server must support `paged_datasets`; existing
-artifacts and shared-path `link=True` captures keep their existing representation.
-
-Names under `provenance/` and `console/` are reserved for Cairn and rejected by
-`add()`. They are not in `reader.files` or a whole-artifact download;
-`reader.provenance` lists the former, and `reader.download("provenance")` or
-`reader.download("console")` downloads them.
-
-JSON numbers must be finite, and integers must be in the portable exact range
-`-(2**53 - 1)` through `2**53 - 1`. Use typed `Array` values for wider integers or
-non-finite numeric data. An append batch accepts at most 10,000 entries, 1 MiB
-per encoded entry, and 4 MiB of encoded entries in total; large media belongs in
-blobs referenced by typed values.
-
-## Annotate and find artifacts
-
-`metadata` records experiment evidence and freezes at finish. `annotations` is a
-separate, editable JSON object for tags, display titles, notes, review status or
-other organizational fields. Tags are just an array inside that object.
-
-```python
-with Client("./results", project="study") as client:
-    artifact = client.annotate("runs/training@latest", {
-        "tags": ["paper", "baseline"],
-        "review": "approved",
-        "title": "Main baseline",
-    })
-    for match in client.find("runs/*", where={"and": [
-        {"path": "/annotations/tags", "op": "contains", "value": "paper"},
-        {"path": "/metadata/config/learning_rate", "op": "lt", "value": 0.01},
-    ]}):
-        print(match, match.annotations)
-    client.annotate(artifact["id"], {"review": "published", "title": None},
-                    expected_etag=artifact["annotations_etag"])
-```
-
-`annotate` applies JSON Merge Patch: nested objects merge, arrays replace, and
-`null` removes a key. `expected_etag` is optional; supply the fetched ETag when
-editing existing information to detect concurrent changes. The repository applies
-the patch atomically. A conflict preserves the newer data. Annotation edits do not
-create artifact versions or change the captured manifest. Writer and reader handles
-also expose `.annotate(patch, expected_etag=...)`.
-
-`target="name"` annotates every version of a name, including later ones. Each
-artifact's `annotations` are its name's properties overlaid key by key by its own,
-so removing a version's key shows the name's value again:
-
-```python
-client.annotate("runs/training", {"tags": ["paper"]}, target="name")
-client.backend.annotation_layers(artifact["id"])  # {"name": ..., "artifact": ..., ...}
-```
-
-`find()` returns readers and fetches pages automatically; `limit` caps the total
-results. Predicate paths start with `/value`, `/metadata` or `/annotations`;
-`client.backend.list_artifacts` below also lists live artifacts. `contains` means exact
-scalar array membership, not substring matching. Other operators match record
-queries. All filters execute in SQL before pagination. SQLite has a generic indexed
-lookup for annotation array members; PostgreSQL uses a GIN annotation containment
-index. Arbitrary scalar comparisons are supported but may need field-specific
-indexes at larger scale. This is structured filtering, not full-text search.
-
-For explicit pages use `client.backend.list_artifacts(project=..., namespace=...,
-where=..., state=..., limit=100, cursor=...)`. Cursors bind all filters; discovery
-has refresh semantics rather than a cross-page snapshot. Annotation changes are
-synchronous operations, separate from the record-upload journal.
+## Server
 
 ```sh
-cairn --repo ./results --project study artifact annotate runs/training@latest \
-  '{"tags":["paper","baseline"],"review":"approved"}'
-cairn --repo ./results --project study artifact list --namespace runs --state finished \
-  --where '{"path":"/annotations/tags","op":"contains","value":"paper"}'
+cairn server --host 0.0.0.0        # writes .cairn/token when there is none
+cairn-ui                           # the explorer of .cairn/repo, at http://127.0.0.1:8766
+cairn-ui --repo http://server:8765 # or of a server
 ```
 
-## Select a repository and authenticate
+Programs log through an outbox on disk, so a slow or absent server does not stop them. When
+the server is away and the outbox is full, `log` raises `cairn.Full`. `cairn recover` sends
+what a killed program left behind. Put HTTPS in front of a server that others reach.
 
-A project configures Cairn with a `.cairn.toml` file:
-
-```toml
-repo = "https://cairn.example.org"   # path or URL; relative paths resolve beside the file
-project = "neural-rendering"         # default project for init, artifact, Client and the CLI
-token_file = "~/.config/cairn/token" # optional; inline tokens are not accepted
-```
-
-Discovery walks from the working directory to its parents and merges every
-`.cairn.toml`: the nearest file setting a key wins, so a subproject can override
-only `project`. A `.cairn/` folder is data: its `repo/` is the repository unless
-a `.cairn.toml` in the same directory sets `repo`.
-
-Python clients and ordinary CLI commands select the repo in this order:
-
-1. An explicit path/URL (`repo=`, `Client(...)`, or `--repo`).
-2. `CAIRN_REPO`.
-3. The nearest `repo` setting or `.cairn/` folder, a `.cairn.toml` shadowing the
-   folder beside it.
-4. `./.cairn/repo`.
-
-The project is an explicit `project=`/`--project`, then `CAIRN_PROJECT`, then
-the nearest `.cairn.toml` `project`, then `default`.
-
-A path selects direct local storage. An HTTP(S) URL selects that server alone.
-Remote reads query the server; they do not combine server results with pending
-local writes. `server` uses the same repo discovery for local repositories;
-if discovery selects a remote URL, it asks for an explicit `--repo` instead.
-Administrative `repo` commands use direct storage configuration, with
-`./.cairn/repo` as their local default.
-
-Bearer tokens are discovered in this order: explicit `token=`/`--token`,
-`CAIRN_TOKEN`, `CAIRN_TOKEN_FILE`, the project token, then
-`~/.config/cairn/token`. The project token comes from the same level as the
-discovered repo: its `.cairn.toml` `token_file`, or `.cairn/token` for a local
-repo. A parent's credentials never pair with a subproject's own repo.
-
-The server uses one shared bearer token. It creates `.cairn/token` with mode
-`0600` when no token is found. Startup prints credential-free URLs. Clients reject base URLs
-containing credentials, query parameters, or fragments. HTTPS termination and
-service supervision are deployment responsibilities.
-
-Remote Python writers stage immutable bytes and ordered events in a durable
-outbox before `log()` returns. Large path-backed dataset values instead upload
-bounded chunks synchronously before queuing their small reference; they do not
-stage the whole dataset in the outbox. `add(path, immutable=True)` skips the staged
-copy of a smaller file or folder: the outbox records where it is and uploads it
-from there, so it must stay unchanged until the artifact finishes (`finish()` waits
-for delivery); a changed or missing file fails delivery with `IntegrityError`.
-The default outbox location is
-`<state>/outbox/<repo-hash>`. `<state>` is `$CAIRN_STATE_DIR`, else
-`$XDG_STATE_HOME/cairn` or `~/.local/state/cairn`. Keep it apart from the
-disposable download cache: it may hold the only copy of unsent results.
-`Client(outbox=...)` selects an explicit location. `flush(timeout=...)` waits for acknowledgements, and
-`Client.recover()` reopens recorded writers after a restart. A journal is bound
-to its repo URL and repository identity; it is delivery state, not another
-queryable artifact repository. A new remote writer needs server acknowledgement
-before it can accept local records. Direct CLI lifecycle commands issue
-synchronous backend requests rather than providing offline queuing.
-
-## Run a server
-
-With no arguments, `cairn server` discovers the same local repository as the
-Python client (default `.cairn/repo`) and serves it on localhost port 8765.
-You can log locally first, then start the server to expose the existing data to
-remote clients. Local logging can continue against that same repository.
-Startup prints the absolute repository path. Explicit `--repo` or
-`--database-url` settings take precedence over discovery.
-If that default port is occupied, it warns and selects a free port. An explicit
-`--port` is fixed and fails if occupied. Use `--host 0.0.0.0` to listen on all
-interfaces. Startup prints URLs using the actual bound port. `--link-root FOLDER`
-(repeatable) lets clients link files under that folder instead of uploading them;
-without it, the server links nothing.
-
-When the UI is installed, startup also prints login links with the server token
-embedded in the URL fragment. They remain reusable across restarts until that
-token changes. Opening the link signs the browser in.
-
-A local SQLite/files deployment:
+## Develop
 
 ```sh
-cairn --repo /srv/cairn/repository server --host 127.0.0.1 --port 8765
+uv sync --extra all
+uv run pytest -q                             # tests
+uv run ruff check --select F,B,I .
+uv run python tools/benchmark.py             # what must stay fast
+uv run python tools/ui_schema.py             # after changing cairn.proto
+uv run --no-project --python 3.12 --with grpcio-tools==1.62.3 --with 'setuptools<80' \
+  python -m grpc_tools.protoc -I cairn --python_out=cairn cairn/cairn.proto
 ```
 
-The repository contains `metadata.sqlite3` and an `objects/` directory. The token
-file belongs to the nearest project directory with `.cairn/` or `.cairn.toml`
-(otherwise the working directory's `.cairn`) unless supplied through
-token discovery.
-
-For PostgreSQL and S3, provision the database and bucket first. Boto3 uses its
-normal credential provider chain. Set `CAIRN_TOKEN_FILE` to an existing token file:
-
-```sh
-export CAIRN_TOKEN_FILE=/etc/cairn/token
-cairn server --host 0.0.0.0 --port 8765 \
-  --database-url 'postgresql+psycopg://cairn@db.example.org/cairn' \
-  --s3-bucket cairn-artifacts --s3-prefix cairn/ --s3-region eu-central-1
-```
-
-For an S3-compatible service, add `--s3-endpoint http://object-store:9000`.
-For PostgreSQL with filesystem objects, replace the S3 flags with
-`--objects /srv/cairn/objects`. Every explicit database URL requires an explicit
-object store. The CLI starts one Uvicorn process; it does not provision databases,
-buckets, TLS certificates, or a process supervisor.
-
-On another machine, copy the same token into `~/.config/cairn/token` with private
-file permissions. Discovery reads that location automatically:
-
-```sh
-cairn --repo https://cairn.example.org info
-cairn --repo https://cairn.example.org artifact list --namespace runs
-```
-
-## Use the CLI
-
-Global repo/project/token flags precede the command. JSON inputs accept
-inline JSON, `@path.json`, or `-` for standard input.
-
-```sh
-cairn --repo ./results artifact start trial --namespace runs --config '{"seed": 7}'
-# Use artifact.id and writer.id returned by start in these commands:
-cairn --repo ./results log ARTIFACT_ID WRITER_ID '{"step": 0, "loss": 0.4}'
-cairn --repo ./results artifact finish ARTIFACT_ID --writer WRITER_ID
-cairn --repo ./results inspect runs/trial@latest
-cairn --repo ./results query runs/trial@latest --kind record \
-  --where '{"path":"/loss","op":"lt","value":0.5}' --limit 100
-```
-
-`cairn init` defaults to the `runs` namespace; `artifact start` defaults to
-`artifacts`. Both accept `--namespace`.
-These are client conventions rather than reserved object types. Other lifecycle commands
-include `artifact update`, `writer`, `close-writer`, and `versions`.
-Use explicit `--sequence` when retrying a CLI log with the same event; changed
-content at an acknowledged sequence conflicts. Paginated queries return
-`next_cursor`; repeat the same query with `--cursor`. `--field /path` projects
-fields and uses those JSON pointers as result keys.
-
-## Browser UI
-
-Install the UI extra and start the server:
-
-```sh
-python -m pip install -e '.[ui]'
-cairn --repo ./results server
-```
-
-The server serves the bundled React UI and prints an immediate login link.
-Browser sessions end after 7 days without use. Use `--no-ui` for API-only operation or
-`--no-auth` for local development without a token. Artifact/run pages include lineage, records, files, editable tags for one version
-or all versions, and click-to-copy IDs. The project Workspace displays scalar,
-image, video, and Plotly cards directly from run records, with comparisons, galleries,
-axis sliders, resizable sections, and layouts saved in the project, shared by everyone
-who opens it. See the
-[training card tour](examples/training/README.md#workspace-card-tour).
-
-The UI source lives in [ui/](ui/README.md). Rebuild the bundled assets after
-changes with `npm ci --prefix ui && npm run build --prefix ui`.
-
-## Viewers
-
-A viewer is an artifact's HTML file, for example a three.js mesh viewer published as
-`viewers/mesh` with its libraries beside `index.html`. A workspace Viewer card shows one:
-
-```yaml
-viewer: cairn:viewers/mesh@v1#index.html
-caption: Lucy decimated to 250k and 50k triangles
-meshes:
-  - label: 250k triangles
-    file: cairn:datasets/lucy@v2#lucy-250k.obj
-```
-
-`viewer` and `caption` are reserved; every other key is the viewer's own setting. The
-viewer runs in a sandboxed frame that cannot reach the page or the session, and
-reads its settings as JSON from its URL fragment
-(`JSON.parse(decodeURIComponent(location.hash.slice(1)))`), each `cairn:REF#file`
-string replaced by a link to that file. It loads its own files by relative path and
-may post `{type: "cairn-html-size", height}` to its parent.
-
-## Transfer and maintain a repository
-
-Repository transfer is a direct administrative operation. Export on the source
-machine, transfer the directory with your normal file-transfer tool, then import
-on the destination server host using its storage configuration:
-
-```sh
-# Source machine: capture the local repository.
-cairn --repo ./results repo export ./cairn-transfer
-
-# Destination server host, after transferring cairn-transfer there:
-cairn repo \
-  --database-url 'postgresql+psycopg://cairn@db.example.org/cairn' \
-  --s3-bucket cairn-artifacts --s3-prefix cairn/ --s3-region eu-central-1 \
-  import ./cairn-transfer
-
-cairn repo \
-  --database-url 'postgresql+psycopg://cairn@db.example.org/cairn' \
-  --s3-bucket cairn-artifacts --s3-prefix cairn/ --s3-region eu-central-1 \
-  check --verify-blobs
-```
-
-For another SQLite/files destination, use
-`cairn --repo ./restored repo import ./cairn-transfer`. Export requires a new
-destination directory. Artifact, writer and record identities, version labels,
-aliases, annotations and dependencies are preserved. The destination keeps its own
-repository identity. Conflicting data fails rather than merging silently;
-reimporting identical data is idempotent. Imported producer handles are closed.
-Live artifacts remain live under the same IDs and can attach new producers;
-closing artifacts retain their exact finish intent and can complete it. Outbox
-journals, authentication configuration and active producer sessions are not
-transferred.
-
-Export takes a consistent metadata snapshot while writers can continue; later
-writes are outside that snapshot. Finish or stop producers for a final cutover.
-There is no HTTP bulk-transfer job service or automatic repository replication.
-
-```sh
-cairn --repo ./results repo check --verify-blobs
-```
-
-## Remove artifacts and collect garbage
-
-`remove` soft-deletes one exact artifact: the reference resolves to an ID first.
-It disappears from listings and names; `@latest` falls back to the highest
-remaining finished version. Artifacts that still depend on it keep it readable by
-ID, and `retained_by` lists them. `gc` purges artifacts removed before the grace
-period that nothing else references, then content no artifact references. It is a
-dry run unless applied, and runs on the server when the repo is a URL.
-
-```sh
-cairn remove "runs/training@latest"
-cairn gc                                           # Dry run
-cairn gc --apply --grace-seconds 3600
-```
-
-```python
-client.remove("runs/training@v2")  # or cairn.remove(...)
-client.gc(apply=True)
-```
-
-`cairn repo gc` runs the same collection directly against storage, for
-`--database-url` and S3 configurations. Collection also observes upload/read
-leases.
-
-## Development and boundaries
-
-```sh
-uv sync --all-extras --group dev
-uv run pytest
-uv run python tools/count_python.py
-```
-
-The line-count check counts every physical line in `cairn/**/*.py`, including
-comments and blank lines, and fails above 9,000 lines. Tests, documentation, and
-tools are excluded from that runtime count. PostgreSQL integration tests use
-`CAIRN_TEST_POSTGRES_URL`; inspect individual test prerequisites before running
-against an existing service.
-
-The API provides one artifact lifecycle, multiple producers, alias compare-and-swap,
-typed values, SQL-filtered record queries, streaming blobs and explicit
-transfer/maintenance. Runs automatically capture client-side provenance and console output. The
-backend has one shared token and ordinal query ordering; no code execution
-or AI integration. Unknown schemas fail explicitly: repository schema **11**, HTTP
-protocol **4**, durable outbox schema **4**. Typed-value codec envelopes remain
-version 1. A schema 6 to 10 repository opens again after `cairn repo export` (a backup)
-and `cairn --repo PATH repo migrate`, which converts it in one transaction; use
-`--database-url` with `--objects` or `--s3-bucket` for PostgreSQL. Names use
-slash-separated namespaces; colon-style references are unsupported.
-
-See [architecture and guarantees](docs/architecture.md) and the
-[method contract](docs/CONTRACT.md) for details.
-
-Implementation checks are recorded in [validation](docs/validation.md),
-with reproducible measurements in [performance](docs/performance.md).
+That compiler is old on purpose: its code runs with protobuf 4.21 to 7.
+[`ui/README.md`](ui/README.md) covers the explorer.

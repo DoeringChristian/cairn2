@@ -1,38 +1,33 @@
 # Cairn explorer
 
-React UI for the permanent-artifact API (protocol 4). Artifact IDs are plain hex;
-finished artifacts retain their IDs and receive a `vN` label. History lists finished
-artifacts sharing a name, without a separate revision entity.
+React pages served by `cairn-ui` (`cairn_ui/`), a program of its own that reads a repository or
+a Cairn server through `/v1` and stores only workspaces, in `.cairn/ui.sqlite3`. The browser
+speaks Cairn's protocol itself: `src/protocol.ts` decodes it, by the schema that
+`tools/ui_schema.py` writes from `cairn.proto`.
 
-Install `cairn2[ui]` and run `cairn --repo PATH server`. The UI is served on the same
-port. `--no-ui` disables it; `--no-auth` enables development access without a token.
-Normal sessions accept the server token or the one-time login URL printed at startup
-and cache authentication in a 12-hour HttpOnly cookie.
+`cairn-ui --no-auth` needs no login. Otherwise the pages take the token, or the link printed at
+startup, and keep it in an HttpOnly cookie for 7 days of use.
 
-For development, run the server on port 18765 with `--no-auth`, then:
+For development, run `cairn-ui --no-auth --port 18765`, then:
 
 ```sh
 npm ci --prefix ui
-npm run dev --prefix ui -- --host 0.0.0.0
+npm run dev --prefix ui
 ```
 
-`CAIRN_DEV_API` overrides the Vite API proxy. `npm run build --prefix ui` typechecks
-and writes the packaged assets into `cairn/ui_static`.
+`CAIRN_DEV_API` overrides the Vite proxy. `npm run build --prefix ui` typechecks and writes the
+packaged pages into `cairn_ui/static`.
 
-Build the media demo with:
+The browser tests need two versions of the showcase run:
 
 ```sh
 cd examples/showcase
-uv run --extra all python run.py
-uv run --extra all cairn server --no-auth --port 18765
+uv run --extra all python run.py && uv run --extra all python run.py
+uv run --extra all cairn-ui --no-auth --port 18765 &
+npm test --prefix ../../ui
 ```
 
-The script records a run with figure, video and audio captures in the
-`neural-rendering` project. Rerun it to add a run version.
-
-Against that running server, `npm test --prefix ui` checks lists, plain IDs, tags,
-media zoom, video, lineage, live runs and the workspace. `CAIRN_UI_URL` overrides the default test URL `http://localhost:18765`.
-Python integration tests are in `tests/test_webui.py`.
+`CAIRN_UI_URL` overrides `http://localhost:18765`. Python tests are in `tests/test_ui.py`.
 
 ## Shared components
 
@@ -50,16 +45,15 @@ Frame stepping uses the selected FPS and browser time-based seeking.
 A workspace Viewer card is YAML read by `readView`; `ViewerFrame` runs its HTML file
 sandboxed from a signed `/ui-api/viewers/` link that serves the artifact's other files by
 relative path, and passes the settings as JSON in the URL fragment with each
-`cairn:REF#file` replaced by such a link. Large chunked files stream through the same route. Project and record views refresh every five seconds, with a global pause.
+`cairn:REF#file` replaced by such a link. Project and record views refresh every five seconds, with a global pause.
 
 `VideoTimeline` supports pointer-drag interval selection and keyboard-adjustable
 endpoints. The lightbox can combine that interval with a pixel region in one copied
 reference. `PlotlyFigure` renders Plotly MIME output with local, lazy-loaded Plotly,
 Cairn colors and typography, and interactive zoom/legend/export controls.
 
-Artifact and run pages include editable tag chips stored as `annotations.tags`.
-Project lists offer matching-all tag filters, kept in the URL, and tag chips in
-artifact/run rows. Annotation ETags protect against overwriting concurrent edits.
+Artifact and run pages include editable tag chips. Lists filter by any condition
+(`loss < 0.1`, `tag:paper`), all of which must hold, kept in the URL.
 Displayed IDs copy their full value; code blocks copy the original code with a
 brief tick confirmation.
 
@@ -68,7 +62,7 @@ Lightbox zoom controls and gesture hints occupy a separate row below the media.
 ## Run workspace
 
 `/p/:project/workspace` displays run records as they arrive. Cards
-use the existing record-query, resolution, and blob APIs. Scalar cards use uPlot, as in Cairn 1, and select X,
+read the records themselves. Scalar cards use uPlot, as in Cairn 1, and select X,
 Y, split fields, point order, and independent legend order. Splitting preserves
 individual observations by default. Optional aggregation draws a mean, median,
 minimum, or maximum per group, with a min–max, sample-standard-deviation, or
@@ -133,8 +127,8 @@ into a section adopt its size. Card settings contain no section sizing controls;
 Older saved layouts remain readable in the v1 format; the first card
 in each section supplies its height and nearest supported width. This adjustment
 is applied in memory until the layout is saved. Undo restores up to 30 layout changes. Save and Save
-as store version-1 layouts in the project on the server, where agents read and write
-them too; data is not copied. A save based on an older revision is refused instead of
+as store version-1 layouts in cairn-ui, where agents read and write
+them too (`cairn-ui workspace`); data is not copied. A save based on an older revision is refused instead of
 overwriting. The browser remembers which layout was open, and layouts that earlier
 versions kept in localStorage can be moved to the project. Card settings save automatically; other unsaved layout edits remain temporary. Saving the example removes
 its preset URL parameter so reloading opens the saved view.

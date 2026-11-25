@@ -3,9 +3,9 @@ import json
 import sys
 from pathlib import Path
 
-from cairn_next import CairnError, Client
-from cairn_next.__main__ import new_token
-from cairn_next.client import settings
+from cairn import CairnError, Client
+from cairn.__main__ import new_token
+from cairn.client import settings
 
 from .workspaces import Workspaces
 

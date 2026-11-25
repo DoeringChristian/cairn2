@@ -8,15 +8,15 @@ from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
+from test_cairn import serve  # noqa: F401
 
-import cairn_next as cairn
-from cairn_next import cairn_pb2 as pb
-from cairn_next.server import MEDIA
-from cairn_next.store import Repository
+import cairn
+from cairn import cairn_pb2 as pb
+from cairn.server import MEDIA
+from cairn.store import Repository
 from cairn_ui.__main__ import main
 from cairn_ui.server import create_app
 from cairn_ui.workspaces import Workspaces
-from test_next import serve, without_provenance  # noqa: F401
 
 LAYOUT = {"version": 1, "id": "i", "name": "n", "search": "", "versions": "all", "status": "", "selected": None,
           "sections": [{"id": "s", "title": "S", "collapsed": False}], "cards": []}
