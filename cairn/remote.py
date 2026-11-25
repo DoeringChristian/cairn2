@@ -12,8 +12,15 @@ PIECE = 64 * 1024 * 1024
 class Remote:
     def __init__(self, url, token=None, timeout=60):
         self.url = url.rstrip("/")
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
-        self._http = httpx.Client(base_url=self.url, headers=headers, timeout=timeout)
+        self._options = {"base_url": self.url, "headers": {"Authorization": f"Bearer {token}"} if token else {}, "timeout": timeout}
+        self._connection = httpx.Client(**self._options)
+
+    @property
+    def _http(self):
+        """A run is still read after its `with` has closed the connection."""
+        if self._connection.is_closed:
+            self._connection = httpx.Client(**self._options)
+        return self._connection
 
     def __getattr__(self, name):
         if name not in ANSWERS:
@@ -74,4 +81,4 @@ class Remote:
             yield from response.iter_bytes(1 << 20)
 
     def close(self):
-        self._http.close()
+        self._connection.close()

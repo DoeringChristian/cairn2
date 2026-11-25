@@ -894,3 +894,15 @@ def test_records_keep_their_bytes():
     read = values.read(data)
     assert {k: read[k] for k in record if k not in ("blob", "ref")} == {k: v for k, v in record.items() if k not in ("blob", "ref")}
     assert read["blob"] == blob and read["ref"].artifact == "ab"
+
+
+@pytest.mark.parametrize("kind", ["local", "remote"])
+def test_a_run_is_read_after_its_connection_closed(tmp_path, serve, kind):
+    repository = Repository(tmp_path / "repo")
+    repo = f"http://127.0.0.1:{serve(repository)[0]}" if kind == "remote" else tmp_path / "repo"
+    with cairn.run("r", {"lr": 1}, repo=repo, project="p", token="secret") as run:
+        run.log(x=1, f=cairn.File(b"content"))
+    assert (run.ref, run.outcome, run.config, run["x"], run.read("f"), run.series("x")) == ("runs/r@v1", "completed", {"lr": 1}, 1, b"content", [1.0])
+    with pytest.raises(cairn.Conflict, match="closed"):
+        run.log(x=2)
+    repository.close()
