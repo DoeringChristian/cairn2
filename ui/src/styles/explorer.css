@@ -195,30 +195,10 @@ button, input { font-family: inherit; }
 .rail .report-toc a { padding: 4px 6px; font-size: 11px; border-radius: 4px; }
 .report-reader-layout { gap: 0; }
 @media(max-width:760px) { .report-reader-layout { gap: 16px; } }
-/* Reports: the author's text with agent slots; the block under the cursor shows its source. */
 .report-actions { display: flex; align-items: center; gap: 8px; }
 .report-create { display: flex; align-items: end; gap: 10px; margin-bottom: 24px; }
 /* flow-root keeps a block's margins inside it, so CodeMirror measures the height the block takes. */
-.report-block { cursor: text; display: flow-root; }
-.report-block > div > :first-child, .report-block > div > .report-block-edit + * { margin-top: 0; }
-.report-block > div > :last-child { margin-bottom: 0; }
 /* An agent slot shows its result; the request and the conversation about it fold away below. */
-.agent-slot { margin: 24px 0; padding-left: 16px; border-left: 2px solid var(--accent-soft); }
-.agent-answer > :first-child { margin-top: 0; }
-.agent-answer > :last-child { margin-bottom: 0; }
-.agent-answer > header { display: flex; justify-content: space-between; gap: 12px; padding-top: 10px; font: 600 11px/1.4 Inter, ui-sans-serif, system-ui, sans-serif; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); }
-.agent-answer > header small { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); }
-.agent-discussion { margin-top: 8px; font: 13px/1.5 Inter, ui-sans-serif, system-ui, sans-serif; }
-.agent-discussion > summary { display: flex; align-items: center; gap: 8px; width: fit-content; color: var(--muted); cursor: pointer; list-style: none; }
-.agent-discussion > summary::-webkit-details-marker { display: none; }
-.agent-discussion > summary:hover, .agent-discussion[open] > summary { color: var(--accent); }
-.agent-discussion > summary small::before { content: "· "; }
-.agent-replied { padding: 0 7px; border-radius: 99px; color: var(--accent); background: var(--accent-soft); font-weight: 650; }
-.agent-thread { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
-.agent-thread > .agent-request { font-size: 15px; line-height: 1.6; }
-.agent-thread > .agent-request > :first-child { margin-top: 0; }
-.agent-thread textarea { box-sizing: border-box; width: 100%; margin-top: 8px; padding: 8px; font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 6px; resize: vertical; }
-.agent-notes h2 { font-size: 24px; }
 .native-plotly-card { margin: 24px 0; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--card); }
 .native-plotly { width: 100%; min-width: 0; height: 400px; }
 .native-plotly .modebar { background: transparent !important; }
@@ -226,16 +206,6 @@ button, input { font-family: inherit; }
 .selection-actions { position: fixed; z-index: 100; display: flex; gap: 5px; }
 .selection-actions .image-copy { position: static; }
 /* Floating conversation; transcript scrolls while the draft stays accessible. */
-.comment-popover { position: fixed; z-index: 110; width: min(320px,calc(100vw - 16px)); display: flex; flex-direction: column; overflow-y: auto; padding: 10px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); font: 12px/1.4 Inter,ui-sans-serif,system-ui,sans-serif; }
-.comment-popover textarea { display: block; width: 100%; max-height: 25vh; resize: vertical; padding: 8px; border: 0; outline: none; background: transparent; color: var(--ink); font: inherit; font-size: 14px; line-height: 1.5; }
-.comment-popover:focus-within { border-color: var(--accent); }
-.comment-popover small { display: block; margin-top: 6px; color: var(--muted); font-size: 10px; }
-.comment-agent { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--muted); font-size: 11px; cursor: pointer; }
-.comment-reply { margin-top: 8px; padding: 6px 8px; border-left: 2px solid var(--line); }
-.comment-reply p { margin: 2px 0 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.comment-reply-box { flex-shrink: 0; margin-top: 8px; border-top: 1px solid var(--line); }
-.comment-reply-box footer { display: flex; align-items: center; justify-content: space-between; }
-.comment-reply-box .comment-agent { margin-top: 0; }
 ::highlight(cairn-comments) { background-color: var(--accent-soft); text-decoration: underline; text-decoration-color: var(--accent); text-decoration-thickness: 2px; }
 .report-comment blockquote { margin: 16px 0; padding: 8px 14px; border-left: 3px solid var(--accent); color: var(--muted); overflow-wrap: anywhere; }
 .report-comments { border-top: 1px solid var(--line); margin: 48px 0 0; padding-top: 24px; }
@@ -243,15 +213,10 @@ button, input { font-family: inherit; }
 .report-comments h3 span { font: 13px system-ui; color: var(--muted); }
 .report-comments > p { font-size: 12px; }
 .report-comment { padding: 18px 0; border-top: 1px solid var(--line); }
-.comment-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
 .report-comment small { color: var(--muted); }
 /* Saved annotations stay next to their text; no discussion panel or footer. */
 .report-comment-marker { position: fixed; z-index: 35; }
 .report-comment-marker.resolved { opacity: .5; }
-.comment-popover .media-icon-button { width: 26px; height: 26px; min-height: 26px; padding: 4px; border: 0; box-shadow: none; background: transparent; }
-.comment-popover .media-icon-button svg { width: 14px; height: 14px; }
-.comment-popover header { display: flex; justify-content: flex-end; align-items: center; gap: 3px; }
-.comment-save-status { margin-right: auto; color: var(--accent); font-size: 10px; min-height: 16px; }
 .commented-media { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 6px; }
 .custom-html-demo { border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; background: var(--card); }
 .custom-html-demo .metric-grid { margin: 16px 0; }
@@ -312,42 +277,16 @@ button.tag-chip { cursor: pointer; }
 .unplaced-comments > button { display: block; max-width: 100%; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 8px; }
 .selection-actions[hidden] { display: none; }
 
-.comment-title { margin-right: auto; font-weight: 600; }
-.comment-messages { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-.comment-popover header { flex-shrink: 0; }
-.comment-save-status { display: flex; align-items: center; gap: 3px; margin-right: 4px; }
-.comment-reply-box footer small { margin: 0; }
 
-.agent-request { display: flex; align-items: baseline; gap: 10px; font: 13px/1.5 Inter, ui-sans-serif, system-ui, sans-serif; color: var(--muted); }
-.agent-request > div { flex: 1; min-width: 0; }
-.agent-request p { margin: 0; white-space: pre-wrap; }
-.agent-label { padding: 0 7px; border-radius: 99px; color: var(--accent); background: var(--accent-soft); font-weight: 700; }
-.agent-waiting { color: var(--muted); font-style: italic; }
-.agent-slot .comment-reply-box textarea { box-sizing: border-box; width: 100%; margin-top: 8px; padding: 8px; font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 6px; }
 .report-editor .cm-editor { color: var(--ink); background: none; }
 .report-editor .cm-editor.cm-focused { outline: none; }
 .report-editor .cm-scroller { font: inherit; line-height: inherit; overflow: visible; }
 .report-editor .cm-content { padding: 0; caret-color: var(--ink); min-width: 0; }
 .report-editor .cm-line { padding: 0; }
-.report-editor-end { min-height: 4rem; cursor: text; }
 /* CodeMirror's zero-width cursor helpers beside widgets are images; the report's figure styles must not size them. */
 .report-editor img.cm-widgetBuffer { display: inline; width: 0; height: 1em; margin: 0; padding: 0; border: 0; border-radius: 0; cursor: text; }
-.report-block-body { position: relative; }
-.report-block-edit { position: absolute; left: -38px; top: 2px; z-index: 4; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--card); color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .12s; }
-.report-block-edit svg { width: 15px; height: 15px; }
-.report-block-body:hover > .report-block-edit, .report-block-edit:focus-visible { opacity: 1; }
-/* A viewer keeps the pointer, so hovering it never reaches the block: its button stays in sight. */
-.report-block-body:has(iframe) > .report-block-edit { opacity: .55; }
-.report-block-body:has(iframe) > .report-block-edit:hover { opacity: 1; }
-.report-block-edit:hover { color: var(--accent); border-color: var(--accent); }
-@media (hover: none) { .report-block-edit { opacity: .6; } }
-@media (max-width: 760px) { .report-block-edit { left: auto; right: 0; } }
-/* A figure spans the text column and centres its image, as the caption is centred. */
 .report-editor figure { margin: 16px 0; }
 .report-editor .preview-open { margin-inline: auto; }
 .report-editor .cm-selectionBackground, .report-editor .cm-focused .cm-selectionBackground { background: var(--accent-soft); }
 .report-editor .cm-tooltip { border: 1px solid var(--line); border-radius: 8px; background: var(--card); box-shadow: var(--shadow); font: 13px/1.5 Inter, ui-sans-serif, system-ui, sans-serif; }
 .report-editor .cm-tooltip-autocomplete > ul > li[aria-selected] { color: var(--ink); background: var(--accent-soft); }
-.report-editor .md-math-rendered { cursor: text; }
-.report-editor .md-math-preview { margin: 8px 0 4px; padding-top: 8px; text-align: center; border-top: 1px dashed var(--line); }
-.report-editor .md-bullet { display: inline-block; color: var(--muted); }

@@ -1,7 +1,8 @@
 # Cairn explorer
 
 React pages served by `cairn-ui` (`cairn_ui/`), a program of its own that reads a repository or
-a Cairn server through `/v1` and stores only workspaces, in `.cairn/ui.sqlite3`. The browser
+a Cairn server through `/v1` and stores only workspaces, in `.cairn/ui.sqlite3`, and reports, as
+Markdown files in `.cairn/reports`. The browser
 speaks Cairn's protocol itself: `src/protocol.ts` decodes it, by the schema that
 `tools/ui_schema.py` writes from `cairn.proto`.
 
@@ -58,6 +59,18 @@ Displayed IDs copy their full value; code blocks copy the original code with a
 brief tick confirmation.
 
 Lightbox zoom controls and gesture hints occupy a separate row below the media.
+
+## Reports
+
+`src/report` edits a Markdown file with CodeMirror. The text is always itself: `preview.ts` hides
+marks where the cursor is not, and draws figures, formulas and tables. A drawn figure is one
+step for the cursor and shows its source when asked (`</>`); tables are edited in their cells
+(`table.ts`). `elements.tsx` fills in what runs hold: `cairn:` references, `view` blocks and `card`
+blocks, which are workspace cards. The text is a Yjs text that the server (`cairn_ui/reports.py`)
+shares over a WebSocket and writes to the file half a second after a change; changes to the file
+by other programs are merged in. Before a report is drawn, `/ui-api/report/files` says the size of
+each image and video (`cairn_ui/sizes.py`), so that nothing moves when they load. Heights that are
+only known afterwards (tables, viewers) are remembered in the browser.
 
 ## Run workspace
 

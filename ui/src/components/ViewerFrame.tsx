@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { parse } from 'yaml';
 import { api, resolve as find, type Json } from '../api';
+import { heightOf, keepHeight } from '../report/heights';
 import { ErrorNote, Loading } from './States';
 
 export type View = { viewer: string; caption?: string; settings: Record<string, Json> };
@@ -34,17 +35,20 @@ export function ViewerFrame({
   const frame = useRef<HTMLIFrameElement>(null),
     [src, setSrc] = useState<string>(),
     [error, setError] = useState<Error>(),
-    [height, setHeight] = useState(480);
+    [height, setHeight] = useState(() => heightOf(`viewer:${viewer}`) ?? 480);
   const identity = JSON.stringify([viewer, settings, project]);
   useEffect(() => {
     const receive = (event: MessageEvent) => {
       if (event.source !== frame.current?.contentWindow || event.data?.type !== 'cairn-html-size') return;
       const value = Number(event.data.height);
-      if (Number.isFinite(value)) setHeight(Math.max(80, Math.min(4000, value)));
+      if (!Number.isFinite(value)) return;
+      const next = Math.max(80, Math.min(4000, value));
+      keepHeight(`viewer:${viewer}`, next);
+      setHeight(next);
     };
     window.addEventListener('message', receive);
     return () => window.removeEventListener('message', receive);
-  }, []);
+  }, [viewer]);
   useEffect(() => {
     const controller = new AbortController(),
       { signal } = controller;
@@ -82,7 +86,7 @@ export function ViewerFrame({
     return () => controller.abort();
   }, [identity]);
   if (error) return <ErrorNote error={error} />;
-  if (!src) return <Loading what={`Loading ${title}`} />;
+  if (!src) return <div style={{ height }}><Loading what={`Loading ${title}`} /></div>;
   return (
     <iframe
       ref={frame}

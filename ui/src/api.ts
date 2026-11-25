@@ -88,6 +88,7 @@ export const artifactsOf = (project: Project) => Object.values(project.artifacts
 export const projectPath = (project: string) => `/p/${encodeURIComponent(project)}`;
 export const runWorkspacePath = (project:string,id:string) => `${artifactPath(project,id)}?tab=workspace`;
 export const artifactPath = (project: string, id: string) => `${projectPath(project)}/a/${encodeURIComponent(id)}`;
+export const reportPath = (project: string, name: string) => `${projectPath(project)}/r/${name.split('/').map(encodeURIComponent).join('/')}`;
 export const filePath = (id: string, path: string) => `/ui-api/files/${encodeURIComponent(id)}/${path.split('/').map(encodeURIComponent).join('/')}`;
 export const blobPath = (blob: BlobRef) => `/ui-api/content/${blob.digest}${blob.media_type ? `?type=${encodeURIComponent(blob.media_type)}` : ''}`;
 export const reference = (artifact: Artifact) => `${artifact.namespace}/${artifact.name}${artifact.version ? `@v${artifact.version}` : ''}`;

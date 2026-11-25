@@ -64,7 +64,7 @@ jobs:
           CAIRN_REPO=/tmp/cairn-ci uv run python examples/showcase/run.py
       - name: Browser tests
         run: |
-          uv run cairn-ui --repo /tmp/cairn-ci --state /tmp/cairn-ui.sqlite3 --port 18765 --no-auth > /tmp/cairn-server.log 2>&1 &
+          uv run cairn-ui --repo /tmp/cairn-ci --state /tmp/cairn-ui --port 18765 --no-auth > /tmp/cairn-server.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" || true' EXIT
           for attempt in $(seq 1 60); do

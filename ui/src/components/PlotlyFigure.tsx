@@ -19,7 +19,7 @@ export function PlotlyFigure({spec,src}: {spec?:unknown;src?:string}) {
       delete layout.width;
       await Plotly.newPlot(node,structuredClone(figure.data),structuredClone(layout),{responsive:true,displaylogo:false,displayModeBar:true,scrollZoom:false,toImageButtonOptions:{format:'svg',filename:'cairn-figure',width:1000,height:600,scale:1}});
       purge=()=>Plotly.purge(node);if(closed){purge();return;}
-      resize=new ResizeObserver(()=>{void Plotly.Plots.resize(node);});resize.observe(node);
+      resize=new ResizeObserver(()=>{if(node.isConnected&&node.offsetWidth)void Plotly.Plots.resize(node);});resize.observe(node);
     };
     const observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting)){observer.disconnect();void render().catch(e=>{if(!closed)setError(e);});}},{rootMargin:'300px'});observer.observe(node);
     return()=>{closed=true;controller.abort();observer.disconnect();resize?.disconnect();purge?.();};

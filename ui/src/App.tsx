@@ -1,8 +1,8 @@
-import { FlaskConical, Boxes, Layers, LayoutDashboard, PanelLeftClose, PanelLeftOpen, FolderOpen, Pause, Play, Palette, LogOut } from 'lucide-react';
+import { FileText, List, FlaskConical, Boxes, Layers, LayoutDashboard, PanelLeftClose, PanelLeftOpen, FolderOpen, Pause, Play, Palette, LogOut } from 'lucide-react';
 import { clearViews, scopeViews } from './viewCache';
 import { invalidateLists, scopeListCache } from './listCache';
 import { setRefreshPaused, useRefresh, useRefreshMode } from './refresh';
-import { useEffect, useState, type FormEvent } from 'react';
+import { lazy, Suspense, useEffect, useState, type FormEvent } from 'react';
 import { Link, Route, Routes, useLocation, useNavigate, matchPath } from 'react-router-dom';
 import { api, post, setClock, useProjects, projectPath, runsOf } from './api';
 import { Button, ErrorNote, Field, Hero, Loading, Select } from './components';
@@ -12,6 +12,10 @@ import { PalettePage } from './pages/Palette';
 import { WorkspacePage, RunWorkspaceRedirect } from './workspace/Workspace';
 import { useScrollMemory } from './components/useScrollMemory';
 import './styles/navigation.css';
+import './styles/report-editor.css';
+
+const ReportsPage = lazy(() => import('./report/ReportPage').then(module => ({default: module.ReportsPage})));
+const ReportPage = lazy(() => import('./report/ReportPage').then(module => ({default: module.ReportPage})));
 
 type Session = { no_auth: boolean; repository_id: string; now: number };
 let initialSession: Promise<Session> | undefined;
@@ -44,6 +48,7 @@ function Rail({ authenticated, noAuth, logout }: {authenticated: boolean; noAuth
   const view = new URLSearchParams(location.search).get('view') || 'runs';
   const inList = location.pathname === projectPath(project);
   const inWorkspace = !!matchPath('/p/:project/workspace',location.pathname);
+  const inReports = !!matchPath('/p/:project/reports',location.pathname) || !!matchPath('/p/:project/r/*',location.pathname);
   const pulse = useRefresh(authenticated), paused = useRefreshMode();
   const projects = useProjects(authenticated, pulse);
   useEffect(() => setOpen(false), [location.pathname, location.search]);
@@ -51,15 +56,15 @@ function Rail({ authenticated, noAuth, logout }: {authenticated: boolean; noAuth
     <button className="rail-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>Browse</button>
     {authenticated && <section className="report-list workspace-navigation">
       <button className="rail-project-icon" aria-label="Choose project" title={project||"Choose project"} onClick={()=>setExpanded(true)}><FolderOpen size={18}/></button><div className="rail-project-picker"><Select label="Project" value={project} choices={[{value:'',label:'All projects'},...(projects.data||[]).map(p=>({value:p.name,label:p.name,note:`${runsOf(p)} runs`}))]}
-        onChange={value=>navigate(value ? (inWorkspace ? `${projectPath(value)}/workspace` : `${projectPath(value)}?view=${view}`) : '/')}/></div>
-      <nav aria-label="Project navigation"><Link aria-label="Workspace" title="Workspace" to={project ? `${projectPath(project)}/workspace` : "/"} aria-current={project && inWorkspace ? "page" : undefined}><LayoutDashboard size={18} aria-hidden="true"/><span className="rail-item-label">Workspace</span></Link>{[
+        onChange={value=>navigate(value ? (inWorkspace ? `${projectPath(value)}/workspace` : inReports ? `${projectPath(value)}/reports` : `${projectPath(value)}?view=${view}`) : '/')}/></div>
+      <nav aria-label="Project navigation"><Link aria-label="Workspace" title="Workspace" to={project ? `${projectPath(project)}/workspace` : "/"} aria-current={project && inWorkspace ? "page" : undefined}><LayoutDashboard size={18} aria-hidden="true"/><span className="rail-item-label">Workspace</span></Link><Link aria-label="Reports" title="Reports" to={project ? `${projectPath(project)}/reports` : "/"} aria-current={project && inReports ? "page" : undefined}><FileText size={18} aria-hidden="true"/><span className="rail-item-label">Reports</span></Link>{[
         {value:'runs',label:'Runs',Icon:FlaskConical},
         {value:'artifacts',label:'Artifacts',Icon:Boxes},
         {value:'all',label:'All',Icon:Layers},
       ].map(({value,label,Icon})=><Link key={value} aria-label={label} title={label} to={project ? `${projectPath(project)}?view=${value}` : '/'}
         aria-current={project && inList && view===value ? 'page' : undefined}><Icon size={18} aria-hidden="true"/><span className="rail-item-label">{label}</span></Link>)}</nav>
     </section>}
-    
+    <div id="report-toc-slot"/><button className="rail-outline-icon" aria-label="Show table of contents" title="Table of contents" onClick={()=>setExpanded(true)}><List size={18}/></button>
     <div className="rail-note"><p>{noAuth ? "Development · authentication off" : "Evidence worth keeping."}</p><div className="rail-links"><button className="text-button" aria-label={paused?'Resume auto-refresh':'Pause auto-refresh'} title={paused?'Resume auto-refresh':'Pause auto-refresh'} onClick={()=>setRefreshPaused(!paused)}>{paused?<Play size={16}/>:<Pause size={16}/>}<span className="rail-item-label">{paused?'Resume auto-refresh':'Auto-refresh · 5s'}</span></button><Link aria-label="Components" title="Components" to="/palette"><Palette size={16}/><span className="rail-item-label">Components</span></Link>{authenticated && !noAuth && <button className="text-button" aria-label="Log out" title="Log out" onClick={logout}><LogOut size={16}/><span className="rail-item-label">Log out</span></button>}</div></div>
   </aside>;
 }
@@ -79,6 +84,6 @@ export function App() {
     {error && <ErrorNote error={error}/>}{auth === null ? <main><Loading what="Connecting to Cairn"/></main> : auth === false ? <Login onLogin={() => {setError(undefined); setAuth(true);}}/> : <Routes>
       <Route path="/" element={<ProjectsPage/>}/><Route path="/login" element={<ProjectsPage/>}/><Route path="/p/:project" element={<ProjectPage/>}/>
       <Route path="/p/:project/a/:id" element={<ArtifactPage/>}/><Route path="/p/:project/v/:version" element={<ArtifactPage/>}/>
-      <Route path="/p/:project/workspace" element={<WorkspacePage/>}/><Route path="/p/:project/workspace/:runId" element={<RunWorkspaceRedirect/>}/><Route path="/palette" element={<PalettePage/>}/><Route path="*" element={<main><Hero title="Page not found"/><Link to="/">Back to projects</Link></main>}/>
+      <Route path="/p/:project/reports" element={<Suspense fallback={<main><Loading/></main>}><ReportsPage/></Suspense>}/><Route path="/p/:project/r/*" element={<Suspense fallback={<main><Loading/></main>}><ReportPage/></Suspense>}/><Route path="/p/:project/workspace" element={<WorkspacePage/>}/><Route path="/p/:project/workspace/:runId" element={<RunWorkspaceRedirect/>}/><Route path="/palette" element={<PalettePage/>}/><Route path="*" element={<main><Hero title="Page not found"/><Link to="/">Back to projects</Link></main>}/>
     </Routes>}</div></>;
 }

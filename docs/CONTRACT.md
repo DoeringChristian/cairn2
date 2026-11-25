@@ -97,6 +97,7 @@ Frozen: the values and their encoding, the messages and operations of `/v1`, ref
 conditions, and the conventions above. Fields, operations and conventions may be added.
 
 Not frozen: the repository's tables and indexes (a schema number guards them), the outbox,
-which keeps only what a program has not sent yet, and `cairn-ui`.
+which keeps only what a program has not sent yet, and `cairn-ui` with its workspaces and reports,
+which Cairn does not know.
 
 Repositories of Cairn before this contract are refused untouched; the tag `v0.17.1` reads them.

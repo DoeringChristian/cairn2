@@ -1,0 +1,77 @@
+/* Reports: text that is always itself, with figures, formulas and tables drawn in it. */
+.report-bar { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 16px; font-size: 13px; }
+.report-editor .cm-editor { font: inherit; }
+.report-editor .cm-content { padding-bottom: 30vh; font: 16px/1.75 inherit; }
+.report-editor .cm-line { padding: 0; }
+.report-editor .cm-cursor { border-left-color: var(--ink); }
+.report-editor .md-heading { font-family: Georgia, serif; line-height: 1.2; padding: 1.1em 0 .35em; }
+.report-editor .md-h1 { font-size: 36px; }
+.report-editor .md-h2 { font-size: 30px; }
+.report-editor .md-h3 { font-size: 22px; }
+.report-editor :is(.md-h4, .md-h5, .md-h6) { font-size: 18px; }
+.report-editor .cm-line:first-child.md-heading { padding-top: 0; }
+.md-em { font-style: italic; }
+.md-strong { font-weight: 700; }
+.md-strike { text-decoration: line-through; }
+.md-code, .md-table code { font: .88em ui-monospace, monospace; padding: 1px 5px; border-radius: 5px; background: color-mix(in srgb, var(--line) 45%, transparent); }
+.md-source { font: .92em ui-monospace, monospace; color: var(--warn); }
+.md-link, .md-table [data-href] { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.md-link[data-href], .md-table [data-href] { cursor: pointer; }
+.report-editor .md-item { padding-left: calc(var(--depth) * 1.6em); text-indent: -1.6em; }
+.report-editor .md-item-more { text-indent: 0; }
+.md-marker { display: inline-block; box-sizing: border-box; width: 1.6em; padding-right: .5em; text-indent: 0; text-align: right; color: var(--muted); }
+.md-marker input { margin: 0; accent-color: var(--accent); vertical-align: -1px; cursor: pointer; }
+.report-editor .md-quote { padding-left: 18px; border-left: 3px solid var(--line); color: var(--muted); }
+.report-editor .md-callout { padding: 0 18px; border-left: 3px solid var(--accent); background: var(--accent-soft); }
+.report-editor :is(.md-callout-warning, .md-callout-important) { border-left-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, var(--paper)); }
+.report-editor .md-callout.md-first { padding-top: 10px; border-radius: 0 10px 0 0; }
+.report-editor .md-callout.md-last { padding-bottom: 10px; border-radius: 0 0 10px 0; }
+.md-callout-title, .md-callout-label { font-weight: 700; }
+.report-editor .md-fence { padding: 0 18px; font: 13px/1.7 ui-monospace, monospace; background: var(--card); border: solid var(--line); border-width: 0 1px; }
+.report-editor .md-fence-first { padding-top: 10px; border-top-width: 1px; border-radius: 10px 10px 0 0; color: var(--muted); }
+.report-editor .md-fence-last { padding-bottom: 10px; border-bottom-width: 1px; border-radius: 0 0 10px 10px; }
+.report-editor hr { display: inline-block; width: 100%; margin: 0; border: 0; border-top: 1px solid var(--line); vertical-align: middle; }
+.md-math-block { padding: 12px 0; text-align: center; overflow-x: auto; cursor: text; }
+.md-math-preview { border-bottom: 1px dashed var(--line); }
+.md-math-wrong { font-family: ui-monospace, monospace; color: #a3352b; }
+.md-element { position: relative; padding: 14px 0; }
+.md-element-inline { display: inline-block; max-width: 100%; padding: 0; vertical-align: bottom; }
+.md-element figure { margin: 0; }
+.md-element figcaption { margin: 8px 0 0; color: var(--muted); font-size: 13px; text-align: center; }
+.md-element .preview-open { display: block; margin-inline: auto; }
+.md-element .native-plotly-card { margin: 0; }
+.md-element-source { position: absolute; top: 18px; right: 4px; z-index: 4; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--card); color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .12s; }
+.md-element-inline .md-element-source { top: -14px; right: -14px; width: 22px; height: 22px; }
+.md-element:hover > .md-element-source, .md-element-source:focus-visible { opacity: 1; }
+.md-element:has(iframe) > .md-element-source { opacity: .55; }
+.md-element-source:hover { color: var(--accent); border-color: var(--accent); }
+@media (hover: none) { .md-element-source { opacity: .6; } }
+.md-card { width: 100%; }
+.md-value { font-variant-numeric: tabular-nums; border-bottom: 1px dotted var(--muted); }
+.md-missing { color: #a3352b; }
+.md-table { padding: 12px 0 6px; overflow-x: auto; }
+.md-table table { border-collapse: collapse; min-width: 50%; margin: 0; }
+.md-table :is(th, td) { min-width: 60px; padding: 6px 12px; border: 1px solid var(--line); background: var(--card); text-align: left; vertical-align: top; outline: none; }
+.md-table th { font-weight: 650; background: color-mix(in srgb, var(--accent-soft) 60%, var(--card)); }
+.md-table :is(th, td):focus { box-shadow: inset 0 0 0 2px var(--accent); }
+.md-table-bar { display: flex; gap: 6px; height: 26px; margin-top: 4px; opacity: 0; transition: opacity .12s; }
+.md-table:hover .md-table-bar, .md-table:focus-within .md-table-bar { opacity: 1; }
+.md-table-bar button { padding: 1px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--muted); font: 12px Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; }
+.md-table-bar button:hover { color: var(--accent); border-color: var(--accent); }
+.report-editor .cm-panels { border-bottom: 1px solid var(--line); background: var(--card); color: var(--ink); font: 13px Inter, ui-sans-serif, system-ui, sans-serif; }
+.report-editor .cm-tooltip-autocomplete > ul { max-height: 16em; font-family: inherit; }
+.report-editor .cm-ySelectionInfo { display: none; }
+/* Space is there before what fills it. */
+.md-sized { max-width: 100%; margin-inline: auto; }
+.md-sized :is(.native-output-shell, .preview-open) { display: block; width: 100%; margin: 0; }
+.md-sized .preview-open img, .md-sized .md-blank { display: block; width: 100%; height: auto; margin: 0; aspect-ratio: var(--aspect); }
+.md-sized .prism-video-preview .prism-inline-video { aspect-ratio: var(--aspect); }
+.md-unsized .md-blank { min-height: 120px; }
+.md-blank { border-radius: 8px; background: color-mix(in srgb, var(--line) 35%, transparent); }
+.md-audio { min-height: 54px; }
+.md-audio .native-audio { margin: 0; }
+.md-steady:has(.md-wait) { min-height: var(--height); }
+.md-element-inline .md-sized { display: inline-block; vertical-align: bottom; }
+/* A smooth scroll would end early, when a figure on its way turns out taller. */
+html:has(.report-page) { scroll-behavior: auto; }
+.value-media { display: block; width: 100%; max-width: 720px; aspect-ratio: 16 / 9; background: #19271f; border-radius: 8px; }

@@ -62,10 +62,10 @@ class Workspaces:
                 raise
         return self.named(project, name)
 
-    def delete(self, project, name):
-        self.named(project, name)
+    def delete(self, identifier):
+        self.get(identifier)
         with self._lock:
-            self._db.execute("DELETE FROM workspaces WHERE project = ? AND name = ?", (project, name))
+            self._db.execute("DELETE FROM workspaces WHERE id = ?", (identifier,))
 
     def close(self):
         self._db.close()

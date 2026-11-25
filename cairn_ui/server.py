@@ -1,5 +1,6 @@
 """The pages, and what they ask for: Cairn's operations passed on, and workspaces."""
 
+import contextlib
 import hashlib
 import hmac
 import mimetypes
@@ -20,12 +21,14 @@ from starlette.responses import (
     Response,
     StreamingResponse,
 )
-from starlette.routing import Route
+from starlette.routing import Route, WebSocketRoute
 
 from cairn import CairnError, Invalid, NotFound, Unauthorized, values
 from cairn import cairn_pb2 as pb
 from cairn.operations import REQUESTS
 from cairn.server import MEDIA, STATUS
+
+from .sizes import size_of
 
 STATIC = Path(__file__).with_name("static")
 READS = {"resolve", "aliases", "projects", "records", "series", "keys", "last", "find", "files", "links"}
@@ -44,7 +47,7 @@ def _gzip(chunks):
     yield compressor.flush()
 
 
-def create_app(client, workspaces, *, token=None):
+def create_app(client, workspaces, reports, *, token=None):
     """`client` reaches Cairn; `token` is what a browser logs in with, None for no login."""
     backend = client.backend
     secret = token or hashlib.sha256(client.repo.encode()).hexdigest()
@@ -52,9 +55,14 @@ def create_app(client, workspaces, *, token=None):
     # Cookies ignore ports, so other servers on this host have cookies of their own.
     cookie = f"{COOKIE}_{hashlib.sha256(secret.encode()).hexdigest()[:12]}"
 
+    sizes = {}
+
     def issued(request):
         if token is None:
             return time.time()
+        given = request.headers.get("authorization", "")
+        if given:
+            return time.time() if hmac.compare_digest(given.removeprefix("Bearer ").encode(), token.encode()) else None
         try:
             return signer.loads(request.cookies.get(cookie, ""), max_age=SESSION, return_timestamp=True)[1].timestamp()
         except BadSignature:
@@ -81,7 +89,7 @@ def create_app(client, workspaces, *, token=None):
                 response = JSONResponse({"error": {"code": error.code, "message": str(error)}}, STATUS.get(error.code, 500))
             except httpx.TransportError as error:
                 response = JSONResponse({"error": {"code": "unreachable", "message": f"Cairn does not answer: {error}"}}, 502)
-            if session and token is not None and started is not None and time.time() - started > RENEW and "set-cookie" not in response.headers:
+            if session and token is not None and cookie in request.cookies and started is not None and time.time() - started > RENEW and "set-cookie" not in response.headers:
                 grant(response, request)
             response.headers.setdefault("Cache-Control", "no-store")
             response.headers["X-Content-Type-Options"] = "nosniff"
@@ -264,11 +272,98 @@ def create_app(client, workspaces, *, token=None):
     async def read_workspace(request):
         return JSONResponse(await run_in_threadpool(workspaces.get, request.path_params["id"]))
 
+    async def delete_workspace(request):
+        await run_in_threadpool(workspaces.delete, request.path_params["id"])
+        return JSONResponse({})
+
     async def write_workspace(request):
         project, name, layout, expected = await body(request, "project", "name", "layout", "expected_revision")
         if not isinstance(project, str) or not isinstance(name, str) or not name or not (expected is None or isinstance(expected, int)):
             raise Invalid("A workspace has a project, a name and a revision")
         return JSONResponse(await run_in_threadpool(workspaces.write, project, name, layout, expected))
+
+    async def list_reports(request):
+        return JSONResponse(reports.list(request.query_params.get("project", "")))
+
+    async def report(request):
+        project, name = (request.query_params.get(key, "") for key in ("project", "name"))
+        if request.method in ("GET", "HEAD"):
+            return JSONResponse(reports.get(project, name))
+        same_origin(request)
+        if request.method == "DELETE":
+            reports.delete(project, name)
+            return JSONResponse({})
+        [given] = [await request.json()] if request.headers.get("content-type", "").split(";")[0] == "application/json" else [None]
+        if not isinstance(given, dict) or not all(isinstance(value, str) for value in given.values()):
+            raise Invalid("Changes are JSON texts")
+        if request.method == "POST" and given.keys() == {"old", "new"}:
+            return JSONResponse(reports.edit(project, name, given["old"], given["new"]))
+        if request.method == "PUT" and given.keys() in ({"text"}, {"text", "base"}):
+            return JSONResponse(reports.write(project, name, given["text"], given.get("base")))
+        if request.method == "POST" and given.keys() <= {"text"}:
+            return JSONResponse(reports.create(project, name, given.get("text", "")))
+        raise Invalid("A report takes text, text and base, or old and new")
+
+    def reader(blob):
+        """Reads parts of content, wherever it is."""
+        if not client.remote:
+            path = backend.locate(blob.digest)
+
+            def read(at, count):
+                with open(path, "rb") as stream:
+                    stream.seek(at)
+                    return stream.read(count)
+
+            return read
+        return lambda at, count: b"".join(backend.stream(blob.digest, at, min(at + count, blob.size))) if at < blob.size else b""
+
+    def measured(blob):
+        if blob.digest not in sizes:
+            sizes[blob.digest] = size_of(reader(blob), blob.size, blob.media_type)
+        return sizes[blob.digest]
+
+    def files_of(project, text):
+        """What a report shows that is a file, with its size, so that space is there before it."""
+        found = {}
+        for source in list(dict.fromkeys(re.findall(r"!\[[^\]\n]*\]\(\s*cairn:([^)\s]+#[^)\s]+)\s*\)", text)))[:500]:
+            ref, _, path = source.partition("#")
+            try:
+                artifact = backend.resolve(pb.Resolve(project=project, refs=[ref])).items[0].id
+                for wanted in (path, f"{path}/data"):
+                    item = next((f for f in backend.files(pb.Files(artifact=artifact, pattern=wanted)).items if f.path == wanted), None)
+                    if item:
+                        side = measured(item.blob)
+                        found[source] = {"digest": item.blob.digest.hex(), "size": item.blob.size, "media_type": item.blob.media_type, "width": side and side[0], "height": side and side[1]}
+                        break
+            except (CairnError, OSError):
+                continue  # the page says what is missing
+        return found
+
+    async def report_files(request):
+        project, name = (request.query_params.get(key, "") for key in ("project", "name"))
+        text = reports.get(project, name)["text"]
+        return JSONResponse(await run_in_threadpool(files_of, project, text))
+
+    async def live(socket):
+        """A report's shared text, for a browser of these pages."""
+        if issued(socket) is None or urlsplit(socket.headers.get("origin", "")).netloc != socket.headers.get("host"):
+            await socket.close(4401)
+            return
+        await socket.accept()
+        try:
+            found = reports.live(*(socket.query_params.get(key, "") for key in ("project", "name")))
+        except CairnError:
+            await socket.close(4404)
+            return
+        if socket.query_params.get("epoch") != found.epoch:
+            await socket.close(4409)
+            return
+        await found.join(socket)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app):
+        yield
+        reports.close()
 
     async def asset(request):
         target = (STATIC / "assets" / request.path_params["path"]).resolve()
@@ -299,9 +394,14 @@ def create_app(client, workspaces, *, token=None):
         Route("/ui-api/workspaces", route(list_workspaces)),
         Route("/ui-api/workspaces", route(write_workspace, change=True), methods=["PUT"]),
         Route("/ui-api/workspaces/{id}", route(read_workspace)),
+        Route("/ui-api/workspaces/{id}", route(delete_workspace, change=True), methods=["DELETE"]),
+        Route("/ui-api/reports", route(list_reports)),
+        Route("/ui-api/report", route(report), methods=["GET", "PUT", "POST", "DELETE"]),
+        Route("/ui-api/report/files", route(report_files)),
+        WebSocketRoute("/ui-api/live/report", live),
         Route("/ui-api/do/{operation}", route(operate), methods=["POST"]),
         Route("/favicon.svg", route(favicon, session=False)),
         Route("/favicon.ico", route(favicon, session=False)),
         Route("/assets/{path:path}", route(asset, session=False)),
         Route("/{path:path}", route(shell, session=False)),
-    ])
+    ], lifespan=lifespan)

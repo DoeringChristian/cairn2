@@ -180,5 +180,5 @@ test('a run whose process is gone shows lost contact and can be marked as stoppe
 });
 
 test('unknown pages say so',async({page})=>{
-  await page.goto('/p/neural-rendering/r/field-guide');await expect(page.getByRole('heading',{name:'Page not found'})).toBeVisible();
+  await page.goto('/p/neural-rendering/nowhere');await expect(page.getByRole('heading',{name:'Page not found'})).toBeVisible();
 });

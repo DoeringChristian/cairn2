@@ -92,6 +92,7 @@ cairn stop runs/a@live;  cairn delete runs/a@v1;  cairn check;  cairn collect
 | `token_file` | `CAIRN_TOKEN` | the file, or the token; `.cairn/token` is found by itself |
 | `provenance`, `capture_source` | `CAIRN_PROVENANCE`, `CAIRN_CAPTURE_SOURCE` | `false` turns them off |
 | `outbox_gb` | | what may wait for a server, per process; 20 without |
+| `ui` | `CAIRN_UI` | the cairn-ui that `report` and `workspace` ask |
 | | `CAIRN_STATE_DIR` | where it waits; `~/.local/state/cairn` without |
 
 ## Server
@@ -101,6 +102,32 @@ cairn server --host 0.0.0.0        # writes .cairn/token when there is none
 cairn-ui                           # the explorer of .cairn/repo, at http://127.0.0.1:8766
 cairn-ui --repo http://server:8765 # or of a server
 ```
+
+cairn-ui also keeps workspaces and **reports**, in `.cairn/ui.sqlite3` and `.cairn/reports`. A
+report is a Markdown file that people and agents edit at the same time, in the browser or with
+`cairn-ui report list|show|write|edit|delete` (`cairn-ui workspace` does the same for
+workspaces). It shows what runs hold:
+
+````markdown
+The psnr reached ![](cairn:runs/training/mlp@v1#psnr) dB.
+
+![The prediction](cairn:runs/training/mlp@v1#prediction)
+
+```card
+kind: scalar
+runs: runs/training/*
+x: step
+y: loss
+```
+
+```view
+viewer: cairn:viewers/mesh@v2#index.html
+mesh: cairn:runs/training/mlp@v1#mesh.ply
+```
+````
+
+The commands ask a running cairn-ui (`--url`, `CAIRN_UI`, or `ui` in `.cairn.toml`). Cairn itself
+knows nothing of reports and workspaces.
 
 Programs log through an outbox on disk, so a slow or absent server does not stop them. When
 the server is away and the outbox is full, `log` raises `cairn.Full`. `cairn recover` sends

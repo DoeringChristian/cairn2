@@ -10,10 +10,11 @@ import { PlotlyFigure } from './PlotlyFigure';
 export function BlobTable({blobs}: {blobs: BlobRef[]}) {
   return blobs.length ? <DataTable head={['File','Size','Content','Download']}>{blobs.map((b,i)=><tr key={`${b.digest}-${i}`}><td className="wrap-any">{b.name || b.digest.slice(0,16)}</td><td className="nowrap">{bytes(b.size)}</td><td><code title={b.digest}>{b.digest.slice(0,12)}…</code></td><td><LinkButton small href={b.href || blobPath(b)} download={b.name || b.digest}>Download</LinkButton></td></tr>)}</DataTable> : <Hint>No files attached.</Hint>;
 }
-export function ImagePreview({blob}: {blob: BlobRef}) {
+export function ImagePreview({blob,width,height}: {blob: BlobRef;width?: Json;height?: Json}) {
   const {url,error}=useImageBlob(blob,blob.size<=20*1024**2);
   if(blob.size>20*1024**2) return <Hint>Image exceeds the 20 MiB preview limit. Download it to view.</Hint>;
-  return <>{error ? <ErrorNote error={error}/> : !url ? <Loading what="Loading image"/> : <figure className="image-preview"><ZoomImage src={url} alt={blob.name || 'Artifact image'}/><figcaption>{blob.name} · Click to enlarge and zoom</figcaption></figure>}</>;
+  const space=typeof width==='number'&&typeof height==='number'?{width:Math.min(width,width*360/height),maxWidth:'100%',aspectRatio:`${width} / ${height}`}:{minHeight:120};
+  return <>{error ? <ErrorNote error={error}/> : !url ? <figure className="image-preview"><div style={space}><Loading what="Loading image"/></div><figcaption>{blob.name} · Click to enlarge and zoom</figcaption></figure> : <figure className="image-preview"><ZoomImage src={url} alt={blob.name || 'Artifact image'}/><figcaption>{blob.name} · Click to enlarge and zoom</figcaption></figure>}</>;
 }
 function TablePreview({blob,columns}: {blob: BlobRef;columns: string[]}) {
   const limit=256*1024;
@@ -32,7 +33,7 @@ export function ValueView({value}: {value: Json | undefined}) {
   const media=blob?.media_type||'';
   const meta=Object.fromEntries(Object.entries(typed.data).filter(([key])=>!['_type','data','media_type','rows','columns'].includes(key)));
   return <div className="value-view">
-    {blob && (media.startsWith('image/') ? <ImagePreview blob={blob}/> : media.startsWith('video/') ? <video className="value-media" controls src={blobPath(blob)}/> : media.startsWith('audio/') ? <audio controls src={blobPath(blob)}/> :
+    {blob && (media.startsWith('image/') ? <ImagePreview blob={blob} width={typed.data.width} height={typed.data.height}/> : media.startsWith('video/') ? <video className="value-media" controls src={blobPath(blob)}/> : media.startsWith('audio/') ? <audio controls src={blobPath(blob)}/> :
       typed.format==='figure/plotly' ? <PlotlyFigure src={blobPath(blob)}/> : typed.format==='table' ? <><TablePreview blob={blob} columns={(typed.data.columns as string[])||[]}/>{Number(typed.data.rows)>100&&<Hint>Showing the first 100 of {String(typed.data.rows)} rows.</Hint>}</> : null)}
     {Object.keys(meta).length>0 && <JsonBlock value={meta}/>}
     {blob && <p><Pill tone="alias">{typed.format}</Pill> <LinkButton small href={blobPath(blob)} download>Download · {bytes(blob.size)}</LinkButton></p>}</div>;
