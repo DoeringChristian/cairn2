@@ -66,7 +66,7 @@ test('marks show only where the cursor is', async ({ page, request }) => {
   await page.keyboard.press('ControlOrMeta+a');
   await page.keyboard.press('ArrowRight');
   await page.keyboard.type(' bold');
-  await page.keyboard.press('Shift+Alt+ArrowLeft');
+  await page.keyboard.press(process.platform === 'darwin' ? 'Shift+Alt+ArrowLeft' : 'Shift+Control+ArrowLeft');
   await page.keyboard.press('ControlOrMeta+b');
   await expect.poll(() => stored(request, name)).toContain('last **bold**');
   await page.keyboard.press('ControlOrMeta+b');
