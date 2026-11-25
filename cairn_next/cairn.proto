@@ -1,0 +1,108 @@
+syntax = "proto3";
+package cairn.v1;
+
+// A value of a record. Floats include NaN and the infinities.
+message Value {
+  oneof kind {
+    bool null = 1;
+    bool flag = 2;
+    sint64 int = 3;
+    double float = 4;
+    string text = 5;
+    bytes bytes = 6;
+    List list = 7;
+    Map map = 8;
+    Blob blob = 9;
+    Ref ref = 10;
+  }
+}
+message Entry { string key = 1; Value value = 2; }
+message Map { repeated Entry entries = 1; }
+message List { repeated Value items = 1; }
+// Bytes named by their SHA-256.
+message Blob { bytes digest = 1; uint64 size = 2; string media_type = 3; }
+message Ref { string artifact = 1; }
+
+// A record is a Map, encoded once by the program that logs it and never again.
+
+message Artifact {
+  string id = 1;
+  string project = 2;
+  string namespace = 3;
+  string name = 4;
+  bool finished = 5;
+  uint32 version = 6;
+  uint64 records = 7;
+  double created_at = 8;  // Unix seconds, as all times
+  double finished_at = 9;
+  double heard_at = 10;
+  Map tags = 11;
+  repeated string aliases = 12;
+  Map values = 13;  // the paths a query asked for
+  bool completed = 14;  // finished as its program meant to
+}
+message Empty {}
+
+message Open { string project = 1; string namespace = 2; string name = 3; string request_id = 4; }
+message Append { string artifact = 1; string writer = 2; uint64 sequence = 3; repeated bytes records = 4; }
+message Appended { uint64 records = 1; }
+message Leave { string artifact = 1; string writer = 2; }
+message Finish { string artifact = 1; string writer = 2; uint64 sequence = 3; bytes record = 4; bool force = 5; bool completed = 6; }
+message Heartbeat { string artifact = 1; }
+
+message Resolve { string project = 1; repeated string refs = 2; }
+message Projects {}
+message Project { string name = 1; map<string, uint64> artifacts = 2; double updated = 3; }  // artifacts by namespace
+message ProjectList { repeated Project items = 1; }
+message Artifacts { repeated Artifact items = 1; uint64 total = 2; }
+
+// Records after an ordinal. `having` keeps records with that top-level key.
+message Records { string artifact = 1; uint64 after = 2; uint32 limit = 3; string having = 4; }
+message RecordPage { repeated uint64 ordinals = 1; repeated bytes records = 2; uint64 total = 3; bool more = 4; }
+// The last record holding each key.
+message Last { string artifact = 1; repeated string keys = 2; }
+message LastValues { repeated Entry entries = 1; }
+message Keys { string artifact = 1; }
+message KeyList { repeated string keys = 1; }
+// Numbers at a path, in record order, packed.
+message Series { string artifact = 1; repeated string paths = 2; uint64 after = 3; }
+message Columns { repeated Column columns = 1; uint64 total = 2; }
+message Column { string path = 1; repeated uint64 ordinals = 2 [packed = true]; repeated double values = 3 [packed = true]; }
+
+message Condition {
+  string path = 1;  // of records, or tag:key or alias:name
+  string stat = 2;  // "" (last), "min" or "max"
+  string op = 3;    // = != < <= > >= contains, or "" for any value
+  Value value = 4;
+}
+message Find {
+  string project = 1;
+  repeated string namespaces = 2;  // any of them
+  string name = 3;           // glob; ** crosses slashes
+  string text = 4;           // part of the name, in any case
+  repeated Condition where = 5;
+  string order = 6;          // path, min(path) or max(path); "" is newest first
+  bool descending = 7;
+  uint32 limit = 8;
+  uint32 offset = 9;
+  string state = 10;         // "", live, finished, completed or deleted
+  bool latest = 11;          // only the newest completed version of each name
+  repeated string values = 12;
+}
+message Files { string project = 1; string artifact = 2; string pattern = 3; string text = 4; uint32 limit = 5; string after = 6; }
+message FoundFile { string artifact = 1; string path = 2; Blob blob = 3; uint64 ordinal = 4; string reference = 5; }
+message FoundFiles { repeated FoundFile items = 1; bool more = 2; }
+message Links { string artifact = 1; bool reverse = 2; }
+message Link { string path = 1; Artifact artifact = 2; }
+message LinkList { repeated Link items = 1; }
+
+// Labels point at artifacts and are not part of them. A key has one value per artifact;
+// a key starting with @ is an alias, which one version of a name has.
+message Label { string artifact = 1; Map set = 2; repeated string remove = 3; bool compare = 4; string expected = 5; }
+message Aliases { string project = 1; string namespace = 2; string name = 3; }
+message Delete { string artifact = 1; bool restore = 2; }
+message Have { repeated bytes digests = 1; }
+// `received` says how many bytes of each are there from an upload that broke off.
+message Missing { repeated bytes digests = 1; repeated uint64 received = 2; }
+message LinkBlob { bytes digest = 1; uint64 size = 2; string path = 3; }
+message Error { string code = 1; string message = 2; map<string, string> details = 3; }

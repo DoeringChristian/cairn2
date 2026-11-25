@@ -1,9 +1,21 @@
+import type { ComponentProps } from 'react';
 import { PanelsTopLeft } from 'lucide-react';
 import { WorkspaceDialog } from '../Dialog';
 import { label } from '../model';
 import { PlotSurface, type FigureSpec } from '../PlotSurface';
+import { blobPath, useLoaded, type BlobRef } from '../../api';
 import { mediaKind } from './media';
 import { Toggle } from './settings';
+
+function Figure({ blob, ...props }: { blob: BlobRef } & Omit<ComponentProps<typeof PlotSurface>, 'spec'>) {
+  const { data, error } = useLoaded(async (signal) => {
+    const response = await fetch(blobPath(blob), { signal });
+    if (!response.ok) throw new Error(`Could not load the figure (${response.status}).`);
+    return (await response.json()) as FigureSpec;
+  }, `figure:${blob.digest}`);
+  if (data) return <PlotSurface spec={data} {...props} />;
+  return <div className="workspace-empty">{error?.message || 'Loading figure…'}</div>;
+}
 
 export const plotly = mediaKind({
   label: 'Plotly',
@@ -15,7 +27,7 @@ export const plotly = mediaKind({
   Tile: ({ value, onExpand, linked, onRange }) => (
     <>
       <div className="workspace-figure-tile">
-        <PlotSurface spec={value.data as unknown as FigureSpec} range={linked} onRange={onRange} />
+        <Figure blob={value.blobs[0]} range={linked} onRange={onRange} />
       </div>
       <button className="text-button workspace-expand-plot" onClick={onExpand}>
         Expand figure ↗
@@ -25,7 +37,7 @@ export const plotly = mediaKind({
   Expanded: ({ row, value, onClose }) => (
     <WorkspaceDialog title={label(row.run)} onClose={onClose}>
       <div className="workspace-expanded-figure">
-        <PlotSurface spec={value.data as unknown as FigureSpec} />
+        <Figure blob={value.blobs[0]} />
       </div>
     </WorkspaceDialog>
   ),

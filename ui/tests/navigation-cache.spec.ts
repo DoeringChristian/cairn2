@@ -1,4 +1,5 @@
 import {test,expect} from '@playwright/test';
+import {artifact,on} from './cairn';
 
 test('project switcher and category links use the selected project',async({page})=>{
   await page.goto('/p/neural-rendering?view=runs');
@@ -16,7 +17,7 @@ test('project switcher and category links use the selected project',async({page}
 
 
 test('a reload asks the server at once, although the cached list bridges it',async({page})=>{
-  let name='before';await page.route('**/ui-api/artifacts?*',r=>r.fulfill({json:{items:[{id:'x',project:'neural-rendering',namespace:'runs',name,state:'finished',number:1,annotations:{},created_at:'2026-01-01'}],total:1}}));
+  let name='before';await on(page,'find','Find','Artifacts',()=>({items:[artifact('x',name,1)],total:1}));
   await page.goto('/p/neural-rendering?view=runs');await expect(page.getByText('before',{exact:true})).toBeVisible();
   name='after';await page.reload();await expect(page.getByText('after',{exact:true})).toBeVisible({timeout:3000});
 });

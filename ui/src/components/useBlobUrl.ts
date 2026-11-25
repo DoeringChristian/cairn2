@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { BlobRef } from '../api';
+import { blobPath, type BlobRef } from '../api';
 
 type Entry={promise:Promise<string>;url?:string;size:number;users:number};
 const entries=new Map<string,Entry>(),budget=256*1024**2;let total=0;
@@ -11,7 +11,7 @@ function entry(blob:BlobRef,mime:string) {
   if(found)entries.delete(key);
   else{
     const created:Entry={size:blob.size,users:0,promise:Promise.resolve('')};
-    created.promise=fetch(`/v1/blobs/${blob.digest}`).then(async response=>{
+    created.promise=fetch(blobPath(blob)).then(async response=>{
       if(!response.ok)throw new Error(`Could not load image (${response.status}).`);
       created.url=URL.createObjectURL(new Blob([await response.blob()],{type:mime}));total+=created.size;trim();return created.url;
     });

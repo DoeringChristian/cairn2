@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { artifactPath, type ArtifactSummary } from '../api';
+import { artifactPath, status, type Artifact } from '../api';
 import { CardFrame, type CardActions, type RecordState } from './CardFrame';
 import { cardKinds } from './cards';
 import { label, type Card, type Layout } from './model';
@@ -17,9 +17,9 @@ export function ByRun({
 }: {
   project: string;
   layout: Layout;
-  runs: ArtifactSummary[];
+  runs: Artifact[];
   records: RecordState;
-  actions: (card: Card, run: ArtifactSummary) => Pick<CardActions, 'settings' | 'expand' | 'duplicate' | 'remove'>;
+  actions: (card: Card, run: Artifact) => Pick<CardActions, 'settings' | 'expand' | 'duplicate' | 'remove'>;
 }) {
   // Cards in reading order: section by section. Viewer cards show the same file for every run.
   const cards = layout.sections.flatMap((section) =>
@@ -35,7 +35,7 @@ export function ByRun({
               <h2>
                 <Link to={artifactPath(project, run.id)}>{label(run)}</Link>
               </h2>
-              <span>{run.outcome || run.state}</span>
+              <span>{status(run)}</span>
             </div>
           </header>
           <div className="workspace-grid">
@@ -43,7 +43,7 @@ export function ByRun({
               <CardFrame
                 key={card.id}
                 card={card}
-                records={{ ...records, rows: records.rows.filter((row) => row.artifact_id === run.id) }}
+                records={{ ...records, rows: records.rows.filter((row) => row.run.id === run.id) }}
                 dragging={false}
                 actions={{ ...actions(card, run), move: still, size: still, drag: still, drop: still }}
               />

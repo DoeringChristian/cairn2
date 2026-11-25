@@ -265,7 +265,7 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
     ? `Loading complete record streams…${data.loaded ? ` ${data.loaded.toLocaleString()} records loaded` : ''}`
     : `${selected.length} ${selected.length === 1 ? 'run' : 'runs'} · ${data.rows.length.toLocaleString()} records` +
       (!runId && hiddenCount ? ` · ${hiddenCount} hidden` : '');
-  const live = !data.loading && selected.some((r) => r.state !== 'finished');
+  const live = !data.loading && selected.some((r) => !r.finished);
   const layoutChoices = [
     ...(saved.some((l) => l.id === layout.id) ? [] : [{ value: layout.id, label: layout.name }]),
     ...saved.map((l) => ({ value: l.id, label: l.name })),
@@ -518,7 +518,7 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
           <div className="workspace-expanded-card">
             <CardContent
               card={expanded}
-              rows={expandedRun ? data.rows.filter((row) => row.artifact_id === expandedRun) : data.rows}
+              rows={expandedRun ? data.rows.filter((row) => row.run.id === expandedRun) : data.rows}
             />
           </div>
         </WorkspaceDialog>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { parse, stringify } from 'yaml';
-import { api, artifactBlobs, chunkedFiles, post, type Artifact, type ArtifactSummary, type Json } from '../api';
+import { api, filePath, operate, resolve, type Artifact, type FoundFile, type Json } from '../api';
 import { ActionIcon, Button } from './Button';
 import { Select } from './Select';
 
@@ -46,15 +46,16 @@ function useNames(project: string, namespace?: string) {
   const [names, setNames] = useState<string[]>([]);
   useEffect(() => {
     const c = new AbortController();
-    api<{ items: ArtifactSummary[] }>(
-      `/ui-api/artifacts?${new URLSearchParams({ project, category: 'all', search: namespace ? `${namespace}/` : '', limit: '100' })}`,
-      { signal: c.signal },
+    operate<{ items: Artifact[] }>(
+      'find',
+      { project, namespaces: namespace ? [namespace] : [], limit: 1000 },
+      c.signal,
     )
       .then((found) =>
         setNames(
           [
             ...new Set(
-              found.items.filter((a) => !namespace || a.namespace === namespace).map((a) => `${a.namespace}/${a.name}`),
+              found.items.map((a) => `${a.namespace}/${a.name}`),
             ),
           ].sort(),
         ),
@@ -66,37 +67,40 @@ function useNames(project: string, namespace?: string) {
 }
 /** The resolved artifact of a reference, its versions and its files. */
 function useArtifact(ref: Reference, project: string) {
-  const [state, setState] = useState<{ artifact?: Artifact; versions: number[] }>({ versions: [] });
+  const [state, setState] = useState<{ artifact?: Artifact; versions: number[]; files: string[] }>({
+    versions: [],
+    files: [],
+  });
   useEffect(() => {
     if (!ref.name) {
-      setState({ versions: [] });
+      setState({ versions: [], files: [] });
       return;
     }
     const c = new AbortController();
-    post<Artifact[]>('/v1/resolutions', { refs: [`${ref.name}@${ref.selector}`], project }, c.signal)
+    resolve([`${ref.name}@${ref.selector}`], project, c.signal)
       .then(async ([artifact]) => {
-        const history = artifact
-          ? await api<Artifact[]>(`/ui-api/artifacts/${encodeURIComponent(artifact.id)}/history`, { signal: c.signal })
-          : [];
-        setState({ artifact, versions: history.flatMap((a) => (a.number ? [a.number] : [])).sort((a, b) => b - a) });
+        const { namespace, name } = artifact;
+        const [history, files] = await Promise.all([
+          operate<{ items: Artifact[] }>(
+            'find',
+            { project, namespaces: [namespace], name, state: 'finished', limit: 1000 },
+            c.signal,
+          ),
+          operate<{ items: FoundFile[] }>('files', { artifact: artifact.id, limit: 1000 }, c.signal),
+        ]);
+        if (!c.signal.aborted)
+          setState({
+            artifact,
+            versions: history.items.map((a) => a.version),
+            files: files.items.map((file) => file.path),
+          });
       })
       .catch(() => {
-        if (!c.signal.aborted) setState({ versions: [] });
+        if (!c.signal.aborted) setState({ versions: [], files: [] });
       });
     return () => c.abort();
   }, [ref.name, ref.selector, project]);
-  const files = state.artifact
-    ? [
-        ...new Set([
-          ...Object.keys(state.artifact.manifest?.captures || {}),
-          ...artifactBlobs(state.artifact).flatMap((b) => (b.name ? [b.name] : [])),
-          ...chunkedFiles(state.artifact).map((b) => b.name!),
-        ]),
-      ]
-        .filter((name) => !/^(console|provenance)\//.test(name))
-        .sort()
-    : [];
-  return { ...state, files };
+  return state;
 }
 
 /** An artifact, its version and one of its files, written as cairn:NAME@VERSION#FILE. */
@@ -349,11 +353,10 @@ function Pairs({
 
 /** The schema a viewer's HTML file ships beside it, as <file>.schema.json; null when it has none. */
 function useSchema(viewer: Reference, project: string) {
-  const { artifact } = useArtifact(viewer, project),
+  const { artifact, files } = useArtifact(viewer, project),
     [schema, setSchema] = useState<Schema | null>();
   const file = viewer.file.replace(/\.html?$/, '.schema.json'),
-    present =
-      !!artifact?.manifest?.captures[file] || (!!artifact && artifactBlobs(artifact).some((b) => b.name === file));
+    present = files.includes(file);
   useEffect(() => {
     setSchema(undefined);
     if (!artifact) return;
@@ -363,7 +366,7 @@ function useSchema(viewer: Reference, project: string) {
     }
     const c = new AbortController();
     api<Schema>(
-      `/ui-api/artifacts/${encodeURIComponent(artifact.id)}/files/${file.split('/').map(encodeURIComponent).join('/')}`,
+      filePath(artifact.id, file),
       { signal: c.signal },
     )
       .then(setSchema)

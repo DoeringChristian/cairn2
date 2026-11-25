@@ -1,13 +1,12 @@
 import { Link } from 'react-router-dom';
 import { Eye, EyeOff } from 'lucide-react';
-import { artifactPath, type ArtifactSummary } from '../api';
+import { artifactPath, status as runStatus, type Artifact } from '../api';
 import { Select } from '../components/Select';
-import { useLiveness } from '../liveness';
 import { label, type Layout } from './model';
 import { runColor } from './presentation';
 import { sharedPrefix } from './runs';
 
-const statuses = ['', 'live', 'closing', 'finished', 'completed', 'failed', 'cancelled', 'incomplete'];
+const statuses = ['', 'live', 'finished', 'completed', 'failed', 'cancelled', 'incomplete'];
 
 /** The runs a layout matches, with filters and an eye control per run. */
 export function RunPanel({
@@ -21,13 +20,12 @@ export function RunPanel({
 }: {
   project: string;
   layout: Layout;
-  candidates: ArtifactSummary[];
-  selected: ArtifactSummary[];
+  candidates: Artifact[];
+  selected: Artifact[];
   open: boolean;
   patch: (value: Partial<Layout>) => void;
   hide: (ids: string[]) => void;
 }) {
-  const liveness = useLiveness(candidates.some((run) => run.state !== 'finished') ? project : null);
   const prefix = sharedPrefix(candidates);
   const hiddenCount = candidates.length - selected.length;
   const allVisible = candidates.length > 0 && hiddenCount === 0;
@@ -83,8 +81,7 @@ export function RunPanel({
       <div className="workspace-run-list">
         {candidates.map((run) => {
           const hidden = !visibleIds.has(run.id);
-          const lost = run.state !== 'finished' && liveness.get(run.id)?.lost;
-          const status = lost ? 'lost contact' : run.outcome || run.state;
+          const status = runStatus(run);
           return (
             <div key={run.id} className={`workspace-run-row ${hidden ? 'is-hidden' : ''}`}>
               <i className="workspace-run-swatch" style={{ background: runColor(run.id) }} aria-hidden="true" />
@@ -96,7 +93,7 @@ export function RunPanel({
               >
                 {run.name.slice(prefix.length)}
               </Link>
-              <span className="workspace-run-version">{run.number ? 'v' + run.number : run.state}</span>
+              <span className="workspace-run-version">{run.version ? 'v' + run.version : 'live'}</span>
               <span className={`workspace-run-status ${status}`} role="img" aria-label={status} title={status} />
               <button
                 className="workspace-run-visibility"

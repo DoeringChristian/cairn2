@@ -1,4 +1,5 @@
 import { forwardRef, type ReactNode } from "react";
+import { print } from "../api";
 
 /** A dark code card (the reports' code block): metadata, JSON. */
 export function CodeBlock({ children }: { children: ReactNode }) {
@@ -7,7 +8,7 @@ export function CodeBlock({ children }: { children: ReactNode }) {
 
 /** Any value as indented JSON in a `CodeBlock`. */
 export function JsonBlock({ value }: { value: unknown }) {
-  return <CodeBlock>{JSON.stringify(value, null, 2)}</CodeBlock>;
+  return <CodeBlock>{print(value, 2)}</CodeBlock>;
 }
 
 /** Raw text that scrolls inside its box (a file preview, a log tail); dark inside a table, plain elsewhere. */

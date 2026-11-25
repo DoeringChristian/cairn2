@@ -30,9 +30,7 @@ export const video = mediaKind({
   Tile: (props) =>
     props.value.blobs[0] ? (
       <VideoTile {...props} />
-    ) : (
-      <p>This video is stored in chunks; open it from the run’s files.</p>
-    ),
+    ) : null,
   Expanded: ({ card, row, value, onClose }) => (
     <BlobLightbox blob={value.blobs[0]} name={recordName(card, row)} onClose={onClose} />
   ),

@@ -37,7 +37,8 @@ their meaning. The SDK refuses unknown ones in `log`; the server does not look a
 
 **File.** A value of type `file` under a key, which is its name. A path's value is the one
 in the last record that has it, so a file logged again is replaced for readers, and both
-records remain.
+records remain. A key `a/b` and the `b` inside `a` are the same path; as always, what was
+logged later is found.
 
 **Finish.** Appends a last record, seals the artifact and gives it the next version of its
 name, all at once.

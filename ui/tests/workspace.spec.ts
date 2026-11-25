@@ -1,12 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { test, expect, type Page, type Locator } from '@playwright/test';
+import { answer, artifact as made, asked, content, digest, on, stream } from './cairn';
+import { decode } from '../src/protocol';
 
 const project='workspace-test';
-const artifact=(id:string,name:string,number:number,created_at:string)=>({id,project,namespace:'runs',entity:'artifact',name,number,state:'finished',created_at,finished_at:created_at,metadata:{config:{seed:number}},annotations:{},manifest:{outcome:'completed'},annotations_etag:'x'});
-const runs=[artifact('old','workspace-demo/a',1,'2026-01-01'),artifact('a','workspace-demo/a',2,'2026-01-02'),artifact('b','workspace-demo/b',1,'2026-01-02')];
-const image={$cairn:1,format:'image',version:1,data:{name:'test.png'},blobs:[{digest:'test-png',media_type:'image/png',size:1}],refs:[]};
-const video={$cairn:1,format:'file',version:1,data:{name:'clip.mp4',media_type:'video/mp4'},blobs:[{digest:'test-mp4',media_type:'video/mp4',size:1}],refs:[]};
-const figure={$cairn:1,format:'figure/plotly',version:1,data:{data:[{x:[0,1],y:[0,1],type:'scatter'}],layout:{}},blobs:[],refs:[]};
+const artifact=(id:string,name:string,version:number,day:number)=>made(id,name,version,{project,created_at:1767225600+day*86400});
+const runs=[artifact('old','workspace-demo/a',1,0),artifact('a','workspace-demo/a',2,1),artifact('b','workspace-demo/b',1,1)];
+const image={_type:'image',name:'test.png',data:content('a','image/png')};
+const video=content('b','video/mp4');
+const figure={_type:'figure',data:content('c','application/vnd.plotly.v1+json')};
 /** The repository's workspaces as the server keeps them, by repository, project and name. */
 type Stored={id:string;repository:string;project:string;name:string;revision:number;layout:any};
 const servers=new WeakMap<Page,{repository:string;items:Stored[]}>();
@@ -23,30 +25,27 @@ async function workspaceServer(page:Page){
     return r.fulfill({json:{name:body.name,revision:revision+1}});
   });
 }
-/** The record stream of the requested runs; `state` and `records` are read on every request. */
-async function serveRecords(page:Page,records:(id:string)=>any[],state='finished',end='{"done":true}\n'){
+/** The record stream of the requested runs; `records` are read on every request. */
+async function serveRecords(page:Page,records:(id:string)=>any[],finished=true,end=true){
   await page.route('**/ui-api/observations',r=>{
-    const {after}=r.request().postDataJSON();let body='';
-    for(const [id,from] of Object.entries<number>(after)){
-      const all=records(id),run=runs.find(a=>a.id===id)!;
-      const rows=all.map((data,i)=>[i+1,i,'w','2026-01-01',data]).slice(from);
-      body+=JSON.stringify({artifact:{...run,state}})+'\n';
-      for(let i=0;i<rows.length;i+=1000)body+=JSON.stringify(rows.slice(i,i+1000))+'\n';
-      body+=JSON.stringify({cutoff:all.length})+'\n';
-    }
-    return r.fulfill({contentType:'application/x-ndjson',body:body+end});
+    const {after}=r.request().postDataJSON();
+    const parts=Object.entries<number>(after).map(([id,from])=>{const run=runs.find(a=>a.id===id)!;return {run:{...run,finished},after:from,records:records(id),config:{seed:run.version}};});
+    return r.fulfill({contentType:'application/octet-stream',body:stream(parts,end)});
   });
 }
 async function fixture(page:Page,projects=[project]){
   await workspaceServer(page);
-  await page.route('**/ui-api/session',r=>r.fulfill({json:{authenticated:true,no_auth:true,repository_id:'workspace-tests'}}));
-  await page.route('**/ui-api/projects',r=>r.fulfill({json:projects.map(name=>({name,runs:name===project?3:0,artifacts:name===project?3:0}))}));
-  await page.route('**/ui-api/artifacts?*',r=>{const offset=Number(new URL(r.request().url()).searchParams.get('offset'));return r.fulfill({json:{items:runs.slice(offset,offset+2),total:runs.length}});});
-  await page.route('**/ui-api/artifacts/*/history',r=>r.fulfill({json:runs.filter(a=>a.name===runs.find(item=>r.request().url().includes(`/artifacts/${item.id}/`))?.name)}));
-  await page.route('**/v1/resolutions',r=>r.fulfill({json:runs.filter(a=>r.request().postDataJSON().refs.includes(a.id))}));
+  await page.route('**/ui-api/session',r=>r.fulfill({json:{no_auth:true,repository_id:'workspace-tests',now:Date.now()/1000}}));
+  await on(page,'projects','Projects','ProjectList',()=>({items:projects.map(name=>({name,artifacts:{},updated:1767225600}))}));
+  await on(page,'find','Find','Artifacts',request=>request.name?{items:runs.filter(a=>a.name===request.name),total:1}:{items:runs.slice(request.offset,request.offset+2),total:runs.length});
+  await on(page,'resolve','Resolve','Artifacts',async(request,route)=>{const items=runs.filter(a=>request.refs.includes(a.id));if(items.length)return {items};await route.fulfill({status:404,json:{error:{message:'Unknown artifact'}}});});
+  await on(page,'last','Last','LastValues',request=>({entries:request.keys.map((key:string)=>({key,value:'completed'}))}));
+  await on(page,'keys','Keys','KeyList',()=>({keys:['_outcome']}));
+  await on(page,'records','Records','RecordPage',()=>({ordinals:[],records:[],total:0}));
   await serveRecords(page,id=>[{step:0,loss:3,quality:30,elapsed:0,camera:'front',camera_angle:0,image,video,figure},...(id==='b'?[]:[{step:1,loss:2,quality:20,elapsed:10,camera:'front',camera_angle:0,image,video,figure}]),{step:2,loss:1,quality:10,elapsed:20,camera:'front',camera_angle:0,image,video,figure}]);
-  await page.route('**/v1/blobs/test-png',r=>r.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64')}));
-  await page.route('**/v1/blobs/test-mp4',r=>r.fulfill({contentType:'application/octet-stream',body:readFileSync(new URL('../../examples/showcase/assets/wave-evolution.mp4',import.meta.url))}));
+  await page.route(`**/ui-api/content/${digest('a')}*`,r=>r.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64')}));
+  await page.route(`**/ui-api/content/${digest('b')}*`,r=>r.fulfill({contentType:'application/octet-stream',body:readFileSync(new URL('../../examples/showcase/assets/wave-evolution.mp4',import.meta.url))}));
+  await page.route(`**/ui-api/content/${digest('c')}*`,r=>r.fulfill({json:{data:[{x:[0,1],y:[0,1],type:'scatter'}],layout:{}}}));
   await page.goto(`/p/${project}/workspace?example=cards`);
   await expect(page.locator('.workspace-data-status')).toContainText('2 runs · 5 records');
 }
@@ -85,7 +84,7 @@ test('create, cancel, resize, sections, save and reload preserve the view withou
   await page.getByRole('button',{name:'Save as…',exact:true}).click();await dialog.getByLabel('Name',{exact:true}).fill('Review');await dialog.getByRole('button',{name:'Save layout',exact:true}).click();
   await settled(page);await page.goto(`/p/${project}/workspace`);await expect(page.getByRole('button',{name:'Saved layout'})).toHaveText('Review');
   await expect(card(page,'My images')).toHaveCSS('height','380px');await expect(page.locator('.workspace-section').filter({has:page.getByRole('heading',{name:'Details',exact:true})})).toContainText('My images');
-  const review=stored(page,'Review');expect(review.cards.find((c:any)=>c.title==='My images').width).toBe(4);expect(JSON.stringify(review)).not.toContain('test-png');
+  const review=stored(page,'Review');expect(review.cards.find((c:any)=>c.title==='My images').width).toBe(4);expect(JSON.stringify(review)).not.toContain(digest('a'));
   await chooseField(page.locator('main'),'Versions','All versions');await expect(page.locator('.workspace-data-status')).toContainText('3 runs · 8 records');
 });
 
@@ -98,8 +97,8 @@ test('mobile cards and modal controls stay inside the viewport',async({page})=>{
 
 test('workspace SVG blobs decode in thumbnails and lightboxes despite an untyped HTTP response',async({page})=>{
   const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await fixture(page);
-  const svg={$cairn:1,format:'figure/svg',version:1,data:{},blobs:[{digest:'test-svg',media_type:'image/svg+xml',size:150,name:'figure.svg'}],refs:[]};
-  await page.route('**/v1/blobs/test-svg',r=>r.fulfill({contentType:'application/octet-stream',body:'<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect width="120" height="80" fill="teal"/></svg>'}));
+  const svg={_type:'figure',data:content('d','image/svg+xml')};
+  await page.route(`**/ui-api/content/${digest('d')}*`,r=>r.fulfill({contentType:'application/octet-stream',body:'<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect width="120" height="80" fill="teal"/></svg>'}));
   await serveRecords(page,()=>[{step:0,image:svg}]);
   await page.getByRole('button',{name:'Refresh workspace',exact:true}).click();
   const comparison=card(page,'Compare reconstructions');
@@ -115,8 +114,8 @@ test('workspace SVG blobs decode in thumbnails and lightboxes despite an untyped
 
 test('sweeping media keeps the previous frame until the next has loaded',async({page})=>{
   const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await fixture(page);
-  const frame=(step:number)=>({$cairn:1,format:'image',version:1,data:{name:'frame.png'},blobs:[{digest:`frame-${step}`,media_type:'image/png',size:68}],refs:[]});
-  await page.route('**/v1/blobs/frame-*',async r=>{await new Promise(resolve=>setTimeout(resolve,150));await r.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64')});});
+  const frame=(step:number)=>({_type:'image',name:'frame.png',data:content(String(step),'image/png')});
+  await page.route(/ui-api\/content\/([0-7])\1{63}/,async r=>{await new Promise(resolve=>setTimeout(resolve,150));await r.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64')});});
   await serveRecords(page,()=>Array.from({length:8},(_,step)=>({step,image:frame(step)})));
   await page.getByRole('button',{name:'Refresh workspace',exact:true}).click();
   const comparison=card(page,'Compare reconstructions');await comparison.scrollIntoViewIfNeeded();
@@ -145,14 +144,14 @@ test('a failed later record page never leaves a partial plot',async({page})=>{
   await page.getByRole('button',{name:'Refresh workspace',exact:true}).click();await expect(page.getByRole('alert')).toContainText('Record stream temporarily unavailable');await expect(card(page,'Loss over training').locator('.workspace-scalar-plot')).toHaveCount(0);
   await expect(card(page,'Loss over training')).toContainText('Data could not be loaded');
   // A stream that breaks off after complete runs is a failure too.
-  await serveRecords(page,()=>[{step:0,loss:1}],'finished','');
+  await serveRecords(page,()=>[{step:0,loss:1}],true,false);
   await page.getByRole('button',{name:'Refresh workspace',exact:true}).click();await expect(page.getByRole('alert')).toContainText('ended early');await expect(card(page,'Loss over training').locator('.workspace-scalar-plot')).toHaveCount(0);
 });
 
 test('live runs fetch only new records, and nothing again when runs are hidden and shown',async({page})=>{
   await fixture(page);const all=[{step:0,loss:3},{step:1,loss:2}] as any[],asked:Record<string,number>[]=[];
   page.on('request',r=>{if(r.url().endsWith('/ui-api/observations'))asked.push(r.postDataJSON().after);});
-  await serveRecords(page,()=>all,'live');await page.getByRole('button',{name:'Refresh workspace',exact:true}).click();
+  await serveRecords(page,()=>all,false);await page.getByRole('button',{name:'Refresh workspace',exact:true}).click();
   await expect(page.locator('.workspace-data-status')).toContainText('2 runs · 4 records');
   all.push({step:2,loss:1});await expect(page.locator('.workspace-data-status')).toContainText('2 runs · 6 records');
   await expect.poll(()=>card(page,'Loss over training').locator('.workspace-scalar-plot').evaluate((n:any)=>n.uplot?.data.slice(1).map((t:any)=>t[0]))).toEqual([[0,1,2],[0,1,2]]);
@@ -168,7 +167,7 @@ test('hidden runs are remembered without saving, and new runs are shown',async({
   await page.reload();await expect(page.locator('.workspace-data-status')).toContainText('1 run · 3 records · 1 hidden');
   await page.getByRole('button',{name:'Settings for Loss over training'}).click();await page.getByRole('dialog').getByLabel('Card title').fill('Renamed');await page.getByRole('dialog').getByRole('button',{name:'Done'}).click();await settled(page);
   expect(stored(page,'Training cards demo').selected).toBeNull();
-  const added=artifact('c','workspace-demo/c',1,'2026-01-03');runs.push(added);
+  const added=artifact('c','workspace-demo/c',1,2);runs.push(added);
   try{await page.reload();await expect(page.locator('.workspace-data-status')).toContainText('2 runs · 6 records · 1 hidden');}
   finally{runs.splice(runs.indexOf(added),1);}
 });
@@ -244,7 +243,7 @@ test('legacy mixed card sizes load without rewriting the saved layout',async({pa
 
 test('saved workspaces stay separate across projects and repositories',async({page})=>{
   const other='another-project';await fixture(page,[project,other]);
-  await page.route('**/ui-api/artifacts?*',async r=>{if(new URL(r.request().url()).searchParams.get('project')===other)return r.fulfill({json:{items:[],total:0}});await r.fallback();});
+  await page.route('**/ui-api/do/find',async r=>{if(asked(r,'Find').project===other)return answer(r,'Artifacts',{items:[],total:0});await r.fallback();});
   const rename=async(from:string,to:string)=>{await page.getByRole('button',{name:`Settings for ${from}`,exact:true}).click();const dialog=page.getByRole('dialog');await dialog.getByLabel('Card title').fill(to);await dialog.getByRole('button',{name:'Done',exact:true}).click();};
   await rename('Loss over training','Project A loss');
   await expect.poll(()=>servers.get(page)!.items.filter(i=>i.project===project).length).toBe(1);
@@ -261,11 +260,11 @@ test('saved workspaces stay separate across projects and repositories',async({pa
   await switchProject(other);await expect(card(page,'Project B loss')).toBeVisible();
   // A different repository with the same project name has its own layout.
   servers.get(page)!.repository='another-repository';
-  await page.route('**/ui-api/session',r=>r.fulfill({json:{authenticated:true,no_auth:true,repository_id:'another-repository'}}));
+  await page.route('**/ui-api/session',r=>r.fulfill({json:{no_auth:true,repository_id:'another-repository',now:Date.now()/1000}}));
   await settled(page);await page.reload();await expect(card(page,'Project B loss')).toHaveCount(0);await rename('Loss over training','Other repository loss');
   expect(layoutOf(other)).toBe(savedB);
   servers.get(page)!.repository='workspace-tests';
-  await page.route('**/ui-api/session',r=>r.fulfill({json:{authenticated:true,no_auth:true,repository_id:'workspace-tests'}}));
+  await page.route('**/ui-api/session',r=>r.fulfill({json:{no_auth:true,repository_id:'workspace-tests',now:Date.now()/1000}}));
   await settled(page);await page.reload();await expect(card(page,'Project B loss')).toBeVisible();await expect(card(page,'Other repository loss')).toHaveCount(0);
 });
 
@@ -310,8 +309,8 @@ test('run links open Overview; Workspace is an embedded run tab with the other i
   await expect(page).toHaveURL(/\/a\/b\?tab=workspace$/);await expect(page.getByRole('complementary',{name:'Run selection'})).toHaveCount(0);await expect(page.locator('.workspace-data-status')).toContainText('1 run · 2 records');await expect(page.getByRole('heading',{name:'workspace-demo/b',exact:true})).toBeVisible();
   await expect(page.getByRole('main')).toHaveCount(1);await expect(page.getByRole('button',{name:'Add card',exact:true})).toBeVisible();
   await expect.poll(()=>card(page,'My project curve').locator('.workspace-scalar-plot').evaluate((n:any)=>n.uplot?.series.slice(1).map((t:any)=>t.label))).toEqual(['workspace-demo/b · v1']);
-  for(const name of ['Overview','Records','Files','Lineage','History','Metadata'])await expect(page.getByRole('tab',{name:new RegExp(`^${name}`)})).toBeVisible();
-  await page.getByRole('tab',{name:'Records',exact:true}).click();await expect(page.getByRole('heading',{name:'Record explorer'})).toBeVisible();
+  for(const name of ['Overview','Records','Files','Lineage','History','Details'])await expect(page.getByRole('tab',{name:new RegExp(`^${name}`)})).toBeVisible();
+  await page.getByRole('tab',{name:'Records',exact:true}).click();await expect(page.getByRole('heading',{name:'Records',exact:true})).toBeVisible();
   await page.getByRole('tab',{name:'Files',exact:true}).click();await expect(page.getByRole('heading',{name:'Files',exact:true})).toBeVisible();
   await page.getByRole('tab',{name:'Workspace',exact:true}).click();await expect(page.locator('.workspace-data-status')).toContainText('1 run · 2 records');
   await page.getByRole('link',{name:'Project workspace',exact:true}).click();await expect(page.locator('.workspace-data-status')).toContainText('1 run · 3 records · 1 hidden');await expect(page.getByRole('button',{name:'Show workspace-demo/b · v1',exact:true})).toBeVisible();await expect(card(page,'My project curve')).toBeVisible();
@@ -321,15 +320,15 @@ test('run links open Overview; Workspace is an embedded run tab with the other i
 
 test('saved visibility survives reload; direct run views ignore filters and latest-only selection',async({page})=>{
   await fixture(page);await page.getByRole('button',{name:'Hide all runs',exact:true}).click();await expect(page.locator('.workspace-data-status')).toContainText('0 runs · 0 records');await page.getByRole('button',{name:'Save',exact:true}).click();await settled(page);await page.reload();await expect(page.locator('.workspace-data-status')).toContainText('0 runs · 0 records');
-  const queries:string[]=[];let listRequests=0;page.on('request',r=>{if(r.url().endsWith('/ui-api/observations'))queries.push(...Object.keys(r.postDataJSON().after));if(r.url().includes('/ui-api/artifacts?'))listRequests++;});
+  const queries:string[]=[];let listRequests=0;page.on('request',r=>{if(r.url().endsWith('/ui-api/observations'))queries.push(...Object.keys(r.postDataJSON().after));if(r.url().endsWith('/ui-api/do/find')&&!decode<any>('Find',new Uint8Array(r.postDataBuffer()!)).name)listRequests++;});
   await page.goto(`/p/${project}/workspace/old`);await expect(page).toHaveURL(new RegExp(`/a/old\\?tab=workspace$`));await expect(page.getByRole('tab',{name:'Workspace',exact:true})).toHaveAttribute('aria-selected','true');await expect(page.locator('.workspace-data-status')).toContainText('1 run · 3 records');await expect.poll(()=>card(page,'Loss over training').locator('.workspace-scalar-plot').evaluate((n:any)=>n.uplot?.series[1].label)).toBe('workspace-demo/a · v1');expect(new Set(queries)).toEqual(new Set(['old']));expect(listRequests).toBe(0);
   await page.getByRole('link',{name:'Project workspace',exact:true}).click();await expect(page.locator('.workspace-data-status')).toContainText('0 runs · 0 records');await page.getByRole('button',{name:'Show all runs',exact:true}).click();await expect(page.locator('.workspace-data-status')).toContainText('2 runs · 5 records');
 });
 
 test('invalid and cross-project run links never fall back to project records',async({page})=>{
-  await fixture(page);await page.route('**/v1/resolutions',r=>{const id=r.request().postDataJSON().refs[0];return r.fulfill({json:id==='foreign'?[{...runs[0],id,project:'another-project'}]:[]});});
+  await fixture(page);await on(page,'resolve','Resolve','Artifacts',async({refs:[id]},route)=>{if(id==='foreign')return {items:[{...runs[0],id,project:'another-project'}]};await route.fulfill({status:404,json:{error:{message:'Unknown artifact'}}});});
   const queries:string[]=[];page.on('request',r=>{if(r.url().endsWith('/ui-api/observations'))queries.push(...Object.keys(r.postDataJSON().after));});
-  for(const id of ['missing','foreign']){await page.goto(`/p/${project}/workspace/${id}`);await expect(page.getByRole('alert')).toContainText('Artifact not found in this project');await expect(page.locator('.workspace-scalar-plot')).toHaveCount(0);await expect(page.getByRole('complementary',{name:'Run selection'})).toHaveCount(0);}
+  for(const id of ['missing','foreign']){await page.goto(`/p/${project}/workspace/${id}`);await expect(page.getByRole('alert')).toContainText(id==='missing'?'Unknown artifact':'Artifact not found in this project');await expect(page.locator('.workspace-scalar-plot')).toHaveCount(0);await expect(page.getByRole('complementary',{name:'Run selection'})).toHaveCount(0);}
   expect(queries).toEqual([]);
 });
 

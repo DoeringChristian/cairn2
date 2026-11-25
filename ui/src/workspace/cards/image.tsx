@@ -37,7 +37,7 @@ export const image = mediaKind({
   title: 'Image gallery',
   field: 'image',
   noun: 'images',
-  accepts: (type) => type === 'image' || type === 'figure/svg',
+  accepts: (type) => type === 'image' || type === 'figure/svg' || type.startsWith('file:image/'),
   Tile: (props) => (props.value.blobs[0] ? <ImageTile {...props} /> : <p>Image has no blob.</p>),
   Expanded: ({ card, row, value, onClose }) => (
     <BlobLightbox blob={value.blobs[0]} name={recordName(card, row)} onClose={onClose} />

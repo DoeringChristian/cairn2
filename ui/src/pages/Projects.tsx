@@ -1,20 +1,19 @@
 import { cachedList, cacheList, invalidateList } from '../listCache';
-import { ArtifactTags, artifactTags } from '../components/ArtifactTags';
+import { ArtifactTags } from '../components/ArtifactTags';
 import { useRefresh, useRefreshMode } from '../refresh';
-import { useLiveness } from '../liveness';
 import { useEffect, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { api, useResource, artifactPath, when, type Project, type ArtifactSummary } from '../api';
-import { ActionIcon, Button, Crumbs, DataTable, ErrorNote, Hero, Hint, Loading, MetricCard, MetricGrid, Pill, ProjectCard, SearchInput, Section, Toolbar } from '../components';
+import { artifactPath, artifactsOf, condition, operate, runsOf, status, useProjects, when, type Artifact } from '../api';
+import { ActionIcon, Button, Crumbs, DataTable, ErrorNote, Hero, Hint, Loading, MetricCard, MetricGrid, Pill, ProjectCard, SearchInput, Section, Select, Toolbar } from '../components';
 export function ProjectsPage() {
   const [revision, refresh] = useState(0), [search, setSearch] = useState('');
   const pulse = useRefresh();
-  const {data, error, loading} = useResource<Project[]>('/ui-api/projects', revision + pulse);
+  const {data, error, loading} = useProjects(true, revision + pulse);
   useEffect(() => {document.title = 'Projects · Cairn';}, []);
   const filtered = data?.filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
   return <main><Hero eyebrow="Repository" title="Projects" subtitle="A home for your experiments and the evidence behind them." status="Cairn explorer"/>
-    {data && <MetricGrid><MetricCard label="Projects" value={data.length}/><MetricCard label="Artifacts" value={data.reduce((n,p) => n+p.artifacts, 0)} note="Across all namespaces"/><MetricCard label="Runs" value={data.reduce((n,p) => n+p.runs, 0)}/></MetricGrid>}
+    {data && <MetricGrid><MetricCard label="Projects" value={data.length}/><MetricCard label="Artifacts" value={data.reduce((n,p) => n+artifactsOf(p), 0)} note="Across all namespaces"/><MetricCard label="Runs" value={data.reduce((n,p) => n+runsOf(p), 0)}/></MetricGrid>}
     <Section title="Your projects" actions={<ActionIcon label="Refresh" onClick={() => refresh(n=>n+1)}><RefreshCw size={17} aria-hidden="true"/></ActionIcon>}><Toolbar><SearchInput label="Search projects" value={search} onChange={setSearch}/></Toolbar>
     {loading && <Loading/>}{error && <ErrorNote error={error}/>}{data?.length === 0 && <Hint>No projects yet. Record an experiment or publish an artifact to get started.</Hint>}
     {!!filtered?.length && <div className="project-grid">{filtered.map(p=><ProjectCard key={p.name} project={p}/>)}</div>}
@@ -32,14 +31,17 @@ function ArtifactList() {
   const [search, setSearch] = useState(''), [revision, refresh] = useState(0);
   const [querySearch, setQuerySearch] = useState('');
   useEffect(() => {const timer = window.setTimeout(() => setQuerySearch(search), 200); return () => clearTimeout(timer);}, [search]);
-  const selectedTags=params.getAll('tag');
+  const conditions=params.getAll('where');
   const pageNumber = Number(params.get('page'));
   const page = Number.isSafeInteger(pageNumber) && pageNumber > 0 ? pageNumber : 0;
-  const [tagDraft, setTagDraft] = useState('');
-  const query = new URLSearchParams({project, category: tab, search: querySearch, offset: String(page * 50), limit: '50'});
-  [...selectedTags].sort().forEach(tag => query.append('tag', tag));
-  const path = `/ui-api/artifacts?${query}`;
-  const [result, setResult] = useState<{path: string; items: ArtifactSummary[]; total: number}>();
+  const [draft, setDraft] = useState('');
+  const namespace = params.get('namespace') || '';
+  const projects = useProjects(tab === 'artifacts', 0);
+  const namespaces = Object.keys(projects.data?.find(p => p.name === project)?.artifacts || {}).filter(name => name !== 'runs').sort();
+  const wanted = tab === 'runs' ? ['runs'] : tab === 'all' ? [] : namespace ? [namespace] : namespaces;
+  const ready = tab !== 'artifacts' || !!projects.data || !!projects.error;
+  const path = JSON.stringify([project, tab, wanted, querySearch, conditions, page]);
+  const [result, setResult] = useState<{path: string; items: Artifact[]; total: number}>();
   const [error, setError] = useState<Error>(), [loading, setLoading] = useState(true);
   const visible = result?.path === path ? result : cachedList(path);
   const items = visible?.items ?? [];
@@ -47,12 +49,15 @@ function ArtifactList() {
   function refreshList() {invalidateList(path);refresh(n => n + 1);}
   useEffect(() => {
     document.title = `${project} · Cairn`;
+    if (!ready) return;
     const controller = new AbortController();
     let timer: number;
     async function load() {
       setError(undefined);
       try {
-        const data = await api<{items: ArtifactSummary[]; total: number}>(path, {signal: controller.signal});
+        const request = {project, namespaces: wanted, text: querySearch, where: conditions.map(condition), values: ['_outcome'], offset: page * 50, limit: 50};
+        // A project with runs alone has no artifacts; no namespace would mean every one.
+        const data = tab === 'artifacts' && !wanted.length ? {items: [], total: 0} : await operate<{items: Artifact[]; total: number}>('find', request, controller.signal);
         if (!controller.signal.aborted) {cacheList(path, data);setResult({...data, path});}
       } catch (e) {if (!controller.signal.aborted) setError(e as Error);}
       finally {
@@ -74,18 +79,19 @@ function ArtifactList() {
     // A cached page only bridges the request, unless auto-refresh is paused.
     if (!cached || !paused) void load();
     return () => {controller.abort();window.clearTimeout(timer);};
-  }, [path, revision, paused]);
-  const liveness=useLiveness(items.some(a=>a.state!=='finished')?project:null);
-  const availableTags=[...new Set(items.flatMap(artifactTags))].sort();
-  function toggleTag(tag:string){const next=new URLSearchParams(params);next.delete('page');next.delete('tag');for(const value of selectedTags.includes(tag)?selectedTags.filter(t=>t!==tag):[...selectedTags,tag])next.append('tag',value);setParams(next);}
+  }, [path, ready, revision, paused]);
+  const available=[...new Set(items.flatMap(a=>Object.keys(a.tags)))].sort().map(tag=>`tag:${tag}`);
+  function toggle(text:string){const next=new URLSearchParams(params);next.delete('page');next.delete('where');for(const value of conditions.includes(text)?conditions.filter(t=>t!==text):[...conditions,text])next.append('where',value);setParams(next);}
+  function choose(value:string){const next=new URLSearchParams(params);next.delete('page');if(value)next.set('namespace',value);else next.delete('namespace');setParams(next);}
+  function add(){try{condition(draft);}catch(e){setError(e as Error);return;}if(!conditions.includes(draft.trim()))toggle(draft.trim());setDraft('');}
   function changePage(value: number) {const next=new URLSearchParams(params);next.set('page', String(value));setParams(next);}
   const filtered = items;
   return <main><Hero eyebrow={<Crumbs items={[{label:'Projects',to:'/'},{label:project}]}/>} title={project} subtitle="Runs, artifacts, and what connects them."/>
     <Section title={tab==='runs'?'Experiment runs':tab==='artifacts'?'Artifact library':'Everything'} actions={<ActionIcon label="Refresh" onClick={refreshList}><RefreshCw size={17} aria-hidden="true"/></ActionIcon>}>
-    <Toolbar><SearchInput label="Search artifacts" value={search} onChange={value=>{setSearch(value);if(page)changePage(0);}}/><form onSubmit={e=>{e.preventDefault();const tag=tagDraft.trim();if(tag&&!selectedTags.includes(tag))toggleTag(tag);setTagDraft('');}}><SearchInput label="Filter by tag" value={tagDraft} onChange={setTagDraft}/></form></Toolbar>
-    {(!!availableTags.length||!!selectedTags.length)&&<div className="tag-filters" aria-label="Filter by tags"><span className="muted">Tags</span>{[...new Set([...availableTags,...selectedTags])].map(tag=><button type="button" className="tag-chip" key={tag} aria-pressed={selectedTags.includes(tag)} onClick={()=>toggleTag(tag)}>{tag}</button>)}{!!selectedTags.length&&<button type="button" className="tag-clear" onClick={()=>{const next=new URLSearchParams(params);next.delete('tag');next.delete('page');setParams(next);}}>Clear tags</button>}</div>}
+    <Toolbar><SearchInput label="Search artifacts" value={search} onChange={value=>{setSearch(value);if(page)changePage(0);}}/><form onSubmit={e=>{e.preventDefault();add();}}><SearchInput label="Filter, e.g. loss &lt; 0.1 or tag:paper" value={draft} onChange={setDraft}/></form>{tab==='artifacts'&&namespaces.length>1&&<Select label="Namespace" value={namespace} choices={[{value:'',label:'All namespaces'},...namespaces.map(value=>({value,label:value}))]} onChange={choose}/>}</Toolbar>
+    {(!!available.length||!!conditions.length)&&<div className="tag-filters" aria-label="Filters"><span className="muted">Filters</span>{[...new Set([...available,...conditions])].map(text=><button type="button" className="tag-chip" key={text} aria-pressed={conditions.includes(text)} onClick={()=>toggle(text)}>{text.replace(/^tag:/,'')}</button>)}{!!conditions.length&&<button type="button" className="tag-clear" onClick={()=>{const next=new URLSearchParams(params);next.delete('where');next.delete('page');setParams(next);}}>Clear filters</button>}</div>}
     {loading && !items.length && <Loading/>}{error && <ErrorNote error={error}/>}{!loading && !error && !filtered.length && <Hint>No matching artifacts in this view.</Hint>}
-    {!!filtered.length && <div className="artifact-list"><DataTable head={['Name','Namespace','State / version','Tags','Created']}>{filtered.map(a=><tr key={a.id}><td data-label="Name"><Link to={artifactPath(project,a.id)}><strong>{a.name}</strong></Link></td><td data-label="Namespace"><Pill tone="alias">{a.namespace}</Pill></td><td data-label="State / version"><Pill tone={a.state === 'finished' ? 'default':'pending'}>{a.number ? `v${a.number} · ${a.outcome || a.state}` : liveness.get(a.id)?.lost ? 'lost contact' : a.state}</Pill></td><td data-label="Tags"><ArtifactTags artifact={a} compact onTagClick={toggleTag} onChange={refreshList}/></td><td data-label="Created" className="muted nowrap">{when(a.created_at)}</td></tr>)}</DataTable></div>}
+    {!!filtered.length && <div className="artifact-list"><DataTable head={['Name','Namespace','State / version','Tags','Created']}>{filtered.map(a=><tr key={a.id}><td data-label="Name"><Link to={artifactPath(project,a.id)}><strong>{a.name}</strong></Link></td><td data-label="Namespace"><Pill tone="alias">{a.namespace}</Pill></td><td data-label="State / version"><Pill tone={a.finished ? 'default':'pending'}>{a.version ? `v${a.version} · ${status(a)}` : status(a)}</Pill>{a.aliases.map(alias=><Pill key={alias} tone="alias">@{alias}</Pill>)}</td><td data-label="Tags"><ArtifactTags artifact={a} compact onTagClick={tag=>toggle(`tag:${tag}`)} onChange={refreshList}/></td><td data-label="Created" className="muted nowrap">{when(a.created_at)}</td></tr>)}</DataTable></div>}
     <div className="pagination"><Hint>{total ? `${page*50+1}–${Math.min((page+1)*50,total)} of ${total}` : '0 results'}</Hint><Button disabled={page===0||loading} onClick={()=>changePage(page-1)}>Previous</Button><Button disabled={(page+1)*50>=total||loading} onClick={()=>changePage(page+1)}>Next</Button></div>
     </Section></main>;
 }

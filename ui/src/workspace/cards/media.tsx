@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Pause, Play, type LucideIcon } from 'lucide-react';
-import { envelope, type BlobRef, type Envelope } from '../../api';
+import { blobPath, envelope, type BlobRef, type Envelope } from '../../api';
 import { ActionIcon } from '../../components/Button';
 import { MediaLightbox } from '../../components/MediaLightbox';
 import { Select } from '../../components/Select';
@@ -247,7 +247,7 @@ function MediaContent({ format, card, rows }: ContentProps & { format: MediaForm
                 {row && (
                   <i
                     className="workspace-run-swatch"
-                    style={{ background: runColor(row.artifact_id) }}
+                    style={{ background: runColor(row.run.id) }}
                     aria-hidden="true"
                   />
                 )}
@@ -470,7 +470,7 @@ export function BlobLightbox({ blob, name, onClose }: { blob: BlobRef; name: str
 }
 
 export const DownloadBlob = ({ blob }: { blob: BlobRef }) => (
-  <a href={`/v1/blobs/${blob.digest}`} download={blob.name || blob.digest}>
+  <a href={blobPath(blob)} download={blob.name || blob.digest}>
     Download original
   </a>
 );

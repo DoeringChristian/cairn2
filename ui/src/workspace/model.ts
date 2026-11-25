@@ -1,4 +1,4 @@
-import { envelope, type Artifact, type ArtifactSummary, type Json, type RecordEntry } from '../api';
+import { envelope, type Artifact, type Json, type RecordEntry, type Run } from '../api';
 import type { Kind } from './cards';
 
 export type Filter = {
@@ -54,19 +54,19 @@ export type Layout = {
   /** Cards in their sections, or every card once per run. */
   view?: 'together' | 'runs';
 };
-export type Observation = RecordEntry & { run: Artifact };
+export type Observation = RecordEntry & { created: number; run: Run };
 export type FieldInfo = { name: string; kinds: Set<string> };
 export const palette = ['#176b5b', '#b56231', '#637fa1', '#a58a49', '#8a709b'];
 export const uid = () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-export const label = (run: ArtifactSummary) => `${run.name} · ${run.number ? 'v' + run.number : run.state}`;
+export const label = (run: Artifact) => `${run.name} · ${run.version ? 'v' + run.version : 'live'}`;
 /** Bare field names are literal record keys; nested fields use JSON pointers. */
 export function valueAt(row: Observation, field: string): Json | undefined {
-  if (field === '@run') return row.artifact_id;
+  if (field === '@run') return row.run.id;
   if (field === '@name') return row.run.name;
-  if (field === '@version') return row.run.number;
+  if (field === '@version') return row.run.version || null;
   if (field === '@ordinal') return row.ordinal;
-  if (field === '@created') return row.created_at;
-  const root = field.startsWith('@config/') ? row.run.metadata.config : row.data;
+  if (field === '@created') return row.created;
+  const root = field.startsWith('@config/') ? row.run.config : row.data;
   const path = field.startsWith('@config/') ? field.slice(7) : field;
   if (!path.startsWith('/')) return row.data[path];
   return path
@@ -93,7 +93,7 @@ export function sorted(rows: Observation[], order: Order) {
     const direction = a.value == null || b.value == null ? 1 : order.descending ? -1 : 1;
     const difference = compare(a.value, b.value) * direction;
     if (difference) return difference;
-    if (a.row.artifact_id !== b.row.artifact_id) return a.row.artifact_id.localeCompare(b.row.artifact_id);
+    if (a.row.run.id !== b.row.run.id) return a.row.run.id.localeCompare(b.row.run.id);
     return a.row.ordinal - b.row.ordinal;
   };
   // Runs mostly log in order.
@@ -140,7 +140,7 @@ export function groups(rows: Observation[], fields: string[]) {
   const result = new Map<string, { name: string; rows: Observation[] }>();
   // Fields of the run are the same for all its records.
   const perRun = fields.every((f) => ['@run', '@name', '@version'].includes(f) || f.startsWith('@config/'));
-  const byRun = new Map<Artifact, { name: string; rows: Observation[] }>();
+  const byRun = new Map<Run, { name: string; rows: Observation[] }>();
   for (const row of rows) {
     const known = perRun && byRun.get(row.run);
     if (known) {
@@ -194,7 +194,7 @@ export function discover(rows: Observation[]): FieldInfo[] {
     if (value && typeof value === 'object' && !Array.isArray(value) && !envelope(value))
       for (const [key, v] of Object.entries(value)) visit(v, `${path}/${key.replace(/~/g, '~0').replace(/\//g, '~1')}`);
   };
-  const configured = new Set<Artifact>();
+  const configured = new Set<Run>();
   for (const row of rows) {
     for (const [key, value] of Object.entries(row.data)) {
       add(key, value);
@@ -202,7 +202,7 @@ export function discover(rows: Observation[]): FieldInfo[] {
         for (const [k, v] of Object.entries(value))
           visit(v, `/${key.replace(/~/g, '~0').replace(/\//g, '~1')}/${k.replace(/~/g, '~0').replace(/\//g, '~1')}`);
     }
-    if (row.run.metadata.config && !configured.has(row.run)) visit(row.run.metadata.config, '@config');
+    if (row.run.config && !configured.has(row.run)) visit(row.run.config, '@config');
     configured.add(row.run);
   }
   for (const [name, kind] of [
@@ -210,7 +210,7 @@ export function discover(rows: Observation[]): FieldInfo[] {
     ['@name', 'string'],
     ['@version', 'number'],
     ['@ordinal', 'number'],
-    ['@created', 'string'],
+    ['@created', 'number'],
   ])
     fields.set(name, new Set([kind]));
   return [...fields].map(([name, kinds]) => ({ name, kinds })).sort((a, b) => a.name.localeCompare(b.name));

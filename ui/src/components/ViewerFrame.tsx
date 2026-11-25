@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { parse } from 'yaml';
-import { api, post, type Artifact, type Json } from '../api';
+import { api, resolve as find, type Json } from '../api';
 import { ErrorNote, Loading } from './States';
 
 export type View = { viewer: string; caption?: string; settings: Record<string, Json> };
@@ -53,11 +53,7 @@ export function ViewerFrame({
     const link = async (ref: string) => {
       const at = ref.indexOf('#'),
         name = at < 0 ? '' : ref.slice(at + 1),
-        [artifact] = await post<Artifact[]>(
-          '/v1/resolutions',
-          { refs: [at < 0 ? ref : ref.slice(0, at)], project },
-          signal,
-        );
+        [artifact] = await find([at < 0 ? ref : ref.slice(0, at)], project, signal);
       if (!artifact) throw new Error(`Nothing matches ${ref}`);
       const { url } = await api<{ url: string }>(`/ui-api/viewer-tokens/${encodeURIComponent(artifact.id)}`, {
         signal,

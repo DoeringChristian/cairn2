@@ -1,7 +1,7 @@
-import type { ArtifactSummary } from './api';
+import type { Artifact } from './api';
 
-export type ListPage = {items: ArtifactSummary[]; total: number};
-const key = 'cairn:list-pages:v1';
+export type ListPage = {items: Artifact[]; total: number};
+const key = 'cairn:list-pages:v2';
 const scopeKey = 'cairn:list-repository';
 const maxPages = 40, maxBytes = 2 * 1024 * 1024;
 const pages = new Map<string, ListPage>();

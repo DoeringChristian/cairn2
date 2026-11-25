@@ -1,45 +1,42 @@
-"""Run an experiment that records metrics, media, a dataset and a viewer.
+"""Run an experiment that logs metrics, media, a dataset and a viewer.
 
 Run from this folder: uv run --extra all python run.py
-Then: uv run --extra all cairn server --no-auth
+Then: uv run --extra all cairn-ui --no-auth
 """
 
 import math
 from pathlib import Path
 
-import cairn
+import plotly.graph_objects as go
+
+import cairn_next as cairn
 
 ASSETS = Path(__file__).parent / "assets"
 
 
 def main():
-    project = "neural-rendering"
-    cairn.init("showcase-baseline", project=project, config={"seed": 42, "samples": 32})
-
-    with cairn.artifact("datasets", "showcase-samples") as dataset:
-        cairn.add(
-            cairn.Table([{"sample": n, "weight": 1 / 32} for n in range(32)]),
-            name="samples",
-        )
-    cairn.use(dataset, role="training-data")
-
-    for step in range(60):
-        loss = round(math.exp(-step / 18) + 0.02, 6)
-        cairn.log({"loss": loss}, step=step)
-        if step % 20 == 0:
-            print(f"step {step}: loss {loss}")
-    for name, file in (
-        ("figures/field-start.png", "field-start.png"),
-        ("figures/field-end.png", "field-end.png"),
-        ("media/wave-evolution.mp4", "wave-evolution.mp4"),
-        ("media/signal.wav", "signal.wav"),
-    ):
-        cairn.add(ASSETS / file, name=name)
-    cairn.finish(value={"loss": 0.018, "psnr": 34.2, "converged": True})
-
-    with cairn.artifact("viewers", "field", project=project):
-        cairn.add(ASSETS / "field-viewer.html", name="index.html")
-    print(f"Run: showcase-baseline (project: {project})")
+    with cairn.Client(project="neural-rendering") as client:
+        with client.artifact("datasets", "showcase-samples") as dataset:
+            dataset.log(samples=cairn.Table([{"sample": n, "weight": 1 / 32} for n in range(32)]))
+        with client.run("showcase-baseline", {"seed": 42, "samples": 32}) as run:
+            run.use(dataset, role="training-data")
+            for step in range(60):
+                loss = round(math.exp(-step / 18) + 0.02, 6)
+                run.log(step=step, loss=loss)
+                if step % 20 == 0:
+                    print(f"step {step}: loss {loss}")
+            run.log({"curve": cairn.Figure(go.Figure(go.Scatter(y=[1, 4, 2])))})
+            for file, name in (
+                ("field-start.png", "figures/field-start.png"),
+                ("field-end.png", "figures/field-end.png"),
+                ("wave-evolution.mp4", "media/wave-evolution.mp4"),
+                ("signal.wav", "media/signal.wav"),
+            ):
+                run.add(ASSETS / file, name)
+            run.log(psnr=34.2, converged=True)
+        with client.artifact("viewers", "field") as viewer:
+            viewer.add(ASSETS / "field-viewer.html", "index.html")
+        print(f"Run: {run.ref} (project: {client.project})")
 
 
 if __name__ == "__main__":

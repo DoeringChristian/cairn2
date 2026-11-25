@@ -1,5 +1,5 @@
 /** Bounded session cache for rendered views; validated against repository identity at login. */
-const key='cairn:views:v1', scopeKey='cairn:views-repository';
+const key='cairn:views:v2', scopeKey='cairn:views-repository';
 const budget=2*1024*1024;
 const cache=new Map<string,unknown>();
 try {const raw=sessionStorage.getItem(key);if(raw&&raw.length*2<=budget){const entries=JSON.parse(raw);if(Array.isArray(entries))for(const entry of entries.slice(-20))if(Array.isArray(entry)&&typeof entry[0]==='string')cache.set(entry[0],entry[1]);}} catch {/* Memory cache remains available. */}

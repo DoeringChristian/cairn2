@@ -4,7 +4,7 @@ import { invalidateLists, scopeListCache } from './listCache';
 import { setRefreshPaused, useRefresh, useRefreshMode } from './refresh';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, Route, Routes, useLocation, useNavigate, matchPath } from 'react-router-dom';
-import { api, post, useResource, projectPath, type Project } from './api';
+import { api, post, setClock, useProjects, projectPath, runsOf } from './api';
 import { Button, ErrorNote, Field, Hero, Loading, Select } from './components';
 import { ProjectsPage, ProjectPage } from './pages/Projects';
 import { ArtifactPage } from './pages/Artifact';
@@ -13,13 +13,13 @@ import { WorkspacePage, RunWorkspaceRedirect } from './workspace/Workspace';
 import { useScrollMemory } from './components/useScrollMemory';
 import './styles/navigation.css';
 
-type Session = { authenticated: boolean; no_auth: boolean; repository_id: string };
+type Session = { no_auth: boolean; repository_id: string; now: number };
 let initialSession: Promise<Session> | undefined;
 function bootstrapSession() {
   if (!initialSession) {
     const linkToken = new URLSearchParams(window.location.hash.slice(1)).get('token');
     if (linkToken) window.history.replaceState(null, '', window.location.pathname + window.location.search);
-    initialSession = (linkToken ? post('/ui-api/login', {link_token: linkToken}) : Promise.resolve())
+    initialSession = (linkToken ? post('/ui-api/login', {token: linkToken}) : Promise.resolve())
       .then(() => api<Session>('/ui-api/session'));
   }
   return initialSession;
@@ -45,12 +45,12 @@ function Rail({ authenticated, noAuth, logout }: {authenticated: boolean; noAuth
   const inList = location.pathname === projectPath(project);
   const inWorkspace = !!matchPath('/p/:project/workspace',location.pathname);
   const pulse = useRefresh(authenticated), paused = useRefreshMode();
-  const projects = useResource<Project[]>(authenticated ? '/ui-api/projects' : null, pulse);
+  const projects = useProjects(authenticated, pulse);
   useEffect(() => setOpen(false), [location.pathname, location.search]);
   return <aside className={`rail ${open ? 'open' : ''} ${expanded?'expanded':'collapsed'}`} aria-label="Main navigation"><Link className="brand" to="/"><span>C</span><span className="site-title">Cairn</span></Link><button className="rail-fold" aria-label={expanded?'Collapse navigation':'Expand navigation'} title={expanded?'Collapse navigation':'Expand navigation'} aria-expanded={expanded} onClick={()=>setExpanded(!expanded)}>{expanded?<PanelLeftClose size={18}/>:<PanelLeftOpen size={18}/>}</button>
     <button className="rail-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>Browse</button>
     {authenticated && <section className="report-list workspace-navigation">
-      <button className="rail-project-icon" aria-label="Choose project" title={project||"Choose project"} onClick={()=>setExpanded(true)}><FolderOpen size={18}/></button><div className="rail-project-picker"><Select label="Project" value={project} choices={[{value:'',label:'All projects'},...(projects.data||[]).map(p=>({value:p.name,label:p.name,note:`${p.runs} runs`}))]}
+      <button className="rail-project-icon" aria-label="Choose project" title={project||"Choose project"} onClick={()=>setExpanded(true)}><FolderOpen size={18}/></button><div className="rail-project-picker"><Select label="Project" value={project} choices={[{value:'',label:'All projects'},...(projects.data||[]).map(p=>({value:p.name,label:p.name,note:`${runsOf(p)} runs`}))]}
         onChange={value=>navigate(value ? (inWorkspace ? `${projectPath(value)}/workspace` : `${projectPath(value)}?view=${view}`) : '/')}/></div>
       <nav aria-label="Project navigation"><Link aria-label="Workspace" title="Workspace" to={project ? `${projectPath(project)}/workspace` : "/"} aria-current={project && inWorkspace ? "page" : undefined}><LayoutDashboard size={18} aria-hidden="true"/><span className="rail-item-label">Workspace</span></Link>{[
         {value:'runs',label:'Runs',Icon:FlaskConical},
@@ -69,7 +69,7 @@ export function App() {
   const [noAuth, setNoAuth] = useState(false);
   const [error, setError] = useState<Error>();
   useEffect(() => {
-    bootstrapSession().then(session => {scopeListCache(session.repository_id);scopeViews(session.repository_id);setAuth(true); setNoAuth(session.no_auth);}).catch(e => {setAuth(false); if (e.status !== 401) setError(e);});
+    bootstrapSession().then(session => {setClock(session.now);scopeListCache(session.repository_id);scopeViews(session.repository_id);setAuth(true); setNoAuth(session.no_auth);}).catch(e => {setAuth(false); if (e.status !== 401) setError(e);});
     const expired = () => {invalidateLists();clearViews();setAuth(false);};
     window.addEventListener('cairn:unauthorized', expired);
     return () => window.removeEventListener('cairn:unauthorized', expired);

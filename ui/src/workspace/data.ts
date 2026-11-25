@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, post, type Artifact, type ArtifactSummary } from '../api';
+import { ApiError, getArtifact, operate, type Artifact, type Run } from '../api';
+import { decode, decodeRecord } from '../protocol';
 import { useRefreshMode } from '../refresh';
 import type { Observation } from './model';
 
 export function useRuns(project: string, revision: number, enabled = true) {
-  const [state, setState] = useState<{ items: ArtifactSummary[]; loading: boolean; error?: Error }>({
+  const [state, setState] = useState<{ items: Artifact[]; loading: boolean; error?: Error }>({
     items: [],
     loading: true,
   });
@@ -19,12 +20,13 @@ export function useRuns(project: string, revision: number, enabled = true) {
     setState((s) => ({ ...s, loading: true, error: undefined }));
     async function load() {
       try {
-        const items: ArtifactSummary[] = [];
+        const items: Artifact[] = [];
         let total = Infinity;
         while (items.length < total) {
-          const result = await api<{ items: ArtifactSummary[]; total: number }>(
-            `/ui-api/artifacts?${new URLSearchParams({ project, category: 'runs', offset: String(items.length), limit: '100' })}`,
-            { signal: controller.signal },
+          const result = await operate<{ items: Artifact[]; total: number }>(
+            'find',
+            { project, namespaces: ['runs'], values: ['_outcome'], offset: items.length, limit: 1000 },
+            controller.signal,
           );
           total = result.total;
           items.push(...result.items);
@@ -44,62 +46,94 @@ export function useRuns(project: string, revision: number, enabled = true) {
   }, [project, revision, paused, enabled]);
   return state;
 }
-type Loaded = { run: Artifact; rows: Observation[]; cutoff: number; complete: boolean };
-type Row = [ordinal: number, sequence: number, writer: string, created: string, data: Observation['data']];
+type Loaded = { run: Run; rows: Observation[]; cutoff: number; complete: boolean };
+type Row = { ordinal: number; created: number; data: Observation['data'] };
 const streams = 4;
 const interval = 1000;
 
 /** Reads the records after each run's ordinal, calling back whenever a run is complete. */
 async function read(
-  project: string,
   after: Record<string, number>,
   signal: AbortSignal,
-  found: (run: Artifact, rows: Row[], cutoff: number) => void,
+  found: (run: Run, rows: Row[], cutoff: number) => void,
   progress: (count: number) => void,
 ) {
   const response = await fetch('/ui-api/observations', {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ project, after }),
+    body: JSON.stringify({ after }),
     signal,
   });
   if (!response.ok || !response.body) {
     const body = await response.json().catch(() => null);
     if (response.status === 401) window.dispatchEvent(new Event('cairn:unauthorized'));
-    throw new Error(body?.error?.message ?? `Request failed (${response.status})`);
+    throw new ApiError(body?.error?.message ?? `Request failed (${response.status})`, response.status);
   }
-  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-  let run: Artifact | undefined;
+  const reader = response.body.getReader();
+  let run: Run | undefined;
   let rows: Row[] = [];
-  let done = false;
-  let rest: string[] = [];
-  const line = (text: string) => {
-    const value = JSON.parse(text);
-    if (Array.isArray(value)) {
-      rows = rows.length ? rows.concat(value) : value;
-      progress(value.length);
-    } else if (value.artifact) [run, rows] = [value.artifact, []];
-    else if (value.done) done = true;
-    else found(run!, rows, value.cutoff);
-  };
+  let cutoff = 0;
+  let held = new Uint8Array();
+  const finish = () => run && found(run, rows, cutoff);
   for (;;) {
-    const part = await reader.read();
-    if (part.done) break;
-    const lines = part.value.split('\n');
-    if (lines.length > 1) {
-      line(rest.join('') + lines[0]);
-      lines.slice(1, -1).forEach(line);
-      rest = [];
+    const parts = [held];
+    let size = held.length;
+    // A message is a kind, its length in four bytes, and its content.
+    const need = () => (held.length < 5 ? 5 : 5 + new DataView(held.buffer, held.byteOffset).getUint32(1));
+    while (size < need()) {
+      const part = await reader.read();
+      if (part.done) throw new Error('The record stream ended early. Refresh to load it again.');
+      parts.push(part.value);
+      size += part.value.length;
+      if (held.length < 5 || size >= need()) {
+        held = joined(parts, size);
+        parts.splice(0, parts.length, held);
+      }
     }
-    rest.push(lines[lines.length - 1]);
+    const end = need();
+    const content = held.subarray(5, end);
+    if (held[0] === 2) return finish();
+    if (held[0] === 0) {
+      finish();
+      run = decode<Artifact>('Artifact', content);
+      rows = [];
+      cutoff = after[run.id];
+    } else {
+      const page = decode<{ ordinals: number[]; records: Uint8Array[] }>('RecordPage', content);
+      page.records.forEach((record, i) => {
+        const data = decodeRecord(record);
+        const created = data._time as number;
+        // What Cairn logs about the run itself is no observation.
+        for (const key of Object.keys(data))
+          if (key[0] === '_') {
+            if (key === '_config') run!.config = data._config;
+            delete data[key];
+          }
+        for (const _ in data) {
+          rows.push({ ordinal: page.ordinals[i], created, data });
+          break;
+        }
+      });
+      cutoff = page.ordinals.at(-1) ?? cutoff;
+      progress(page.records.length);
+    }
+    held = held.subarray(end);
   }
-  if (!done) throw new Error('The record stream ended early. Refresh to load it again.');
+}
+function joined(parts: Uint8Array[], size: number) {
+  const all = new Uint8Array(size);
+  let at = 0;
+  for (const part of parts) {
+    all.set(part, at);
+    at += part.length;
+  }
+  return all;
 }
 
 /** Complete records of the runs: a run appears once all its records have arrived, stays
  * loaded while its selection changes, and then only its new records are fetched. */
-export function useObservations(project: string, runs: ArtifactSummary[], revision: number) {
+export function useObservations(project: string, runs: Artifact[], revision: number) {
   const [state, setState] = useState<{
     scope?: string;
     loading: boolean;
@@ -128,32 +162,21 @@ export function useObservations(project: string, runs: ArtifactSummary[], revisi
     }
     const publish = (value: Partial<typeof state>) =>
       setState((previous) => ({ loading: false, ...value, scope, version: previous.version + 1 }));
-    function add(run: Artifact, added: Row[], cutoff: number) {
+    function add(run: Run, added: Row[], cutoff: number) {
       const previous = cache.current.get(run.id);
+      run.config ??= previous?.run.config;
       const same =
         previous &&
-        previous.run.state === run.state &&
-        previous.run.number === run.number &&
-        JSON.stringify(previous.run.metadata) === JSON.stringify(run.metadata);
+        previous.run.finished === run.finished &&
+        JSON.stringify(previous.run.config) === JSON.stringify(run.config);
       const shown = same ? previous.run : run;
       const kept = previous ? (same ? previous.rows : previous.rows.map((row) => ({ ...row, run: shown }))) : [];
-      const rows = added.map(
-        ([ordinal, sequence, writer_id, created_at, data]): Observation => ({
-          artifact_id: run.id,
-          ordinal,
-          sequence,
-          writer_id,
-          kind: 'record',
-          data,
-          created_at,
-          run: shown,
-        }),
-      );
+      const rows = added.map((row): Observation => ({ ...row, run: shown }));
       cache.current.set(run.id, {
         run: shown,
         rows: rows.length || !same ? kept.concat(rows) : kept,
         cutoff,
-        complete: run.state === 'finished',
+        complete: run.finished,
       });
       return rows.length > 0 || !same;
     }
@@ -169,7 +192,6 @@ export function useObservations(project: string, runs: ArtifactSummary[], revisi
         await Promise.all(
           Array.from({ length: Math.min(streams, missing.length) }, (_, stream) =>
             read(
-              project,
               Object.fromEntries(missing.filter((_, i) => i % streams === stream).map((id) => [id, 0])),
               failed.signal,
               (run, rows, cutoff) => void add(run, rows, cutoff),
@@ -203,7 +225,6 @@ export function useObservations(project: string, runs: ArtifactSummary[], revisi
         try {
           const after = Object.fromEntries(live().map((id) => [id, cache.current.get(id)!.cutoff]));
           await read(
-            project,
             after,
             controller.signal,
             (run, rows, cutoff) => {
@@ -265,12 +286,12 @@ export function useRun(project: string, id: string | undefined, revision: number
     setState({ identity, loading: true });
     async function load() {
       try {
-        const [run] = await post<Artifact[]>('/v1/resolutions', { refs: [id], project }, controller.signal);
-        if (!run || run.id !== id || run.project !== project || run.namespace !== 'runs')
+        const run = await getArtifact(id!, project, controller.signal);
+        if (run.id !== id || run.project !== project || run.namespace !== 'runs')
           throw new Error('Run not found in this project.');
         if (controller.signal.aborted) return;
         setState({ identity, run, loading: false });
-        if (run.state !== 'finished' && !paused) timer = setTimeout(() => void load(), 5000);
+        if (!run.finished && !paused) timer = setTimeout(() => void load(), 5000);
       } catch (error) {
         if (!controller.signal.aborted) setState({ identity, loading: false, error: error as Error });
       }

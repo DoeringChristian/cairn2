@@ -18,6 +18,6 @@ const proxy: ProxyOptions = {
 };
 export default defineConfig({
   plugins: [react()],
-  build: { outDir: '../cairn/ui_static', emptyOutDir: true },
-  server: { host: '127.0.0.1', proxy: {'/v1': proxy, '/ui-api': proxy} },
+  build: { outDir: '../cairn_ui/static', emptyOutDir: true },
+  server: { host: '127.0.0.1', proxy: {'/ui-api': proxy} },
 });

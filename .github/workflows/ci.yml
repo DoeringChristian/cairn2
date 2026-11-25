@@ -37,8 +37,8 @@ jobs:
           from zipfile import ZipFile
           with ZipFile(next(Path("dist").glob("*.whl"))) as wheel:
               names = wheel.namelist()
-              assert "cairn/ui_static/index.html" in names
-              assert any(name.startswith("cairn/ui_static/assets/") for name in names)
+              assert "cairn_ui/static/index.html" in names
+              assert any(name.startswith("cairn_ui/static/assets/") for name in names)
           PY
   ui:
     runs-on: ubuntu-latest
@@ -63,7 +63,7 @@ jobs:
           CAIRN_REPO=/tmp/cairn-ci uv run python examples/showcase/run.py
       - name: Browser tests
         run: |
-          uv run cairn --repo /tmp/cairn-ci server --host 127.0.0.1 --port 18765 --no-auth > /tmp/cairn-server.log 2>&1 &
+          uv run cairn-ui --repo /tmp/cairn-ci --state /tmp/cairn-ui.sqlite3 --port 18765 --no-auth > /tmp/cairn-server.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" || true' EXIT
           for attempt in $(seq 1 60); do

@@ -22,9 +22,9 @@ export function RecordCharts({records}: {records: RecordEntry[]}) {
   const found = new Map<string, Point[]>();
   const stepped = records.length > 0 && records.every(r=>typeof r.data.step==='number');
   for(const row of records) for(const [key,value] of Object.entries(row.data)) {
-    if(key==='step' || typeof value!=='number') continue;
+    if(key==='step' || !Number.isFinite(value)) continue;
     if(!found.has(key)) found.set(key,[]);
-    found.get(key)!.push([stepped ? row.data.step as number : row.ordinal,value]);
+    found.get(key)!.push([stepped ? row.data.step as number : row.ordinal,value as number]);
   }
   return found.size ? <div className="run-charts">{[...found].map(([title,points])=><LineChart key={title} title={title} points={points} xLabel={stepped?'step':'record'}/>)}</div> : <Hint>No scalar metrics in the loaded records.</Hint>;
 }

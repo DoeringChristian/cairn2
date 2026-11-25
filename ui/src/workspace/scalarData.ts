@@ -37,7 +37,7 @@ export function scalarData(rows: Observation[], card: Card) {
     }
     if (!points.some((p) => p.y !== null)) continue;
     const color = card.split.includes('@run')
-      ? runColor(group.rows[0].artifact_id)
+      ? runColor(group.rows[0].run.id)
       : identityColor(JSON.stringify([card.split, group.key]));
     const subgroup = JSON.stringify(card.split.filter((f) => f !== '@run').map((f) => valueAt(group.rows[0], f)));
     const dash =
@@ -53,7 +53,7 @@ export function scalarData(rows: Observation[], card: Card) {
 
     const members = new Map<string, ScalarPoint[]>();
     for (const point of points) {
-      const id = point.rows[0].artifact_id;
+      const id = point.rows[0].run.id;
       if (!members.has(id)) members.set(id, []);
       members.get(id)!.push(point);
     }
