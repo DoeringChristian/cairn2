@@ -4,7 +4,7 @@ import { WorkspaceDialog } from '../Dialog';
 import { label } from '../model';
 import { PlotSurface, type FigureSpec } from '../PlotSurface';
 import { blobPath, useLoaded, type BlobRef } from '../../api';
-import { mediaKind } from './media';
+import { Enlarge, mediaKind } from './media';
 import { Toggle } from './settings';
 
 function Figure({ blob, ...props }: { blob: BlobRef } & Omit<ComponentProps<typeof PlotSurface>, 'spec'>) {
@@ -29,9 +29,7 @@ export const plotly = mediaKind({
       <div className="workspace-figure-tile">
         <Figure blob={value.blobs[0]} range={linked} onRange={onRange} />
       </div>
-      <button className="text-button workspace-expand-plot" onClick={onExpand}>
-        Expand figure ↗
-      </button>
+      <Enlarge label="Expand figure" onClick={onExpand} />
     </>
   ),
   Expanded: ({ row, value, onClose }) => (
@@ -42,10 +40,6 @@ export const plotly = mediaKind({
     </WorkspaceDialog>
   ),
   Appearance: ({ card, patch }) => (
-    <Toggle
-      label="Link 2D axes across figures with the same units"
-      checked={card.linkAxes}
-      onChange={(linkAxes) => patch({ linkAxes })}
-    />
+    <Toggle label="Zoom all figures together" checked={card.linkAxes} onChange={(linkAxes) => patch({ linkAxes })} />
   ),
 });

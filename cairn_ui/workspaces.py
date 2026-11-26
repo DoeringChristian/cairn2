@@ -36,6 +36,10 @@ class Workspaces:
             rows = self._db.execute("SELECT id, name, revision, updated FROM workspaces WHERE project = ? ORDER BY name", (project,)).fetchall()
         return [dict(zip(("id", "name", "revision", "updated"), row, strict=True)) for row in rows]
 
+    def projects(self):
+        with self._lock:
+            return dict(self._db.execute("SELECT project, MAX(updated) FROM workspaces GROUP BY project").fetchall())
+
     def get(self, identifier):
         return self._row("id = ?", (identifier,))
 

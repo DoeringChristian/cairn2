@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, Pause, Play, type LucideIcon } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Maximize2, Pause, Play, type LucideIcon } from 'lucide-react';
 import { blobPath, envelope, type BlobRef, type Envelope } from '../../api';
 import { ActionIcon } from '../../components/Button';
 import { MediaLightbox } from '../../components/MediaLightbox';
@@ -8,8 +8,19 @@ import { preloadBlob, useImageBlob } from '../../components/useBlobUrl';
 import { WorkspaceDialog } from '../Dialog';
 import { compare, groups, label, sorted, typeOf, valueAt, type Card, type Observation } from '../model';
 import { runColor } from '../presentation';
+import { SharedZoom } from '../zoom';
 import { display, Inspector, recordId } from './records';
-import { Choice, FieldPicker, GroupBy, Note, NumberField, PointOrder, RecordFilters, SettingsTabs } from './settings';
+import {
+  Choice,
+  FieldPicker,
+  Group,
+  GroupBy,
+  More,
+  NumberField,
+  PointOrder,
+  RecordFilters,
+  Segments,
+} from './settings';
 import type { CardKind, ContentProps, SettingsProps } from './types';
 
 /** A shared 2D range, for figures whose axes are linked across tiles. */
@@ -23,6 +34,8 @@ export type TileProps = {
   onExpand: () => void;
   linked?: Range;
   onRange: (range: Range) => void;
+  /** The zoom every tile of the card shares. */
+  zoom: SharedZoom;
 };
 
 /** One kind of logged media, shown as gallery, comparison or sequence tiles. */
@@ -71,6 +84,7 @@ function MediaContent({ format, card, rows }: ContentProps & { format: MediaForm
   const [expanded, setExpanded] = useState<Observation>();
   const [inspected, setInspected] = useState<Observation>();
   const [linked, setLinked] = useState<Range>();
+  const [zoom] = useState(() => new SharedZoom());
 
   const media = useMemo(
     () =>
@@ -94,7 +108,8 @@ function MediaContent({ format, card, rows }: ContentProps & { format: MediaForm
       );
   const current = axisValues[cursorIndex];
   const setIndex = (index: number) => {
-    setFollow(false);
+    // At the end, the newest stays shown as it arrives.
+    setFollow(index >= axisValues.length - 1);
     setCursor(JSON.stringify(axisValues[Math.max(0, Math.min(axisValues.length - 1, index))]));
   };
 
@@ -105,6 +120,7 @@ function MediaContent({ format, card, rows }: ContentProps & { format: MediaForm
     setFollow(true);
     setPlaying(false);
     setLinked(undefined);
+    zoom.reset();
   }, [card]);
   useEffect(() => {
     if (!playing || axisValues.length < 2) return;
@@ -139,6 +155,10 @@ function MediaContent({ format, card, rows }: ContentProps & { format: MediaForm
     }
   }, [card, axisValues, cursorIndex, shownGroups]);
 
+  const play = () => {
+    if (!playing && cursorIndex === axisValues.length - 1) setIndex(0);
+    setPlaying(!playing);
+  };
   const emitRange = (range: Range) => {
     if (!card.linkAxes) return;
     const axes = Object.fromEntries(
@@ -147,24 +167,83 @@ function MediaContent({ format, card, rows }: ContentProps & { format: MediaForm
     if (Object.keys(axes).length)
       setLinked((previous) => (JSON.stringify(previous) === JSON.stringify(axes) ? previous : axes));
   };
-  const matching =
-    card.mode === 'gallery'
-      ? `Ordered by ${card.pointOrder.field}`
-      : {
-          exact: 'Exact axis matches',
-          previous: 'Previous available observation',
-          nearest: 'Nearest available observation',
-        }[card.matching];
+  const pages = totalPages > 1 && (
+    <span className="workspace-pages">
+      <button disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)} aria-label="Previous gallery page">
+        ‹
+      </button>{' '}
+      {currentPage + 1} / {totalPages}{' '}
+      <button
+        disabled={currentPage >= totalPages - 1}
+        onClick={() => setPage(currentPage + 1)}
+        aria-label="Next gallery page"
+      >
+        ›
+      </button>
+    </span>
+  );
+  const columns = card.mode === 'sequence' ? 1 : Math.min(card.columns, visible.length);
 
   return (
     <>
-      {card.mode !== 'gallery' && !!media.length && (
-        <div className="workspace-navigator">
-          <div className="workspace-navigator-top">
-            <span>
-              <strong>{card.axis}</strong> <output>{display(current)}</output>
-            </span>
-            {card.mode === 'sequence' && (
+      {!media.length ? (
+        <div className="workspace-empty">
+          No {format.noun} in <code>{card.value}</code>. Choose a logged field in settings.
+        </div>
+      ) : !axisValues.length && card.mode !== 'gallery' ? (
+        <div className="workspace-empty">
+          No values for <code>{card.axis}</code>. Choose another field to step through in settings.
+        </div>
+      ) : (
+        <div
+          className={`workspace-media-grid workspace-media-${card.mode}`}
+          style={{ '--tile-columns': Math.max(1, columns) } as CSSProperties}
+        >
+          {visible.map(({ key, name, row }) => (
+            <div key={key} className="workspace-media-tile">
+              {row ? (
+                <format.Tile
+                  card={card}
+                  value={envelope(valueAt(row, card.value))!}
+                  title={`${label(row.run)} · ${card.caption ? display(valueAt(row, card.caption)) : card.value}`}
+                  onExpand={() => setExpanded(row)}
+                  linked={card.linkAxes ? linked : undefined}
+                  onRange={emitRange}
+                  zoom={zoom}
+                />
+              ) : (
+                <div className="workspace-empty workspace-tile-missing">No observation</div>
+              )}
+              <div className="workspace-tile-heading">
+                {row && (
+                  <i className="workspace-run-swatch" style={{ background: runColor(row.run.id) }} aria-hidden="true" />
+                )}
+                <span title={name}>{name}</span>
+              </div>
+              <div className="workspace-tile-caption">
+                <span>
+                  {card.axis}: {display(row ? valueAt(row, card.axis) : current)}
+                </span>
+                {row && card.caption && card.caption !== card.axis && (
+                  <span>
+                    {card.caption}: {display(valueAt(row, card.caption))}
+                  </span>
+                )}
+                {row && (
+                  <button className="text-button" title="Show the record" onClick={() => setInspected(row)}>
+                    #{row.ordinal}
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!!media.length &&
+        (card.mode !== 'gallery' ? (
+          <div className="workspace-navigator">
+            {card.mode === 'sequence' && series.length > 1 && (
               <Select
                 label="Sequence"
                 value={selectedGroup?.key || ''}
@@ -175,147 +254,46 @@ function MediaContent({ format, card, rows }: ContentProps & { format: MediaForm
                 }}
               />
             )}
-            <label>
-              <input
-                type="checkbox"
-                checked={follow}
-                onChange={(e) => {
-                  setFollow(e.target.checked);
-                  setCursor(JSON.stringify(current));
-                }}
-              />{' '}
-              Latest
-            </label>
-          </div>
-          <div className="workspace-slider">
-            <ActionIcon
-              label="Previous axis value"
-              disabled={!axisValues.length || cursorIndex === 0}
-              onClick={() => setIndex(cursorIndex - 1)}
-            >
-              <ChevronLeft size={16} />
-            </ActionIcon>
-            <input
-              type="range"
-              aria-label={`Browse ${card.axis}`}
-              min={0}
-              max={Math.max(0, axisValues.length - 1)}
-              value={cursorIndex}
-              disabled={axisValues.length < 2}
-              onChange={(e) => {
-                setIndex(Number(e.target.value));
-                setPage(0);
-              }}
-            />
-            <ActionIcon
-              label="Next axis value"
-              disabled={cursorIndex >= axisValues.length - 1}
-              onClick={() => setIndex(cursorIndex + 1)}
-            >
-              <ChevronRight size={16} />
-            </ActionIcon>
-            <ActionIcon
-              label={playing ? 'Pause sequence' : 'Play sequence'}
-              disabled={axisValues.length < 2}
-              onClick={() => {
-                if (!playing && cursorIndex === axisValues.length - 1) setIndex(0);
-                setPlaying(!playing);
-              }}
-            >
-              {playing ? <Pause size={15} /> : <Play size={15} />}
-            </ActionIcon>
-          </div>
-        </div>
-      )}
-
-      {!media.length ? (
-        <div className="workspace-empty">
-          No {format.noun} in <code>{card.value}</code>. Choose a logged field in settings.
-        </div>
-      ) : !axisValues.length && card.mode !== 'gallery' ? (
-        <div className="workspace-empty">
-          No values for navigation field <code>{card.axis}</code>. Choose another field or gallery mode.
-        </div>
-      ) : (
-        <div
-          className="workspace-media-grid"
-          style={{ '--tile-columns': card.mode === 'sequence' ? 1 : card.columns } as CSSProperties}
-        >
-          {visible.map(({ key, name, row }) => (
-            <div key={key} className="workspace-media-tile">
-              <div className="workspace-tile-heading">
-                {row && (
-                  <i
-                    className="workspace-run-swatch"
-                    style={{ background: runColor(row.run.id) }}
-                    aria-hidden="true"
-                  />
-                )}
-                <span title={name}>{name}</span>
-                {row && (
-                  <button className="text-button" onClick={() => setInspected(row)}>
-                    #{row.ordinal}
-                  </button>
-                )}
+            {axisValues.length > 1 && (
+              <div className="workspace-slider">
+                <ActionIcon label={playing ? 'Pause sequence' : 'Play sequence'} onClick={play}>
+                  {playing ? <Pause size={15} /> : <Play size={15} />}
+                </ActionIcon>
+                <ActionIcon
+                  label="Previous axis value"
+                  disabled={cursorIndex === 0}
+                  onClick={() => setIndex(cursorIndex - 1)}
+                >
+                  <ChevronLeft size={16} />
+                </ActionIcon>
+                <input
+                  type="range"
+                  aria-label={`Browse ${card.axis}`}
+                  min={0}
+                  max={axisValues.length - 1}
+                  value={cursorIndex}
+                  onChange={(e) => {
+                    setIndex(Number(e.target.value));
+                    setPage(0);
+                  }}
+                />
+                <ActionIcon
+                  label="Next axis value"
+                  disabled={cursorIndex >= axisValues.length - 1}
+                  onClick={() => setIndex(cursorIndex + 1)}
+                >
+                  <ChevronRight size={16} />
+                </ActionIcon>
               </div>
-              {row ? (
-                <>
-                  <format.Tile
-                    card={card}
-                    value={envelope(valueAt(row, card.value))!}
-                    title={`${label(row.run)} · ${card.caption ? display(valueAt(row, card.caption)) : card.value}`}
-                    onExpand={() => setExpanded(row)}
-                    linked={card.linkAxes ? linked : undefined}
-                    onRange={emitRange}
-                  />
-                  <div className="workspace-tile-caption">
-                    <span>
-                      {card.axis}: {display(valueAt(row, card.axis))}
-                    </span>
-                    {card.caption && (
-                      <span>
-                        {card.caption}: {display(valueAt(row, card.caption))}
-                      </span>
-                    )}
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="workspace-empty workspace-tile-missing">No observation</div>
-                  <div className="workspace-tile-caption">
-                    <span>
-                      {card.axis}: {display(current)}
-                    </span>
-                  </div>
-                </>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div className="workspace-card-note">
-        <span>
-          {media.length} records · {matching}
-        </span>
-        <span>
-          <button
-            disabled={currentPage === 0}
-            onClick={() => setPage(currentPage - 1)}
-            aria-label="Previous gallery page"
-          >
-            ‹
-          </button>{' '}
-          {currentPage + 1} / {totalPages}{' '}
-          <button
-            disabled={currentPage >= totalPages - 1}
-            onClick={() => setPage(currentPage + 1)}
-            aria-label="Next gallery page"
-          >
-            ›
-          </button>
-        </span>
-      </div>
+            )}
+            <output>
+              {card.axis} {display(current)} ({cursorIndex + 1}/{axisValues.length})
+            </output>
+            {pages}
+          </div>
+        ) : (
+          pages && <div className="workspace-navigator">{pages}</div>
+        ))}
 
       {expanded && (
         <format.Expanded
@@ -336,83 +314,74 @@ function MediaSettings({ format, ...props }: SettingsProps & { format: MediaForm
   const { card, fields, patch } = props;
   const media = fields.filter((field) => [...field.kinds].some(format.accepts));
   const axes = fields.filter((field) => [...field.kinds].every((kind) => plainTypes.has(kind)));
+  const stepped = card.mode !== 'gallery';
   return (
-    <SettingsTabs
-      tabs={{
-        Data: (
-          <>
-            <Note>Filters apply to this card’s visible runs.</Note>
-            <FieldPicker
-              label={`${format.label} field`}
-              value={card.value}
-              fields={media}
-              onChange={(value) => patch({ value })}
-            />
-            <RecordFilters {...props} />
-          </>
-        ),
-        Mapping: (
-          <>
-            <Choice
-              label="View"
-              value={card.mode}
-              options={[
-                ['gallery', 'Gallery · ordered records'],
-                ['compare', 'Compare · one group per tile'],
-                ['sequence', 'Sequence · one group with a slider'],
-              ]}
-              onChange={(mode) => patch({ mode })}
-            />
-            {card.mode !== 'gallery' && (
-              <>
-                <FieldPicker label="Slider axis" value={card.axis} fields={axes} onChange={(axis) => patch({ axis })} />
-                <Choice
-                  label="Match observations"
-                  value={card.matching}
-                  options={[
-                    ['exact', 'Exact value'],
-                    ['previous', 'Previous available'],
-                    ['nearest', 'Nearest (numeric axes)'],
-                  ]}
-                  onChange={(matching) => patch({ matching })}
-                />
-                <Note>
-                  Every tile shows its actual axis value. Missing matches remain empty; observations are never
-                  interpolated.
-                </Note>
-              </>
-            )}
-            <GroupBy {...props} />
-            <PointOrder label="Gallery / duplicate order" {...props} />
-            <FieldPicker
-              label="Caption field (optional)"
-              value={card.caption}
-              fields={fields}
-              onChange={(caption) => patch({ caption })}
-            />
-          </>
-        ),
-        Appearance: (
-          <>
-            <NumberField
-              label="Columns"
-              value={card.columns}
-              min={1}
-              max={6}
-              onChange={(columns) => patch({ columns })}
-            />
-            <NumberField
-              label="Tiles per page"
-              value={card.pageSize}
-              min={1}
-              max={24}
-              onChange={(pageSize) => patch({ pageSize })}
-            />
-            {format.Appearance && <format.Appearance {...props} />}
-          </>
-        ),
-      }}
-    />
+    <>
+      <Group title="Show">
+        <FieldPicker
+          label={`${format.label} field`}
+          value={card.value}
+          fields={media}
+          onChange={(value) => patch({ value })}
+        />
+        <Segments
+          label="View"
+          value={card.mode}
+          options={[
+            ['compare', 'Side by side', 'Every run at the same step'],
+            ['sequence', 'One run', 'One run, stepped through'],
+            ['gallery', 'All records', 'Everything, in order'],
+          ]}
+          onChange={(mode) => patch({ mode })}
+        />
+      </Group>
+      {stepped && (
+        <Group title="Steps">
+          <FieldPicker label="Step through" value={card.axis} fields={axes} onChange={(axis) => patch({ axis })} />
+          <Choice
+            label="Where a run has nothing at a step"
+            value={card.matching}
+            options={[
+              ['exact', 'Leave it empty'],
+              ['previous', 'Show its last one before'],
+              ['nearest', 'Show its nearest one'],
+            ]}
+            onChange={(matching) => patch({ matching })}
+          />
+          <GroupBy label="One tile per" {...props} />
+        </Group>
+      )}
+      <Group title="Look">
+        {card.mode !== 'sequence' && (
+          <NumberField
+            label="Columns"
+            value={card.columns}
+            min={1}
+            max={6}
+            onChange={(columns) => patch({ columns })}
+          />
+        )}
+        <FieldPicker
+          label="Caption"
+          value={card.caption}
+          fields={axes}
+          none="None"
+          onChange={(caption) => patch({ caption })}
+        />
+        {format.Appearance && <format.Appearance {...props} />}
+      </Group>
+      <More title="Records" count={card.filters.length}>
+        <RecordFilters {...props} />
+        <PointOrder label="Order by" {...props} fields={axes} />
+        <NumberField
+          label="Tiles per page"
+          value={card.pageSize}
+          min={1}
+          max={24}
+          onChange={(pageSize) => patch({ pageSize })}
+        />
+      </More>
+    </>
   );
 }
 
@@ -423,6 +392,10 @@ export function mediaKind(format: MediaFormat): CardKind {
     icon: format.icon,
     defaults: { title: format.title, value: format.field },
     usesRecords: true,
+    suggest: (fields) => {
+      const media = fields.filter((field) => [...field.kinds].some(format.accepts)).map((field) => field.name);
+      return media.length && !media.includes(format.field) ? { value: media[0], title: media[0] } : {};
+    },
     isValid: (card) => !!card.value && (card.mode === 'gallery' || !!card.axis),
     Content: (props) => <MediaContent format={format} {...props} />,
     Settings: (props) => <MediaSettings format={format} {...props} />,
@@ -468,6 +441,15 @@ export function BlobLightbox({ blob, name, onClose }: { blob: BlobRef; name: str
     </WorkspaceDialog>
   );
 }
+
+/** Opens a tile's media large, in its corner. */
+export const Enlarge = ({ label, onClick }: { label: string; onClick: () => void }) => (
+  <div className="workspace-enlarge">
+    <ActionIcon label={label} onClick={onClick}>
+      <Maximize2 size={14} />
+    </ActionIcon>
+  </div>
+);
 
 export const DownloadBlob = ({ blob }: { blob: BlobRef }) => (
   <a href={blobPath(blob)} download={blob.name || blob.digest}>

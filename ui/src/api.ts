@@ -9,7 +9,7 @@ export type Artifact = {
   id: string; project: string; namespace: string; name: string; finished: boolean; completed: boolean; version: number; records: number;
   created_at: number; finished_at: number; heard_at: number; tags: Record<string, Json>; aliases: string[]; values: Record<string, Json>;
 };
-export type Run = Artifact & { config?: Json };
+export type Run = Artifact & { config?: Json; started?: number };
 export type Project = { name: string; artifacts: Record<string, number>; updated: number; reports: number };
 export type RecordEntry = { ordinal: number; data: Record<string, Json> };
 export type FoundFile = { artifact: string; path: string; blob: Content; ordinal: number; reference: string };
@@ -68,7 +68,7 @@ export function literal(text: string): Json {
   if (/^-?inf$/i.test(text)) return text[0] === '-' ? -Infinity : Infinity;
   try { const value = JSON.parse(text); return typeof value === 'number' || typeof value === 'boolean' ? value : text; } catch { return text; }
 }
-export function useLoaded<T>(load: ((signal: AbortSignal) => Promise<T>) | null, key: string, revision = 0) {
+export function useLoaded<T>(load: ((signal: AbortSignal) => Promise<T>) | null, key: string, revision: number | string = 0) {
   const [state, setState] = useState<{key: string; data?: T; error?: Error; loading: boolean}>({key, loading: !!load});
   useEffect(() => {
     if (!load) { setState({key, loading: false}); return; }
@@ -81,10 +81,15 @@ export function useLoaded<T>(load: ((signal: AbortSignal) => Promise<T>) | null,
   }, [key, revision]);
   return state.key === key ? state : {key, loading: !!load, data: undefined, error: undefined};
 }
-export const useProjects = (enabled: boolean, revision: number) =>
+/** The projects of Cairn, and those that so far only have pages. */
+export const useProjects = (enabled: boolean, revision: number | string) =>
   useLoaded(enabled ? async signal => {
-    const [{items}, reports] = await Promise.all([operate<{items: Project[]}>('projects', {}, signal), api<Record<string, number>>('/ui-api/report-counts', {signal})]);
-    return items.map(item => ({...item, reports: reports[item.name] || 0}));
+    const [{items}, pages] = await Promise.all([operate<{items: Project[]}>('projects', {}, signal), api<Record<string, {reports: number; updated: number}>>('/ui-api/projects', {signal})]);
+    const logged = new Map(items.map(item => [item.name, item]));
+    return [...new Set([...logged.keys(), ...Object.keys(pages)])].sort().map((name): Project => {
+      const item = logged.get(name), page = pages[name];
+      return {name, artifacts: item?.artifacts || {}, updated: Math.max(item?.updated || 0, page?.updated || 0), reports: page?.reports || 0};
+    });
   } : null, `projects:${enabled}`, revision);
 export const runsOf = (project: Project) => project.artifacts.runs || 0;
 export const artifactsOf = (project: Project) => Object.values(project.artifacts).reduce((sum, count) => sum + count, 0);
@@ -102,6 +107,11 @@ export const isLost = (artifact: Artifact) => !artifact.finished && Date.now() /
 export const status = (artifact: Artifact) => artifact.finished ? typeof artifact.values._outcome === 'string' ? artifact.values._outcome : 'finished' : isLost(artifact) ? 'lost contact' : 'live';
 
 export const when = (seconds: number) => new Date(seconds * 1000).toLocaleString(undefined, {dateStyle: 'medium', timeStyle: 'short'});
+export const duration = (seconds: number) => {
+  if (seconds < 9.95) return `${seconds.toFixed(1)}s`;
+  const s = Math.floor(seconds), m = Math.floor(s / 60);
+  return m < 1 ? `${s}s` : m < 60 ? `${m}m ${s % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
+};
 export const bytes = (n: number) => n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${(n/1024).toFixed(1)} KiB` : n < 1024 ** 3 ? `${(n/1024**2).toFixed(1)} MiB` : `${(n/1024**3).toFixed(1)} GiB`;
 /** A value as text, also where JSON has no word for it. */
 export const print = (value: unknown, space?: number) => JSON.stringify(value, (_key, item) =>

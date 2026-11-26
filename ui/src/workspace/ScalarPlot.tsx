@@ -1,51 +1,68 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import { RotateCcw } from 'lucide-react';
+import { duration } from '../api';
 import { ActionIcon } from '../components/Button';
-import type { Card, Observation } from './model';
+import type { Card } from './model';
 import type { ScalarLine, ScalarPoint } from './scalarData';
 
+const time = (seconds: number) =>
+  new Date(seconds * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' });
+/** What the records of a point share, or from the least to the greatest. */
+const span = (values: number[], print: (value: number) => string) => {
+  const [low, high] = [print(Math.min(...values)), print(Math.max(...values))];
+  return low === high ? low : `${low} – ${high}`;
+};
 const number = (value: number) => Number(value.toPrecision(5)).toString();
 // Match Cairn 1: less than 20 px of movement on an axis selects only the other.
 const axisDragThreshold = 20;
+/** The series of the plot, apart from their points. */
+const shape = (lines: ScalarLine[]) => JSON.stringify(lines.map(({ name, color }) => [name, color]));
 type Hover = { line: ScalarLine; point: ScalarPoint; left: number; top: number };
 
 /** uPlot owns axes, scales, zoom and canvas sizing. Paths retain arbitrary record order. */
-export function ScalarPlot({
-  lines,
-  card,
-  hidden,
-  onInspect,
-}: {
-  lines: ScalarLine[];
-  card: Card;
-  hidden: string[];
-  onInspect: (rows: Observation[]) => void;
-}) {
+export function ScalarPlot({ lines, card, hidden }: { lines: ScalarLine[]; card: Card; hidden: string[] }) {
   const host = useRef<HTMLDivElement>(null),
     plot = useRef<uPlot>();
   const [hover, setHover] = useState<Hover>();
-  const inspect = useRef(onInspect);
-  inspect.current = onInspect;
   const zoom = useRef<{ identity: string; x?: [number, number]; y?: [number, number] }>({ identity: '' });
+  // Records that arrive during a drag wait for its end: the selection would be lost.
+  const [dragging, setDragging] = useState(false);
+  const settled = useRef({ lines, hidden });
+  if (!dragging) settled.current = { lines, hidden };
+  const { lines: shownLines, hidden: shownHidden } = settled.current;
+  const visible = useMemo(
+    () => shownLines.filter((line) => !shownHidden.includes(line.groupKey)),
+    [shownLines, shownHidden],
+  );
+  // Mode 2 accepts independent XY arrays. Types in uPlot 1.x only describe aligned mode 1.
+  const rendered = visible.length ? visible : [{ name: '', color: 'transparent', points: [] as ScalarPoint[] }];
+  const data = useMemo(
+    () =>
+      [
+        [],
+        ...rendered.map((line) => [line.points.map((p) => p.x), line.points.map((p) => p.y)]),
+      ] as unknown as uPlot.AlignedData,
+    [visible],
+  );
+  const current = useRef({ visible, data });
+  current.current = { visible, data };
+  useEffect(() => {
+    const u = plot.current;
+    if (u && u.data !== data && u.series.length === data.length) u.setData(data);
+  }, [data]);
+  const series = shape(visible);
   useEffect(() => {
     const element = host.current;
     if (!element) return;
     const identity = JSON.stringify([card.x, card.y, card.logX, card.logY]);
     if (zoom.current.identity !== identity) zoom.current = { identity };
     setHover(undefined);
-    const visible = lines.filter((line) => !hidden.includes(line.groupKey));
-    // Mode 2 accepts independent XY arrays. Types in uPlot 1.x only describe aligned mode 1.
-    const rendered = visible.length ? visible : [{ name: '', color: 'transparent', points: [] }];
-    const data = [
-      [],
-      ...rendered.map((line) => [line.points.map((p) => p.x), line.points.map((p) => p.y)]),
-    ] as unknown as uPlot.AlignedData;
     const domain = (axis: 'x' | 'y', log: boolean): uPlot.Range.MinMax => {
       let low = Infinity,
         high = -Infinity;
-      for (const line of visible)
+      for (const line of current.current.visible)
         for (const p of line.points)
           for (const value of axis === 'x' ? [p.x] : [p.y, p.low, p.high]) {
             if (value != null && Number.isFinite(value) && (!log || value > 0)) {
@@ -65,6 +82,7 @@ export function ScalarPlot({
       return [Math.max(-Number.MAX_VALUE, low - pad), Math.min(Number.MAX_VALUE, high + pad)];
     };
     const draw = (u: uPlot) => {
+      const { visible } = current.current;
       const ctx = u.ctx,
         { left, top, width, height } = u.bbox;
       ctx.save();
@@ -195,7 +213,7 @@ export function ScalarPlot({
           ],
         },
       },
-      data,
+      current.current.data,
       element,
     );
     plot.current = u;
@@ -203,8 +221,7 @@ export function ScalarPlot({
     Object.assign(element, { uplot: u });
     let frame = 0,
       lastEvent: MouseEvent | undefined,
-      current: Hover | undefined,
-      down: { x: number; y: number } | undefined;
+      hovered: Hover | undefined;
     const move = (event: MouseEvent) => {
       lastEvent = event;
       if (frame) return;
@@ -215,8 +232,8 @@ export function ScalarPlot({
           x = lastEvent.clientX - rect.left,
           y = lastEvent.clientY - rect.top;
         let distance = 18 ** 2;
-        current = undefined;
-        for (const line of visible)
+        hovered = undefined;
+        for (const line of current.current.visible)
           for (const point of line.points) {
             if (point.x === null || point.y === null) continue;
             const px = u.valToPos(point.x, 'x'),
@@ -224,37 +241,34 @@ export function ScalarPlot({
               d = (px - x) ** 2 + (py - y) ** 2;
             if (d < distance) {
               distance = d;
-              current = {
+              hovered = {
                 line,
                 point,
                 left: Math.min(element.clientWidth - 210, Math.max(0, x + u.over.offsetLeft + 12)),
-                top: Math.max(0, y + u.over.offsetTop - 65),
+                top: Math.max(0, y + u.over.offsetTop - 81),
               };
             }
           }
-        setHover(current);
+        setHover(hovered);
       });
     };
     const leave = () => {
       lastEvent = undefined;
-      current = undefined;
+      hovered = undefined;
       setHover(undefined);
     };
     const press = (event: MouseEvent) => {
-      down = { x: event.clientX, y: event.clientY };
-    };
-    const click = (event: MouseEvent) => {
-      if (current && down && Math.hypot(event.clientX - down.x, event.clientY - down.y) < 5)
-        inspect.current(current.point.rows);
+      if (event.button) return;
+      setDragging(true);
+      document.addEventListener('mouseup', () => setDragging(false), { once: true });
     };
     const reset = () => {
       zoom.current = { identity };
-      u.setData(data);
+      u.setData(u.data);
     };
     u.over.addEventListener('mousemove', move);
     u.over.addEventListener('mouseleave', leave);
     u.over.addEventListener('mousedown', press);
-    u.over.addEventListener('click', click);
     u.over.addEventListener('dblclick', reset);
     const resize = new ResizeObserver(() => {
       if (element.clientWidth && element.clientHeight)
@@ -267,13 +281,12 @@ export function ScalarPlot({
       u.over.removeEventListener('mousemove', move);
       u.over.removeEventListener('mouseleave', leave);
       u.over.removeEventListener('mousedown', press);
-      u.over.removeEventListener('click', click);
       u.over.removeEventListener('dblclick', reset);
       u.destroy();
       plot.current = undefined;
       Object.assign(element, { uplot: undefined });
     };
-  }, [lines, card.x, card.y, card.logX, card.logY, card.marks, hidden]);
+  }, [series, card.x, card.y, card.logX, card.logY, card.marks]);
   return (
     <div className="workspace-scalar-wrap">
       <div className="workspace-scalar-toolbar">
@@ -299,11 +312,24 @@ export function ScalarPlot({
               Band: {number(hover.point.low)} – {number(hover.point.high!)}
             </span>
           )}
-          <span>
-            {hover.point.rows.length > 1
-              ? `${hover.point.rows.length} contributing runs · Click to inspect`
-              : 'Click to inspect record'}
-          </span>
+          {hover.point.rows.every((row) => row.created && row.run.started) && (
+            <>
+              <span>
+                Time:{' '}
+                {span(
+                  hover.point.rows.map((row) => row.created),
+                  time,
+                )}
+              </span>
+              <span>
+                Since start:{' '}
+                {span(
+                  hover.point.rows.map((row) => row.created - row.run.started!),
+                  duration,
+                )}
+              </span>
+            </>
+          )}
         </div>
       )}
     </div>

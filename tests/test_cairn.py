@@ -373,6 +373,20 @@ sys.stdin.read()
 """
 
 
+def test_requests_are_not_logged_into_the_program(tmp_path, serve, caplog):
+    import httpx
+
+    caplog.set_level("INFO")
+    repository = Repository(tmp_path / "repo")
+    url = f"http://127.0.0.1:{serve(repository)[0]}"
+    with cairn.Client(url, token="secret", project="demo") as client, client.run("quiet") as run:
+        run.log({"loss": 1.0})
+    assert not [record for record in caplog.records if record.name == "httpx"]
+    httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200))).get("http://example.test/")
+    assert [record.name for record in caplog.records].count("httpx") == 1
+    repository.close()
+
+
 def test_records_survive_a_lost_server_and_a_killed_process(tmp_path, serve):
     repository = Repository(tmp_path / "repo")
     port, stop = serve(repository)

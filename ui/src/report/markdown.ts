@@ -71,13 +71,16 @@ const pattern = /!\[((?:\\.|[^\]\\\n])*)\]\(\s*cairn:([^)\s]+)\s*\)(?:\{\s*width
 export const embedsIn = (line: string, offset = 0): Embed[] =>
   [...line.matchAll(pattern)].map((match) => ({ from: offset + match.index, to: offset + match.index + match[0].length, caption: match[1].replace(/\\(.)/g, '$1'), source: match[2], ...(match[3] ? { width: Number(match[3]) } : {}) }));
 export const embedText = ({ caption, source, width }: Pick<Embed, 'caption' | 'source' | 'width'>) =>
-  `![${caption.replace(/[\\\]]/g, '\\$&')}](cairn:${source})${width && width < 100 ? `{width=${Math.round(width)}%}` : ''}`;
+  `![${caption.replace(/[\\\]]/g, '\\$&')}](cairn:${source})${width ? `{width=${tenths(width)}%}` : ''}`;
+export const tenths = (share: number) => Math.round(share * 10) / 10;
+/** The share of the line that a block's YAML gives it: `width: 50%`. */
+export const blockShare = (source: string) => Number(/^\s*width\s*:\s*["']?(\d+(?:\.\d+)?)%/m.exec(source)?.[1]) || undefined;
 
 /** A fenced block with a line of its YAML set, or removed. */
 export function setting(source: string, key: string, value: string | number | undefined) {
   const lines = source.split('\n');
   const at = lines.findIndex((line, i) => i > 0 && i < lines.length - 1 && new RegExp(`^\\s*${key}\\s*:`).test(line));
-  const text = value === undefined || value === '' ? undefined : `${key}: ${typeof value === 'number' ? value : JSON.stringify(value)}`;
+  const text = value === undefined || value === '' ? undefined : `${key}: ${typeof value === 'number' || /^[\d.]+(%|px)$/.test(value) ? value : JSON.stringify(value)}`;
   if (at >= 0) lines.splice(at, 1, ...(text ? [text] : []));
   else if (text) lines.splice(lines.length - 1, 0, text);
   return lines.join('\n');

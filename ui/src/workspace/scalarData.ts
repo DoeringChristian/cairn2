@@ -1,4 +1,4 @@
-import { groups, sorted, valueAt, label, type Card, type Observation } from './model';
+import { groups, sorted, valueAt, label, type Card, type Observation, type Smoothing } from './model';
 import { identityColor, runColor } from './presentation';
 
 export type ScalarPoint = { x: number | null; y: number | null; rows: Observation[]; low?: number; high?: number };
@@ -12,6 +12,65 @@ export type ScalarLine = {
   member?: boolean;
 };
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+
+/** The values of a stretch of points, smoothed as Cairn 1 did. */
+function smoothed(ys: number[], xs: number[], { kind, value }: Smoothing) {
+  const n = ys.length;
+  if (kind === 'gaussian') {
+    const radius = Math.ceil(3 * value);
+    return ys.map((_, i) => {
+      let sum = 0,
+        weight = 0;
+      for (let k = Math.max(0, i - radius); k <= Math.min(n - 1, i + radius); k++) {
+        const w = Math.exp(-((k - i) ** 2) / (2 * value * value));
+        sum += w * ys[k];
+        weight += w;
+      }
+      return sum / weight;
+    });
+  }
+  if (kind === 'window') {
+    const size = Math.max(1, Math.round(value));
+    let sum = 0;
+    return ys.map((y, i) => {
+      sum += y - (i >= size ? ys[i - size] : 0);
+      return sum / Math.min(i + 1, size);
+    });
+  }
+  const a = Math.min(value, 0.999);
+  if (kind === 'ema') {
+    let previous = ys[0];
+    return ys.map((y) => (previous = a * previous + (1 - a) * y));
+  }
+  // Gaps in X forget more, and the start is not pulled towards the first value.
+  const step = n > 1 ? Math.abs(xs[n - 1] - xs[0]) / (n - 1) : 0;
+  let sum = 0,
+    weight = 0;
+  return ys.map((y, i) => {
+    const decay = step && i ? a ** (Math.abs(xs[i] - xs[i - 1]) / step) : a;
+    sum = decay * sum + (1 - a) * y;
+    weight = decay * weight + (1 - a);
+    return sum / weight;
+  });
+}
+/** Points with their values smoothed between the gaps of a line. */
+export function smooth(points: ScalarPoint[], smoothing: Smoothing) {
+  const result = points.map((p) => ({ ...p }));
+  for (let start = 0; start < points.length; ) {
+    let end = start;
+    while (end < points.length && points[end].y !== null && points[end].x !== null) end++;
+    if (end > start) {
+      const part = result.slice(start, end);
+      smoothed(
+        part.map((p) => p.y!),
+        part.map((p) => p.x!),
+        smoothing,
+      ).forEach((y, i) => (part[i].y = y));
+    }
+    start = end + 1;
+  }
+  return result;
+}
 
 /** Raw paths keep record order, duplicate Xs and explicit gaps. Only aggregation aligns Xs. */
 export function scalarData(rows: Observation[], card: Card) {
@@ -46,8 +105,21 @@ export function scalarData(rows: Observation[], card: Card) {
         : [];
     const base = { key: group.key, groupKey: group.key, name: group.name, color, dash };
     const aggregation = card.aggregation;
+    const smoothing = card.smoothing;
+    const add = (line: ScalarLine) => {
+      if (!smoothing) return lines.push(line);
+      if (smoothing.original)
+        lines.push({
+          ...line,
+          key: `${line.key}:original`,
+          name: `${line.name} (original)`,
+          points: line.points.map(({ low, high, ...point }) => point),
+          member: true,
+        });
+      lines.push({ ...line, points: smooth(line.points, smoothing) });
+    };
     if (!aggregation || aggregation.center === 'none') {
-      lines.push({ ...base, points });
+      add({ ...base, points });
       continue;
     }
 
@@ -95,7 +167,7 @@ export function scalarData(rows: Observation[], card: Card) {
       }
       return point;
     });
-    lines.push({ ...base, name: `${group.name} (n=${members.size})`, points: center });
+    add({ ...base, name: `${group.name} (n=${members.size})`, points: center });
     if (aggregation.showMembers)
       for (const [id, member] of members)
         lines.push({

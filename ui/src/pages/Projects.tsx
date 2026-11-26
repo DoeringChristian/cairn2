@@ -1,22 +1,31 @@
 import { cachedList, cacheList, invalidateList } from '../listCache';
 import { ArtifactTags } from '../components/ArtifactTags';
 import { useRefresh, useRefreshMode } from '../refresh';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { ReportsPage } from '../report/ReportsPage';
 import { RefreshCw } from 'lucide-react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { artifactPath, artifactsOf, condition, operate, status, useProjects, when, type Artifact } from '../api';
-import { ActionIcon, Button, Crumbs, DataTable, ErrorNote, Hero, Hint, Loading, MetricCard, MetricGrid, Pill, ProjectCard, SearchInput, Section, Select, Toolbar } from '../components';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { artifactPath, artifactsOf, condition, operate, post, projectPath, status, useProjects, when, type Artifact } from '../api';
+import { ActionIcon, Button, Crumbs, DataTable, ErrorNote, Field, Hero, Hint, Loading, MetricCard, MetricGrid, Pill, ProjectCard, SearchInput, Section, Select, Toolbar } from '../components';
 export function ProjectsPage() {
   const [revision, refresh] = useState(0), [search, setSearch] = useState('');
-  const pulse = useRefresh();
+  const pulse = useRefresh(), navigate = useNavigate();
+  const [name, setName] = useState(''), [failure, setFailure] = useState<Error>();
+  async function create(event: FormEvent) {
+    event.preventDefault();
+    setFailure(undefined);
+    try {
+      await post('/ui-api/projects', {name: name.trim()});
+      navigate(projectPath(name.trim()));
+    } catch (e) {setFailure(e as Error);}
+  }
   const {data, error, loading} = useProjects(true, revision + pulse);
   useEffect(() => {document.title = 'Projects · Cairn';}, []);
   const filtered = data?.filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
   return <main><Hero eyebrow="Repository" title="Projects" subtitle="A home for your experiments and the evidence behind them." status="Cairn explorer"/>
     {data && <MetricGrid><MetricCard label="Projects" value={data.length}/><MetricCard label="Artifacts" value={data.reduce((n,p) => n+artifactsOf(p), 0)} note="Across all namespaces"/><MetricCard label="Reports" value={data.reduce((n,p) => n+p.reports, 0)}/></MetricGrid>}
-    <Section title="Your projects" actions={<ActionIcon label="Refresh" onClick={() => refresh(n=>n+1)}><RefreshCw size={17} aria-hidden="true"/></ActionIcon>}><Toolbar><SearchInput label="Search projects" value={search} onChange={setSearch}/></Toolbar>
-    {loading && <Loading/>}{error && <ErrorNote error={error}/>}{data?.length === 0 && <Hint>No projects yet. Record an experiment or publish an artifact to get started.</Hint>}
+    <Section title="Your projects" actions={<ActionIcon label="Refresh" onClick={() => refresh(n=>n+1)}><RefreshCw size={17} aria-hidden="true"/></ActionIcon>}><form className="report-create" onSubmit={create}><Field label="New project" placeholder="Name" value={name} required onChange={e=>setName(e.target.value)}/><Button primary type="submit" disabled={!name.trim()}>Create</Button></form>{failure && <ErrorNote error={failure}/>}<Toolbar><SearchInput label="Search projects" value={search} onChange={setSearch}/></Toolbar>
+    {loading && <Loading/>}{error && <ErrorNote error={error}/>}{data?.length === 0 && <Hint>No projects yet. Create one, or log a run.</Hint>}
     {!!filtered?.length && <div className="project-grid">{filtered.map(p=><ProjectCard key={p.name} project={p}/>)}</div>}
     {!!data?.length && !filtered?.length && <Hint>No projects match “{search}”.</Hint>}</Section></main>;
 }

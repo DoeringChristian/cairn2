@@ -24,6 +24,7 @@ from pycrdt import (
 )
 
 from cairn import Conflict, Invalid, NotFound
+from cairn.store import NAME
 
 SAVE, WATCH = 0.5, 1.0
 LIMIT = 8 * 1024 * 1024
@@ -177,19 +178,34 @@ class Reports:
         self._db.execute(TABLE)
         self._open, self._watching = {}, None
 
+    def root(self, project):
+        folder = quote(project, safe=" ")
+        if not NAME.fullmatch(project) or project in (".", "..") or len(folder) > 255:
+            raise Invalid(f"Not a project's name: {project!r}")
+        return self.folder / folder
+
     def path(self, project, name):
         parts = name.split("/")
-        if not project or any(not part or part.startswith(".") or re.search(r"[\x00-\x1f\\:*?\"<>|]", part) or len(part) > 100 for part in parts):
+        if any(not part or part.startswith(".") or re.search(r"[\x00-\x1f\\:*?\"<>|]", part) or len(part) > 100 for part in parts):
             raise Invalid(f"Not a report's name: {name!r}")
-        return self.folder / quote(project, safe=" ") / f"{name}.md"
+        return self.root(project) / f"{name}.md"
 
     def list(self, project):
-        root = self.folder / quote(project, safe=" ")
+        root = self.root(project) if project else None
         found = [(path, path.stat().st_mtime) for path in root.rglob("*.md") if not any(part.startswith(".") for part in path.relative_to(root).parts)] if project else []
         return [{"name": path.relative_to(root).as_posix().removesuffix(".md"), "updated": stamp} for path, stamp in sorted(found, key=lambda item: -item[1])]
 
-    def counts(self):
-        return {unquote(folder.name): len(self.list(unquote(folder.name))) for folder in self.folder.iterdir() if folder.is_dir()} if self.folder.is_dir() else {}
+    def projects(self):
+        """Every project with a folder, which a project without reports may have too."""
+        found = {}
+        for folder in self.folder.iterdir() if self.folder.is_dir() else ():
+            if folder.is_dir() and quote(unquote(folder.name), safe=" ") == folder.name:
+                reports = self.list(unquote(folder.name))
+                found[unquote(folder.name)] = {"reports": len(reports), "updated": max((report["updated"] for report in reports), default=folder.stat().st_mtime)}
+        return found
+
+    def create_project(self, name):
+        self.root(name).mkdir(parents=True, exist_ok=True)
 
     def state(self, project, name):
         return self._db.execute("SELECT epoch, state FROM texts WHERE project = ? AND name = ?", (project, name)).fetchone()
@@ -266,7 +282,7 @@ class Reports:
         path.unlink()
         self._open.pop((project, name), None)
         self._db.execute("DELETE FROM texts WHERE project = ? AND name = ?", (project, name))
-        root = self.folder / quote(project, safe=" ")
+        root = self.root(project)
         for folder in path.parents:
             if folder == root or any(folder.iterdir()):
                 break

@@ -5,23 +5,90 @@ import { Select } from '../../components/Select';
 import type { Card, FieldInfo, Filter } from '../model';
 import type { SettingsProps } from './types';
 
+const own: Record<string, string> = {
+  '@run': 'Run',
+  '@name': 'Run name',
+  '@version': 'Run version',
+  '@ordinal': 'Record number',
+  '@created': 'Time logged',
+  '@status': 'Status',
+};
+/** A field as people read it: `@config/lr` is the setting lr. */
+export const fieldName = (field: string) =>
+  own[field] ??
+  field
+    .replace(/^@config\//, 'config · ')
+    .replace(/^@tags\//, 'tag · ')
+    .replace(/^\//, '');
+
+/** Settings that belong together. */
+export const Group = ({ title, children }: { title: string; children: ReactNode }) => (
+  <section className="workspace-settings-group">
+    <h3>{title}</h3>
+    {children}
+  </section>
+);
+/** Settings few cards need; open when they say something. */
+export function More({ title, count, children }: { title: string; count: number; children: ReactNode }) {
+  const [open, setOpen] = useState(count > 0);
+  return (
+    <details className="workspace-settings-group" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary>
+        {title}
+        {count > 0 && <span className="workspace-setting-note">{count === 1 ? '1 filter' : `${count} filters`}</span>}
+      </summary>
+      {children}
+    </details>
+  );
+}
+
+export function Segments<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: [T, string, string?][];
+  onChange: (value: T) => void;
+}) {
+  const note = options.find((option) => option[0] === value)?.[2];
+  return (
+    <div className="workspace-field">
+      <span>{label}</span>
+      <div className="workspace-segments" role="group" aria-label={label}>
+        {options.map(([option, name]) => (
+          <button type="button" key={option} aria-pressed={option === value} onClick={() => onChange(option)}>
+            {name}
+          </button>
+        ))}
+      </div>
+      {note && <Note>{note}</Note>}
+    </div>
+  );
+}
+
 export function FieldPicker({
   label,
   value,
   fields,
+  none = 'Choose a field…',
   onChange,
 }: {
   label: string;
   value: string;
   fields: FieldInfo[];
+  /** What no field reads as. */
+  none?: string;
   onChange: (value: string) => void;
 }) {
-  const choices = [
-    { value: '', label: 'Choose a field…' },
-    ...fields.map((field) => ({ value: field.name, label: field.name, note: [...field.kinds].join(', ') })),
+  const choices: { value: string; label: string; note?: string }[] = [
+    { value: '', label: none },
+    ...fields.map((field) => ({ value: field.name, label: fieldName(field.name) })),
   ];
   if (value && !fields.some((field) => field.name === value))
-    choices.push({ value, label: value, note: 'Not present in the selected records' });
+    choices.push({ value, label: fieldName(value), note: 'Not in these runs' });
   return (
     <div className="workspace-field">
       <span>{label}</span>
@@ -70,6 +137,38 @@ export function Toggle({
   );
 }
 
+export function Slider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="workspace-field">
+      <span>
+        {label}: {value}
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+    </label>
+  );
+}
+
 export function NumberField({
   label,
   value,
@@ -99,23 +198,6 @@ export function NumberField({
 
 export const Note = ({ children }: { children: ReactNode }) => <p className="workspace-setting-note">{children}</p>;
 
-/** Data, Mapping and Appearance tabs; a card kind fills in each one. */
-export function SettingsTabs({ tabs }: { tabs: Record<string, ReactNode> }) {
-  const [tab, setTab] = useState(Object.keys(tabs)[0]);
-  return (
-    <>
-      <div className="tabs" role="tablist" aria-label="Card settings">
-        {Object.keys(tabs).map((name) => (
-          <button role="tab" key={name} aria-selected={tab === name} onClick={() => setTab(name)}>
-            {name}
-          </button>
-        ))}
-      </div>
-      <div className="workspace-settings-panel">{tabs[tab]}</div>
-    </>
-  );
-}
-
 const operators: [Filter['op'], string][] = [
   ['eq', 'equals'],
   ['ne', 'does not equal'],
@@ -127,55 +209,76 @@ const operators: [Filter['op'], string][] = [
   ['exists', 'exists'],
 ];
 
+const opText = Object.fromEntries(operators);
+/** A filter as one line of text. */
+export const filterText = (filter: Filter) =>
+  `${fieldName(filter.field) || '…'} ${opText[filter.op]}${filter.op === 'exists' ? '' : ` ${filter.value}`}`;
+
+export function FilterRow({
+  number,
+  filter,
+  fields,
+  onChange,
+  onRemove,
+}: {
+  number: number | string;
+  filter: Filter;
+  fields: FieldInfo[];
+  onChange: (value: Partial<Filter>) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="workspace-filter">
+      <FieldPicker
+        label={`Filter field ${number}`}
+        value={filter.field}
+        fields={fields}
+        onChange={(field) => onChange({ field })}
+      />
+      <Choice label={`Operator ${number}`} value={filter.op} options={operators} onChange={(op) => onChange({ op })} />
+      {filter.op !== 'exists' && (
+        <label className="workspace-field">
+          <span>Value</span>
+          <input
+            value={filter.value}
+            placeholder="Text, number, or JSON"
+            onChange={(e) => onChange({ value: e.target.value })}
+          />
+        </label>
+      )}
+      <ActionIcon label={`Remove filter ${number}`} onClick={onRemove}>
+        <Trash2 size={15} />
+      </ActionIcon>
+    </div>
+  );
+}
+
 export function RecordFilters({ card, fields, patch }: SettingsProps) {
   const update = (index: number, value: Partial<Filter>) =>
     patch({ filters: card.filters.map((filter, i) => (i === index ? { ...filter, ...value } : filter)) });
   return (
     <>
-      <h3 className="workspace-settings-heading">Record filters</h3>
-      <Note>Choose which records this card displays.</Note>
+      <span className="workspace-label">Only records where</span>
       {card.filters.length > 1 && (
         <Choice
-          label="Combine filter conditions"
+          label="Combine"
           value={card.filterMode}
           options={[
-            ['all', 'All conditions (AND)'],
-            ['any', 'Any condition (OR)'],
+            ['all', 'All of these hold'],
+            ['any', 'Any of these holds'],
           ]}
           onChange={(filterMode) => patch({ filterMode })}
         />
       )}
       {card.filters.map((filter, index) => (
-        <div className="workspace-filter" key={index}>
-          <FieldPicker
-            label={`Filter field ${index + 1}`}
-            value={filter.field}
-            fields={fields}
-            onChange={(field) => update(index, { field })}
-          />
-          <Choice
-            label={`Operator ${index + 1}`}
-            value={filter.op}
-            options={operators}
-            onChange={(op) => update(index, { op })}
-          />
-          {filter.op !== 'exists' && (
-            <label className="workspace-field">
-              <span>Value</span>
-              <input
-                value={filter.value}
-                placeholder="Text, number, or JSON"
-                onChange={(e) => update(index, { value: e.target.value })}
-              />
-            </label>
-          )}
-          <ActionIcon
-            label={`Remove filter ${index + 1}`}
-            onClick={() => patch({ filters: card.filters.filter((_, i) => i !== index) })}
-          >
-            <Trash2 size={15} />
-          </ActionIcon>
-        </div>
+        <FilterRow
+          key={index}
+          number={index + 1}
+          filter={filter}
+          fields={fields}
+          onChange={(value) => update(index, value)}
+          onRemove={() => patch({ filters: card.filters.filter((_, i) => i !== index) })}
+        />
       ))}
       <Button small onClick={() => patch({ filters: [...card.filters, { field: '', op: 'eq', value: '' }] })}>
         <Plus size={14} /> Add filter
@@ -184,11 +287,11 @@ export function RecordFilters({ card, fields, patch }: SettingsProps) {
   );
 }
 
-export function GroupBy({ card, fields, patch }: SettingsProps) {
-  const name = (field: string) => (field === '@run' ? 'Run' : field);
+const plain = new Set(['number', 'string', 'boolean']);
+export function GroupBy({ label, card, fields, patch }: SettingsProps & { label: string }) {
   return (
     <div className="workspace-grouping">
-      <span className="workspace-label">Group by</span>
+      <span className="workspace-label">{label}</span>
       <div className="workspace-grouping-fields">
         {card.split.map((field) => (
           <button
@@ -197,18 +300,18 @@ export function GroupBy({ card, fields, patch }: SettingsProps) {
             aria-label={`Remove grouping ${field}`}
             onClick={() => patch({ split: card.split.filter((f) => f !== field) })}
           >
-            {name(field)} ×
+            {fieldName(field)} ×
           </button>
         ))}
-        {!card.split.length && <span className="workspace-setting-note">All records</span>}
+        {!card.split.length && <span className="workspace-setting-note">Everything together</span>}
         <Select
           label="Add grouping field"
           value=""
           choices={[
             { value: '', label: 'Add field…' },
             ...fields
-              .filter((field) => !card.split.includes(field.name))
-              .map((field) => ({ value: field.name, label: name(field.name) })),
+              .filter((field) => !card.split.includes(field.name) && [...field.kinds].every((kind) => plain.has(kind)))
+              .map((field) => ({ value: field.name, label: fieldName(field.name) })),
           ]}
           onChange={(field) => {
             if (field) patch({ split: [...card.split, field] });
@@ -229,7 +332,7 @@ export function PointOrder({ label, card, fields, patch }: SettingsProps & { lab
         fields={fields}
         onChange={(field) => patch({ pointOrder: { ...order, field } })}
       />
-      <Choice
+      <Segments
         label="Direction"
         value={order.descending ? 'descending' : 'ascending'}
         options={[

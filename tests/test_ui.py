@@ -136,6 +136,19 @@ def test_workspaces(pages, tmp_path):
     assert pages.put("/ui-api/workspaces", json={**again, "expected_revision": 1}).json()["revision"] == 2
     assert pages.put("/ui-api/workspaces", json={**again, "layout": {**LAYOUT, "odd": 1}}).status_code == 400
     assert pages.put("/ui-api/workspaces", json={"project": "demo"}).status_code == 400
+    card = {"id": "c", "title": "", "kind": "scalar", "section": "s", "width": 6, "height": 360, "filters": [], "filterMode": "all",
+            "x": "step", "y": "loss", "value": "", "split": ["@run"], "pointOrder": {"field": "step", "descending": False},
+            "lineOrder": "label", "marks": "lines", "logX": False, "logY": False, "mode": "gallery", "axis": "step",
+            "matching": "exact", "columns": 2, "pageSize": 6, "caption": "", "fit": "contain", "linkAxes": False,
+            "smoothing": {"kind": "ema", "value": 0.6, "original": True}}
+    condition = {"field": "@config/lr", "op": "lt", "value": "0.1"}
+    chosen = {**LAYOUT, "cards": [card], "groupRuns": ["@config/lr"],
+              "conditions": {"mode": "all", "items": [condition, {"mode": "any", "items": [condition]}]}}
+    assert pages.put("/ui-api/workspaces", json={**again, "layout": chosen, "expected_revision": 2}).json()["revision"] == 3
+    for wrong in ({"conditions": {"mode": "all", "items": [{**condition, "op": "like"}]}}, {"groupRuns": "lr"},
+                  {"cards": [{**card, "smoothing": {"kind": "ema", "value": 1, "original": True}}]},
+                  {"cards": [{**card, "smoothing": {"kind": "loess", "value": 1, "original": True}}]}):
+        assert pages.put("/ui-api/workspaces", json={**again, "layout": {**chosen, **wrong}, "expected_revision": 3}).status_code == 400
     assert [w["name"] for w in pages.get("/ui-api/workspaces?project=demo").json()] == ["n"] and pages.get("/ui-api/workspaces?project=other").json() == []
 
 
@@ -348,7 +361,11 @@ def test_reports_need_a_login_and_the_same_origin(pages):
     assert pages.put("/ui-api/report?project=p&name=r", json={"text": "x"}).json()["text"] == "x"
     assert pages.put("/ui-api/report?project=p&name=r", content="{}", headers={"content-type": "text/plain"}).status_code == 400
     assert pages.put("/ui-api/report?project=p&name=r", json={"text": 1}).status_code == 400
-    assert pages.get("/ui-api/report-counts").json() == {"p": 1}
+    assert {name: found["reports"] for name, found in pages.get("/ui-api/projects").json().items()} == {"p": 1}
+    assert pages.post("/ui-api/projects", json={"name": "btf/new one"}).status_code == 200
+    assert [pages.post("/ui-api/projects", json={"name": name}).status_code for name in ("", "..", "a*", "ü" * 100, 1)] == [400] * 5
+    assert pages.put("/ui-api/report?project=..&name=r", json={"text": "x"}).status_code == 400
+    assert {name: found["reports"] for name, found in pages.get("/ui-api/projects").json().items()} == {"p": 1, "btf/new one": 0}
     assert [r["name"] for r in pages.get("/ui-api/reports?project=p").json()] == ["r"] and pages.get("/ui-api/report?project=p&name=none").status_code == 404
     assert pages.delete("/ui-api/report?project=p&name=r", headers={"origin": "http://evil"}).status_code == 401
     assert pages.delete("/ui-api/report?project=p&name=r").status_code == 200 and pages.get("/ui-api/reports?project=p").json() == []

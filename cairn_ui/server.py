@@ -285,8 +285,19 @@ def create_app(client, workspaces, reports, *, token=None):
     async def list_reports(request):
         return JSONResponse(reports.list(request.query_params.get("project", "")))
 
-    async def count_reports(_request):
-        return JSONResponse(reports.counts())
+    async def projects(request):
+        """The projects of these pages, which Cairn knows only once something is logged."""
+        if request.method == "POST":
+            [name] = await body(request, "name")
+            if not isinstance(name, str):
+                raise Invalid("A project has a name")
+            await run_in_threadpool(reports.create_project, name)
+            return JSONResponse({"name": name})
+        found = await run_in_threadpool(reports.projects)
+        for name, updated in (await run_in_threadpool(workspaces.projects)).items():
+            known = found.setdefault(name, {"reports": 0, "updated": 0})
+            known["updated"] = max(known["updated"], updated)
+        return JSONResponse(found)
 
     async def report(request):
         project, name = (request.query_params.get(key, "") for key in ("project", "name"))
@@ -399,7 +410,8 @@ def create_app(client, workspaces, reports, *, token=None):
         Route("/ui-api/workspaces/{id}", route(read_workspace)),
         Route("/ui-api/workspaces/{id}", route(delete_workspace, change=True), methods=["DELETE"]),
         Route("/ui-api/reports", route(list_reports)),
-        Route("/ui-api/report-counts", route(count_reports)),
+        Route("/ui-api/projects", route(projects)),
+        Route("/ui-api/projects", route(projects, change=True), methods=["POST"]),
         Route("/ui-api/report", route(report), methods=["GET", "PUT", "POST", "DELETE"]),
         Route("/ui-api/report/files", route(report_files)),
         WebSocketRoute("/ui-api/live/report", live),

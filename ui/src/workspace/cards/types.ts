@@ -23,6 +23,8 @@ export type CardKind = {
   defaults: Partial<Card>;
   /** False when the card shows no run records, so it never waits for them. */
   usesRecords: boolean;
+  /** The settings of a new card that depend on what the runs logged. */
+  suggest?: (fields: FieldInfo[]) => Partial<Card>;
   /** Whether the kind's own settings are complete; title and filters are checked for every card. */
   isValid: (card: Card) => boolean;
   Content: ComponentType<ContentProps>;

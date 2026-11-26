@@ -1,5 +1,7 @@
 """The operations of a repository on a server."""
 
+import logging
+
 import httpx
 
 from . import cairn_pb2 as pb
@@ -7,6 +9,16 @@ from .errors import CODES, CairnError, Conflict, Pending
 from .operations import ANSWERS
 
 PIECE = 64 * 1024 * 1024
+SERVERS = set()
+
+
+def foreign(record):
+    """Where a program shows what is logged, its own requests are, and not those to Cairn."""
+    message = record.getMessage()
+    return not any(f" {server}" in message for server in tuple(SERVERS))
+
+
+logging.getLogger("httpx").addFilter(foreign)
 
 
 class Remote:
@@ -14,6 +26,7 @@ class Remote:
         self.url = url.rstrip("/")
         self._options = {"base_url": self.url, "headers": {"Authorization": f"Bearer {token}"} if token else {}, "timeout": timeout}
         self._connection = httpx.Client(**self._options)
+        SERVERS.add(str(self._connection.base_url))
 
     @property
     def _http(self):

@@ -107,6 +107,17 @@ test('figures of runs are drawn, stay drawn while the cursor passes, and show th
   expect(errors).toEqual([]);
 });
 
+test('links to other pages of Cairn open them', async ({ page, request }) => {
+  const other = await report(request, '# The other report');
+  const name = await report(request, `See [the other](/p/${project}/r/${other}) and [it again](${other}).\n\nend`);
+  for (const text of ['the other', 'it again']) {
+    await open(page, name);
+    await page.getByText('end', { exact: true }).click();
+    await page.locator('.md-link[data-href]').getByText(text).click();
+    await expect(page.locator('.md-h1')).toHaveText('The other report');
+  }
+});
+
 test('cards and viewers of runs are drawn from blocks', async ({ page, request }) => {
   const name = await report(request, '```card\nkind: scalar\nruns: runs/showcase-*\nx: step\ny: loss\ncaption: The loss\n```\n\n```view\nviewer: cairn:viewers/field@v1#index.html\n```\n\n```card\nkind: scalar\nrun: a\n```\n');
   await open(page, name);
@@ -279,6 +290,20 @@ test('a click shows the marks at once, and selects nothing', async ({ page, requ
   await expect(page.getByRole('button', { name: 'Copy code' })).toHaveAttribute('data-copied');
 });
 
+test('the cursor and the selection show in a code block', async ({ page, request }) => {
+  const name = await report(request, 'above\n\n```python\nprint(1)\n\nx = 2\n```\n\nend');
+  await open(page, name);
+  const cursor = page.locator('.cm-cursor-primary');
+  await line(page, 'x = 2').click();
+  await expect(cursor).toHaveCSS('border-left-color', 'rgb(232, 238, 233)');
+  await page.keyboard.press('ArrowUp');
+  await expect(cursor).toHaveCSS('border-left-color', 'rgb(232, 238, 233)');
+  await page.keyboard.press('ControlOrMeta+a');
+  expect(await line(page, 'x = 2').evaluate((el) => getComputedStyle(el, '::selection').backgroundColor)).toBe('rgb(47, 90, 73)');
+  await line(page, 'above').click();
+  await expect(cursor).not.toHaveCSS('border-left-color', 'rgb(232, 238, 233)');
+});
+
 test('a value within a line has no buttons, and a click shows its source', async ({ page, request }) => {
   const name = await report(request, 'above\n\nthe psnr is ![psnr](cairn:runs/showcase-baseline@v1#psnr) dB\n\nend');
   await open(page, name);
@@ -371,6 +396,74 @@ async function drag(page: Page, from: ReturnType<Page['locator']>, to: ReturnTyp
   await page.mouse.move(b.x + b.width * x + 1, b.y + b.height * y);
   await page.mouse.up();
 }
+/** Pulls a figure's or a block's handle, and says how far its corner is from the pointer, and what it showed. */
+async function stretch(page: Page, element: ReturnType<Page['locator']>, dx: number, dy = 0, alt = true) {
+  const box = element.locator('.md-sized');
+  await box.scrollIntoViewIfNeeded();
+  await box.hover();
+  const handle = (await element.locator('.md-resize').boundingBox())!;
+  const [x, y] = [handle.x + handle.width / 2, handle.y + handle.height / 2];
+  if (alt) await page.keyboard.down('Alt');
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + dx, y + dy, { steps: 8 });
+  const now = (await element.locator('.md-resize').boundingBox())!;
+  const label = await element.locator('.md-resize-label').textContent();
+  await page.mouse.up();
+  if (alt) await page.keyboard.up('Alt');
+  return { away: Math.abs(now.x + now.width / 2 - x - dx), below: Math.abs(now.y + now.height / 2 - y - dy), label };
+}
+const video = 'cairn:runs/showcase-baseline@v1#media/wave-evolution.mp4';
+for (const [kind, text] of [
+  ['an image', `![A](${picture})`],
+  ['a video', `![V](VIDEO)`],
+  ['a Plotly figure', '![P](cairn:runs/showcase-baseline@v1#curve)'],
+  ['a card', '```card\nkind: scalar\nruns: runs/showcase-*\nx: step\ny: loss\n```'],
+  ['a viewer', '```view\nviewer: cairn:viewers/field@v1#index.html\n```'],
+])
+  test(`the corner of ${kind} follows the pointer`, async ({ page, request }) => {
+    await page.setViewportSize({ width: 1500, height: 1400 });
+    const name = await report(request, `one\n\n${text.replace('VIDEO', video)}\n\ntwo\n`);
+    await open(page, name);
+    const element = page.locator('.md-element');
+    await expect(element.locator('.md-resize')).toHaveCount(1);
+    await page.waitForTimeout(800);
+    const block = text.startsWith('```');
+    const full = (await element.boundingBox())!.width;
+    const before = (await element.locator('.md-sized').boundingBox())!;
+    const smaller = await stretch(page, element, -90, block ? 70 : 0);
+    expect(smaller.away).toBeLessThan(3);
+    if (block) expect(smaller.below).toBeLessThan(3);
+    const share = async () => Number(/width[=:]\s*([\d.]+)%/.exec(await stored(request, name))?.[1]);
+    await expect.poll(share).toBeCloseTo(((before.width - 180) / full) * 100, 0);
+    const after = (await element.locator('.md-sized').boundingBox())!;
+    expect(Math.abs(after.width - before.width + 180)).toBeLessThan(3);
+    if (block) expect(Math.abs(after.height - before.height - 70)).toBeLessThan(3);
+    const half = await stretch(page, element, (full / 2 - after.width) / 2 + 3, 0, false);
+    expect(half.label).toContain('1/2 · 50%');
+    await expect.poll(share).toBe(50);
+    const grown = await stretch(page, element, full / 2);
+    expect(grown.label).toContain('100%');
+    const wide = (await element.locator('.md-sized').boundingBox())!;
+    expect(Math.abs(wide.width - full)).toBeLessThan(3);
+    if (kind === 'a video') expect((await element.locator('video').boundingBox())!.width).toBeGreaterThan(full - 6);
+    await page.reload();
+    await expect(element.locator('.md-resize')).toHaveCount(1);
+    expect(Math.abs((await element.locator('.md-sized').boundingBox())!.width - full)).toBeLessThan(3);
+  });
+test('figures of a row snap to the same height', async ({ page, request }) => {
+  await page.setViewportSize({ width: 1500, height: 1400 });
+  const name = await report(request, `![A](${picture}){width=70%} ![B](${other}){width=30%}\n\ntwo\n`);
+  await open(page, name);
+  await drawn(page, 2);
+  const embed = page.locator('.md-embed');
+  const line = (await page.locator('.md-figures').boundingBox())!.width;
+  const pulled = await stretch(page, embed.first(), -0.2 * line + 5, 0, false);
+  expect(pulled.label).toMatch(/(1\/2|same height) · 50%/);
+  const [a, b] = [(await embed.nth(0).boundingBox())!, (await embed.nth(1).boundingBox())!];
+  expect(Math.abs(a.height - b.height)).toBeLessThan(2);
+  expect(Math.abs(a.y - b.y)).toBeLessThan(2);
+});
 test('figures are dragged, set beside each other, and resized', async ({ page, request }) => {
   await page.setViewportSize({ width: 1280, height: 1600 });
   const name = await report(request, `one\n\n![A](${picture})\n\n![B](${other})\n\ntwo\n`);
@@ -394,8 +487,8 @@ test('figures are dragged, set beside each other, and resized', async ({ page, r
     await page.mouse.up();
   };
   await pull(0, -120);
-  await expect.poll(() => stored(request, name)).toMatch(/^!\[B\]\([^)]*\)\{width=(\d+)%\} !\[A\]\([^)]*\)\{width=(\d+)%\}/);
-  const sizes = [...(await stored(request, name)).matchAll(/width=(\d+)/g)].map((match) => Number(match[1]));
+  await expect.poll(() => stored(request, name)).toMatch(/^!\[B\]\([^)]*\)\{width=([\d.]+)%\} !\[A\]\([^)]*\)\{width=([\d.]+)%\}/);
+  const sizes = [...(await stored(request, name)).matchAll(/width=([\d.]+)/g)].map((match) => Number(match[1]));
   expect(sizes[0] + sizes[1]).toBe(100);
   expect(sizes[0]).toBeLessThan(45);
   await drawn(page, 2);
@@ -403,7 +496,7 @@ test('figures are dragged, set beside each other, and resized', async ({ page, r
   await expect.poll(() => stored(request, name)).toContain(`two\n\n![A](${picture}){width=`);
   await images(page).nth(1).click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Full width' }).click();
-  await expect.poll(() => stored(request, name)).toContain(`two\n\n![A](${picture})\n`);
+  await expect.poll(() => stored(request, name)).toContain(`two\n\n![A](${picture}){width=100%}\n`);
   await images(page).nth(1).click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Half width' }).click();
   await expect.poll(() => stored(request, name)).toContain(`![A](${picture}){width=50%}`);
@@ -469,4 +562,27 @@ test('a figure right after a table is a figure', async ({ page, request }) => {
     await drawn(page, 1);
     await expect(rows).toHaveCount(count);
   }
+});
+
+test('a project is created without anything logged to it', async ({ page }) => {
+  const name = `made/project ${Date.now()}`;
+  await page.goto('/');
+  await page.getByLabel('New project').fill(name);
+  await page.getByRole('button', { name: 'Create', exact: true }).click();
+  await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
+  for (const view of ['runs', 'artifacts', 'all']) {
+    await page.goto(`/p/${encodeURIComponent(name)}?view=${view}`);
+    await expect(page.getByText('No matching artifacts in this view.')).toBeVisible();
+  }
+  await page.goto(`/p/${encodeURIComponent(name)}/workspace`);
+  await expect(page.locator('main')).toBeVisible();
+  await expect(page.locator('.error-note, .error')).toHaveCount(0);
+  await page.goto('/');
+  await expect(page.getByRole('link', { name: `0 reports in ${name}` })).toBeVisible();
+  await page.goto(`/p/${encodeURIComponent(name)}`);
+  await page.getByLabel('New report').fill('first');
+  await page.getByRole('button', { name: 'Create', exact: true }).click();
+  await expect(content(page)).toBeVisible();
+  await page.goto('/');
+  await expect(page.getByRole('link', { name: `1 reports in ${name}` })).toBeVisible();
 });

@@ -6,6 +6,9 @@ export type Filter = {
   op: 'eq' | 'ne' | 'lt' | 'le' | 'gt' | 'ge' | 'contains' | 'exists';
   value: string;
 };
+/** Conditions on runs, nested in groups of which all or any hold. */
+export type Conditions = { mode: 'all' | 'any'; items: (Filter | Conditions)[] };
+export type Smoothing = { kind: 'ema' | 'twema' | 'gaussian' | 'window'; value: number; original: boolean };
 export type Order = { field: string; descending: boolean };
 export type Aggregation = {
   center: 'none' | 'mean' | 'median' | 'min' | 'max';
@@ -14,6 +17,7 @@ export type Aggregation = {
 };
 export type Card = {
   aggregation?: Aggregation;
+  smoothing?: Smoothing;
   id: string;
   title: string;
   kind: Kind;
@@ -49,6 +53,10 @@ export type Layout = {
   versions: 'latest' | 'all';
   status: string;
   selected: string[] | null;
+  /** Conditions on the runs' config, tags and values. */
+  conditions?: Conditions;
+  /** Fields the run list is grouped by. */
+  groupRuns?: string[];
   sections: Section[];
   cards: Card[];
   /** Cards in their sections, or every card once per run. */
@@ -69,6 +77,10 @@ export function valueAt(row: Observation, field: string): Json | undefined {
   const root = field.startsWith('@config/') ? row.run.config : row.data;
   const path = field.startsWith('@config/') ? field.slice(7) : field;
   if (!path.startsWith('/')) return row.data[path];
+  return at(root, path);
+}
+/** The value at a JSON pointer. */
+export function at(root: Json | undefined, path: string) {
   return path
     .slice(1)
     .split('/')
@@ -107,8 +119,9 @@ function same(a: Json, b: Json): boolean {
     return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => same(v, b[i]));
   return Object.keys(a).length === Object.keys(b).length && Object.keys(a).every((k) => k in b && same(a[k], b[k]));
 }
-export function matches(row: Observation, filter: Filter) {
-  const value = valueAt(row, filter.field);
+export const matches = (row: Observation, filter: Filter) => holds(valueAt(row, filter.field), filter);
+/** Whether a value meets a filter. */
+export function holds(value: Json | undefined, filter: Filter) {
   if (filter.op === 'exists') return value !== undefined && value !== null;
   if (value === undefined) return false;
   let expected: Json;

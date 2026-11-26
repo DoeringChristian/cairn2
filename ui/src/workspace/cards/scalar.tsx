@@ -1,30 +1,33 @@
 import { useMemo, useState } from 'react';
 import { ChartLine } from 'lucide-react';
-import { Button } from '../../components/Button';
-import { WorkspaceDialog } from '../Dialog';
-import { label, valueAt, type Aggregation, type Observation } from '../model';
+import { type Aggregation, type Smoothing } from '../model';
 import { ScalarPlot } from '../ScalarPlot';
 import { scalarData } from '../scalarData';
-import { display, Inspector, recordId } from './records';
-import { Choice, FieldPicker, GroupBy, Note, PointOrder, RecordFilters, SettingsTabs, Toggle } from './settings';
+import {
+  Choice,
+  FieldPicker,
+  Group,
+  GroupBy,
+  More,
+  Note,
+  PointOrder,
+  RecordFilters,
+  Segments,
+  Slider,
+  Toggle,
+} from './settings';
 import type { CardKind, ContentProps, SettingsProps } from './types';
 
 function ScalarContent({ card, rows }: ContentProps) {
-  const [inspected, setInspected] = useState<Observation>();
-  const [contributors, setContributors] = useState<Observation[]>();
   const [hidden, setHidden] = useState<string[]>([]);
   const { lines, count, omitted } = useMemo(() => scalarData(rows, card), [rows, card]);
   const primary = lines.filter((line) => !line.member);
   const toggle = (group: string) =>
     setHidden((hidden) => (hidden.includes(group) ? hidden.filter((n) => n !== group) : [...hidden, group]));
-  const inspect = (records: Observation[]) => {
-    if (records.length === 1) setInspected(records[0]);
-    else if (records.length) setContributors(records);
-  };
   return (
     <>
       {count ? (
-        <ScalarPlot lines={lines} card={card} hidden={hidden} onInspect={inspect} />
+        <ScalarPlot lines={lines} card={card} hidden={hidden} />
       ) : (
         <div className="workspace-empty">
           No numeric observations for <code>{card.x}</code> and <code>{card.y}</code>. Choose fields in card settings.
@@ -42,27 +45,8 @@ function ScalarContent({ card, rows }: ContentProps) {
       )}
       <div className="workspace-card-note">
         {count.toLocaleString()} points · {primary.length} lines
-        {omitted ? ` · ${omitted} records without valid axes` : ''} · Click a point to inspect
+        {omitted ? ` · ${omitted} records without valid axes` : ''}
       </div>
-      {contributors && (
-        <WorkspaceDialog title="Contributing records" onClose={() => setContributors(undefined)}>
-          <p>Member observations used for this group point.</p>
-          {contributors.map((row) => (
-            <p key={recordId(row)}>
-              <Button
-                onClick={() => {
-                  setContributors(undefined);
-                  setInspected(row);
-                }}
-              >
-                {label(row.run)} · record {row.ordinal} · {card.x}: {display(valueAt(row, card.x))} · {card.y}:{' '}
-                {display(valueAt(row, card.y))}
-              </Button>
-            </p>
-          ))}
-        </WorkspaceDialog>
-      )}
-      {inspected && <Inspector row={inspected} onClose={() => setInspected(undefined)} />}
     </>
   );
 }
@@ -73,21 +57,29 @@ function Aggregate({ card, patch }: SettingsProps) {
   return (
     <>
       <Choice
-        label="Group center"
+        label="Combine runs"
         value={aggregation.center}
         options={[
-          ['none', 'None · keep every observation'],
+          ['none', 'No'],
           ['mean', 'Mean'],
           ['median', 'Median'],
           ['min', 'Minimum'],
           ['max', 'Maximum'],
         ]}
-        onChange={(center) => update({ center })}
+        onChange={(center) => {
+          // Combined runs share a line, so Run no longer tells lines apart.
+          const split = card.split.filter((field) => field !== '@run');
+          const was = aggregation.center !== 'none';
+          patch({
+            aggregation: { ...aggregation, center },
+            ...((center !== 'none') !== was ? { split: was ? ['@run', ...split] : split } : {}),
+          });
+        }}
       />
       {aggregation.center !== 'none' && (
         <>
           <Choice
-            label="Group band"
+            label="Band around it"
             value={aggregation.band}
             options={[
               ['none', 'None'],
@@ -98,15 +90,66 @@ function Aggregate({ card, patch }: SettingsProps) {
             onChange={(band) => update({ band })}
           />
           <Toggle
-            label="Show member runs"
+            label="Show every run behind it"
             checked={aggregation.showMembers}
             onChange={(showMembers) => update({ showMembers })}
           />
           <Note>
-            {card.split.includes('@run') ? 'Remove @run from grouping to combine runs. ' : ''}
-            Each run contributes its latest observation at or before X, within its recorded range. At duplicate X
-            values, the last record wins. Bands summarize those member values; no extrapolation.
+            {card.split.includes('@run')
+              ? 'With one line per run there is nothing to combine: remove Run above.'
+              : 'Each run counts with its last value at or before X, only where it has records.'}
           </Note>
+        </>
+      )}
+    </>
+  );
+}
+
+// What a smoothing's value means, its range, and where it starts.
+const kinds: Record<Smoothing['kind'], { name: string; value: string; range: [number, number, number, number] }> = {
+  ema: { name: 'Moving average', value: 'Weight of the past', range: [0.01, 0.99, 0.01, 0.6] },
+  twema: { name: 'Moving average over X', value: 'Weight of the past per step', range: [0.01, 0.99, 0.01, 0.6] },
+  gaussian: { name: 'Gaussian', value: 'Width in points', range: [0.5, 50, 0.5, 3] },
+  window: { name: 'Running average', value: 'Points', range: [2, 200, 1, 10] },
+};
+
+function Smoothen({ card, patch }: SettingsProps) {
+  const smoothing = card.smoothing;
+  const kind = smoothing && kinds[smoothing.kind];
+  return (
+    <>
+      <Choice
+        label="Smooth"
+        value={smoothing?.kind ?? 'none'}
+        options={[['none', 'No'], ...Object.entries(kinds).map(([kind, { name }]): [string, string] => [kind, name])]}
+        onChange={(chosen) =>
+          patch({
+            smoothing:
+              chosen === 'none'
+                ? undefined
+                : {
+                    kind: chosen as Smoothing['kind'],
+                    value: kinds[chosen as Smoothing['kind']].range[3],
+                    original: smoothing?.original ?? true,
+                  },
+          })
+        }
+      />
+      {smoothing && kind && (
+        <>
+          <Slider
+            label={kind.value}
+            value={smoothing.value}
+            min={kind.range[0]}
+            max={kind.range[1]}
+            step={kind.range[2]}
+            onChange={(value) => patch({ smoothing: { ...smoothing, value } })}
+          />
+          <Toggle
+            label="Show the original faded"
+            checked={smoothing.original}
+            onChange={(original) => patch({ smoothing: { ...smoothing, original } })}
+          />
         </>
       )}
     </>
@@ -117,51 +160,45 @@ function ScalarSettings(props: SettingsProps) {
   const { card, fields, patch } = props;
   const numeric = fields.filter((field) => field.kinds.has('number'));
   return (
-    <SettingsTabs
-      tabs={{
-        Data: (
-          <>
-            <Note>Filters apply to this card’s visible runs.</Note>
-            <RecordFilters {...props} />
-          </>
-        ),
-        Mapping: (
-          <>
-            <FieldPicker label="X field" value={card.x} fields={numeric} onChange={(x) => patch({ x })} />
-            <FieldPicker label="Y field" value={card.y} fields={numeric} onChange={(y) => patch({ y })} />
-            <GroupBy {...props} />
-            <Aggregate {...props} />
-            <PointOrder label="Point order" {...props} />
-            <Choice
-              label="Line order"
-              value={card.lineOrder}
-              options={[
-                ['label', 'Label'],
-                ['minimum', 'Minimum Y'],
-                ['maximum', 'Maximum Y'],
-              ]}
-              onChange={(lineOrder) => patch({ lineOrder })}
-            />
-          </>
-        ),
-        Appearance: (
-          <>
-            <Choice
-              label="Draw"
-              value={card.marks}
-              options={[
-                ['lines', 'Lines'],
-                ['markers', 'Points'],
-                ['lines+markers', 'Lines and points'],
-              ]}
-              onChange={(marks) => patch({ marks })}
-            />
-            <Toggle label="Logarithmic X" checked={card.logX} onChange={(logX) => patch({ logX })} />
-            <Toggle label="Logarithmic Y" checked={card.logY} onChange={(logY) => patch({ logY })} />
-          </>
-        ),
-      }}
-    />
+    <>
+      <Group title="Axes">
+        <FieldPicker label="Y" value={card.y} fields={numeric} onChange={(y) => patch({ y })} />
+        <Toggle label="Logarithmic Y" checked={card.logY} onChange={(logY) => patch({ logY })} />
+        <FieldPicker label="X" value={card.x} fields={numeric} onChange={(x) => patch({ x })} />
+        <Toggle label="Logarithmic X" checked={card.logX} onChange={(logX) => patch({ logX })} />
+      </Group>
+      <Group title="Lines">
+        <GroupBy label="One line per" {...props} />
+        <Aggregate {...props} />
+        <Segments
+          label="Draw"
+          value={card.marks}
+          options={[
+            ['lines', 'Lines'],
+            ['markers', 'Points'],
+            ['lines+markers', 'Both'],
+          ]}
+          onChange={(marks) => patch({ marks })}
+        />
+        <Choice
+          label="Legend order"
+          value={card.lineOrder}
+          options={[
+            ['label', 'By name'],
+            ['minimum', 'Lowest minimum first'],
+            ['maximum', 'Lowest maximum first'],
+          ]}
+          onChange={(lineOrder) => patch({ lineOrder })}
+        />
+      </Group>
+      <Group title="Smoothing">
+        <Smoothen {...props} />
+      </Group>
+      <More title="Records" count={card.filters.length}>
+        <RecordFilters {...props} />
+        <PointOrder label="Connect points by" {...props} />
+      </More>
+    </>
   );
 }
 
@@ -170,6 +207,10 @@ export const scalar: CardKind = {
   icon: ChartLine,
   defaults: { title: 'Loss over training', height: 360, mode: 'gallery' },
   usesRecords: true,
+  suggest: (fields) => {
+    const numeric = fields.filter((f) => f.kinds.has('number') && !/^[@_/]|^step$/.test(f.name)).map((f) => f.name);
+    return numeric.length && !numeric.includes('loss') ? { y: numeric[0], title: numeric[0] } : {};
+  },
   isValid: (card) => !!card.x && !!card.y,
   Content: ScalarContent,
   Settings: ScalarSettings,

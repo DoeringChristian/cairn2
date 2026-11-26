@@ -136,7 +136,10 @@ export function ReportPage() {
   }, [name]);
   const follow = useCallback(async (href: string) => {
     if (!href.startsWith('cairn:')) {
-      if (/^https?:/.test(href)) window.open(href, '_blank', 'noopener');
+      // Another page of Cairn opens here, as other reports, workspaces and runs.
+      const url = new URL(href, location.href);
+      if (url.origin === location.origin) navigate(url.pathname + url.search + url.hash);
+      else if (/^https?:$/.test(url.protocol)) window.open(href, '_blank', 'noopener');
       return;
     }
     try {

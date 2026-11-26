@@ -21,12 +21,12 @@ import { CardContent } from './CardContent';
 import { ByRun } from './ByRun';
 import { CardFrame, type RecordState } from './CardFrame';
 import { newCard } from './cards';
-import { useObservations, useRun, useRuns } from './data';
+import { useConfigs, useObservations, useRun, useRuns } from './data';
 import { WorkspaceDialog } from './Dialog';
 import { defaultLayout, snapWidth, uniformSections } from './layout';
 import { discoverAll, uid, type Card, type Layout, type Section } from './model';
 import { RunPanel } from './RunPanel';
-import { matchingRuns } from './runs';
+import { fieldsOf, logged, matchingRuns } from './runs';
 import { activeKey, loadLayouts, readHidden, readSaved, saveLayout, storageKey, writeHidden } from './storage';
 import './workspace.css';
 
@@ -68,6 +68,7 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
   const [expandedRun, setExpandedRun] = useState<string>();
   const [naming, setNaming] = useState<Naming>();
   const [dragged, setDragged] = useState<string>();
+  const [choosing, setChoosing] = useState(false);
 
   // Saved layouts live on the server; the browser keeps which one was open.
   useEffect(() => {
@@ -103,9 +104,11 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
     };
   }, [project]);
 
-  const runs = useRuns(project, revision, !runId);
+  const used = fieldsOf(layout);
+  const runs = useRuns(project, revision, !runId, used.filter((field) => !field.startsWith('@')).map(logged));
+  const configs = useConfigs(runs.items, choosing || used.some((field) => field.startsWith('@config/')));
   const focused = useRun(project, runId, revision);
-  const candidates = useMemo(() => matchingRuns(runs.items, layout), [runs.items, layout]);
+  const candidates = useMemo(() => matchingRuns(runs.items, layout, configs), [runs.items, layout, configs]);
   const selected = useMemo(() => {
     if (runId) return focused.run ? [focused.run] : [];
     const hidden = hiddenRuns[layout.id];
@@ -372,8 +375,11 @@ export function Workspace({ project, runId }: { project: string; runId?: string 
             candidates={candidates}
             selected={selected}
             open={showRuns}
+            configs={configs}
+            fields={fields}
             patch={patch}
             hide={hide}
+            onChoosing={setChoosing}
           />
         )}
         <div className="workspace-canvas">

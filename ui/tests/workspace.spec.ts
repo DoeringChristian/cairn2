@@ -39,7 +39,7 @@ async function fixture(page:Page,projects=[project]){
   await on(page,'projects','Projects','ProjectList',()=>({items:projects.map(name=>({name,artifacts:{},updated:1767225600}))}));
   await on(page,'find','Find','Artifacts',request=>request.name?{items:runs.filter(a=>a.name===request.name),total:1}:{items:runs.slice(request.offset,request.offset+2),total:runs.length});
   await on(page,'resolve','Resolve','Artifacts',async(request,route)=>{const items=runs.filter(a=>request.refs.includes(a.id));if(items.length)return {items};await route.fulfill({status:404,json:{error:{message:'Unknown artifact'}}});});
-  await on(page,'last','Last','LastValues',request=>({entries:request.keys.map((key:string)=>({key,value:'completed'}))}));
+  await on(page,'last','Last','LastValues',request=>({entries:request.keys.map((key:string)=>({key,value:key==='_config'?{seed:runs.find(a=>a.id===request.artifact)!.version}:'completed'}))}));
   await on(page,'keys','Keys','KeyList',()=>({keys:['_outcome']}));
   await on(page,'records','Records','RecordPage',()=>({ordinals:[],records:[],total:0}));
   await serveRecords(page,id=>[{step:0,loss:3,quality:30,elapsed:0,camera:'front',camera_angle:0,image,video,figure},...(id==='b'?[]:[{step:1,loss:2,quality:20,elapsed:10,camera:'front',camera_angle:0,image,video,figure}]),{step:2,loss:1,quality:10,elapsed:20,camera:'front',camera_angle:0,image,video,figure}]);
@@ -59,11 +59,11 @@ test('complete streams, independent scalar axes and ordering, explicit media mat
   const scalar=card(page,'Loss over training');await expect(scalar.locator('.uplot')).toBeVisible();
   await expect.poll(()=>scalar.locator('.workspace-scalar-plot').evaluate((node:any)=>node.uplot?.data.slice(1).map((t:any)=>t[0]))).toEqual([[0,1,2],[0,2]]);
   await page.getByRole('button',{name:'Settings for Loss over training'}).click();const dialog=page.getByRole('dialog');
-  await dialog.getByRole('tab',{name:'Mapping'}).click();await chooseField(dialog,'X field','elapsed');await chooseField(dialog,'Point order','loss');await dialog.getByRole('button',{name:'Done'}).click();
+  await chooseField(dialog,'X','elapsed');await dialog.getByText('Records',{exact:true}).click();await chooseField(dialog,'Connect points by','loss');await dialog.getByRole('button',{name:'Done'}).click();
   await expect.poll(()=>scalar.locator('.workspace-scalar-plot').evaluate((node:any)=>node.uplot?.data[1][0])).toEqual([20,10,0]);
   const comparison=card(page,'Compare reconstructions');await comparison.getByRole('slider').fill('1');
   await expect(comparison.locator('.workspace-media-tile').filter({hasText:'No observation'})).toContainText('step: 1');
-  await page.getByRole('button',{name:'Settings for Compare reconstructions'}).click();await dialog.getByRole('tab',{name:'Mapping'}).click();await chooseField(dialog,'Match observations','Previous available');await dialog.getByRole('button',{name:'Done'}).click();await comparison.getByRole('slider').fill('1');await expect(comparison.getByText('No observation')).toHaveCount(0);await expect(comparison.locator('.workspace-tile-caption').filter({hasText:'step: 0'})).toHaveCount(1);
+  await page.getByRole('button',{name:'Settings for Compare reconstructions'}).click();await chooseField(dialog,'Where a run has nothing at a step','Show its last one before');await dialog.getByRole('button',{name:'Done'}).click();await comparison.getByRole('slider').fill('1');await expect(comparison.getByText('No observation')).toHaveCount(0);await expect(comparison.locator('.workspace-tile-caption').filter({hasText:'step: 0'})).toHaveCount(1);
   const gallery=card(page,'Browse by quality');await expect(gallery.locator('.workspace-tile-caption').first()).toContainText('quality: 30');
   await expect(gallery.locator('.workspace-tile-caption').last()).toContainText('quality: 10');
   const figures=card(page,'Compare fitted curves');await figures.scrollIntoViewIfNeeded();await figures.locator('.workspace-media-tile').nth(1).scrollIntoViewIfNeeded();await expect.poll(()=>figures.locator('.js-plotly-plot').count()).toBe(2);
@@ -74,8 +74,8 @@ test('complete streams, independent scalar axes and ordering, explicit media mat
 
 test('create, cancel, resize, sections, save and reload preserve the view without data copies',async({page})=>{
   await fixture(page);await page.getByRole('button',{name:'Add card',exact:true}).click();let dialog=page.getByRole('dialog');
-  await dialog.getByRole('button',{name:'Image',exact:true}).click();await dialog.getByLabel('Card title').fill('My images');await dialog.getByRole('button',{name:'Add card',exact:true}).click();await expect(card(page,'My images')).toBeVisible();
-  await page.getByRole('button',{name:'Settings for My images'}).click();await dialog.getByLabel('Card title').fill('Live title');await expect(page.locator('main article[aria-label="Live title"]')).toBeVisible();await dialog.getByRole('button',{name:'Done',exact:true}).click();await page.getByRole('button',{name:'Undo layout change',exact:true}).click();await expect(card(page,'My images')).toBeVisible();
+  await dialog.getByRole('button',{name:'Image',exact:true}).click();await dialog.getByLabel('Title').fill('My images');await dialog.getByRole('button',{name:'Add card',exact:true}).click();await expect(card(page,'My images')).toBeVisible();
+  await page.getByRole('button',{name:'Settings for My images'}).click();await dialog.getByLabel('Title').fill('Live title');await expect(page.locator('main article[aria-label="Live title"]')).toBeVisible();await dialog.getByRole('button',{name:'Done',exact:true}).click();await page.getByRole('button',{name:'Undo layout change',exact:true}).click();await expect(card(page,'My images')).toBeVisible();
   const handle=page.getByRole('button',{name:'Resize My images'});await handle.focus();await handle.press('ArrowDown');await handle.press('ArrowLeft');await expect(card(page,'My images')).toHaveCSS('height','380px');
   await page.getByRole('button',{name:'Add section',exact:true}).click();await dialog.getByLabel('Name',{exact:true}).fill('Details');await dialog.getByRole('button',{name:'Apply',exact:true}).click();
   const source=card(page,'My images').locator('.workspace-drag-handle');await source.scrollIntoViewIfNeeded();const start=await source.boundingBox();await page.mouse.move(start!.x+8,start!.y+8);await page.mouse.down();await page.mouse.move(start!.x+18,start!.y+8,{steps:4});
@@ -92,7 +92,7 @@ test('mobile cards and modal controls stay inside the viewport',async({page})=>{
   await page.setViewportSize({width:390,height:844});await fixture(page);
   const overflow=()=>page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth);
   expect(await overflow()).toBe(false);const comparison=card(page,'Compare reconstructions');await comparison.scrollIntoViewIfNeeded();await comparison.getByRole('button',{name:'Enlarge image'}).first().click();await expect(page.getByRole('dialog')).toBeVisible();await page.getByRole('button',{name:'Close media viewer'}).click();
-  await page.getByRole('button',{name:'Settings for Compare reconstructions'}).click();await page.getByRole('dialog').getByRole('tab',{name:'Mapping'}).click();expect(await overflow()).toBe(false);await page.getByRole('dialog').getByRole('button',{name:'Done'}).click();await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('button',{name:'Settings for Compare reconstructions'}).click();expect(await overflow()).toBe(false);await page.getByRole('dialog').getByRole('button',{name:'Done'}).click();await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
 test('workspace SVG blobs decode in thumbnails and lightboxes despite an untyped HTTP response',async({page})=>{
@@ -132,9 +132,9 @@ test('sweeping media keeps the previous frame until the next has loaded',async({
 
 test('record filters support nested configuration and splitting never aggregates',async({page})=>{
   await fixture(page);await page.getByRole('button',{name:'Settings for Loss over training'}).click();const dialog=page.getByRole('dialog');
-  await dialog.getByRole('tab',{name:'Mapping'}).click();await dialog.getByRole('button',{name:'Remove grouping @run',exact:true}).click();await dialog.getByRole('button',{name:'Done'}).click();
+  await dialog.getByRole('button',{name:'Remove grouping @run',exact:true}).click();await dialog.getByRole('button',{name:'Done'}).click();
   const plot=card(page,'Loss over training').locator('.workspace-scalar-plot');await expect.poll(()=>plot.evaluate((node:any)=>node.uplot?.data.slice(1).map((t:any)=>t[0]))).toEqual([[0,0,1,2,2]]);
-  await page.getByRole('button',{name:'Settings for Loss over training'}).click();await dialog.getByRole('button',{name:'Add filter',exact:true}).click();await chooseField(dialog,'Filter field 1','@config/seed');await dialog.getByLabel('Value',{exact:true}).fill('2');await dialog.getByRole('button',{name:'Done'}).click();
+  await page.getByRole('button',{name:'Settings for Loss over training'}).click();await dialog.locator('summary').filter({hasText:'Records'}).click();await dialog.getByRole('button',{name:'Add filter',exact:true}).click();await chooseField(dialog,'Filter field 1','config · seed');await dialog.getByLabel('Value',{exact:true}).fill('2');await dialog.getByRole('button',{name:'Done'}).click();
   await expect.poll(()=>plot.evaluate((node:any)=>node.uplot?.data.slice(1).map((t:any)=>t[0]))).toEqual([[0,1,2]]);
 });
 
@@ -165,7 +165,7 @@ test('hidden runs are remembered without saving, and new runs are shown',async({
   await fixture(page);await page.getByRole('button',{name:'Save',exact:true}).click();await settled(page);await page.goto(`/p/${project}/workspace`);
   await page.getByRole('button',{name:'Hide workspace-demo/b · v1',exact:true}).click();await expect(page.locator('.workspace-data-status')).toContainText('1 run · 3 records · 1 hidden');await settled(page);
   await page.reload();await expect(page.locator('.workspace-data-status')).toContainText('1 run · 3 records · 1 hidden');
-  await page.getByRole('button',{name:'Settings for Loss over training'}).click();await page.getByRole('dialog').getByLabel('Card title').fill('Renamed');await page.getByRole('dialog').getByRole('button',{name:'Done'}).click();await settled(page);
+  await page.getByRole('button',{name:'Settings for Loss over training'}).click();await page.getByRole('dialog').getByLabel('Title').fill('Renamed');await page.getByRole('dialog').getByRole('button',{name:'Done'}).click();await settled(page);
   expect(stored(page,'Training cards demo').selected).toBeNull();
   const added=artifact('c','workspace-demo/c',1,2);runs.push(added);
   try{await page.reload();await expect(page.locator('.workspace-data-status')).toContainText('2 runs · 6 records · 1 hidden');}
@@ -204,7 +204,7 @@ test('run sidebar, section sizes and cross-section moves stay consistent',async(
   const loss=card(page,'Loss over training'),quality=card(page,'Quality by camera angle');
   expect(sidebar!.x+sidebar!.width).toBeLessThan((await loss.boundingBox())!.x);
   await page.getByRole('button',{name:'Settings for Loss over training'}).click();const dialog=page.getByRole('dialog');
-  await dialog.getByRole('tab',{name:'Appearance'}).click();await expect(dialog.getByRole('button',{name:'Section card width',exact:true})).toHaveCount(0);await expect(dialog.getByLabel('Section card height')).toHaveCount(0);await dialog.getByRole('button',{name:'Done'}).click();
+  await expect(dialog.getByRole('button',{name:'Section card width',exact:true})).toHaveCount(0);await expect(dialog.getByLabel('Section card height')).toHaveCount(0);await dialog.getByRole('button',{name:'Done'}).click();
   const handle=loss.getByRole('button',{name:'Resize Loss over training'});await handle.press('ArrowLeft');await handle.press('ArrowLeft');for(let i=0;i<9;i++)await handle.press('ArrowDown');
   await expect(loss).toHaveCSS('height','540px');await expect(quality).toHaveCSS('height','540px');
   expect(await loss.evaluate(n=>n.style.getPropertyValue('--card-span'))).toBe('3');expect(await quality.evaluate(n=>n.style.getPropertyValue('--card-span'))).toBe('3');
@@ -244,7 +244,7 @@ test('legacy mixed card sizes load without rewriting the saved layout',async({pa
 test('saved workspaces stay separate across projects and repositories',async({page})=>{
   const other='another-project';await fixture(page,[project,other]);
   await page.route('**/ui-api/do/find',async r=>{if(asked(r,'Find').project===other)return answer(r,'Artifacts',{items:[],total:0});await r.fallback();});
-  const rename=async(from:string,to:string)=>{await page.getByRole('button',{name:`Settings for ${from}`,exact:true}).click();const dialog=page.getByRole('dialog');await dialog.getByLabel('Card title').fill(to);await dialog.getByRole('button',{name:'Done',exact:true}).click();};
+  const rename=async(from:string,to:string)=>{await page.getByRole('button',{name:`Settings for ${from}`,exact:true}).click();const dialog=page.getByRole('dialog');await dialog.getByLabel('Title').fill(to);await dialog.getByRole('button',{name:'Done',exact:true}).click();};
   await rename('Loss over training','Project A loss');
   await expect.poll(()=>servers.get(page)!.items.filter(i=>i.project===project).length).toBe(1);
   const layoutOf=(inProject:string)=>JSON.stringify(servers.get(page)!.items.find(i=>i.repository==='workspace-tests'&&i.project===inProject)?.layout);
@@ -293,15 +293,15 @@ test('icon navigation expands, collapses, and leaves project switching accessibl
 test('field dropdowns list available values and grouping creates distinct lines',async({page})=>{
   await fixture(page);await page.getByRole('button',{name:'Settings for Loss over training'}).click();const dialog=page.getByRole('dialog');
   await expect(dialog.getByLabel('Place card in section')).toHaveCount(0);await expect(dialog.locator('select')).toHaveCount(0);await expect(dialog.getByLabel('Combine filter conditions')).toHaveCount(0);
-  await dialog.getByRole('tab',{name:'Mapping'}).click();await chooseField(dialog,'Y field','quality');await chooseField(dialog,'Add grouping field','step');await dialog.getByRole('button',{name:'Done'}).click();
+  await chooseField(dialog,'Y','quality');await chooseField(dialog,'Add grouping field','step');await dialog.getByRole('button',{name:'Done'}).click();
   await expect.poll(()=>card(page,'Loss over training').locator('.workspace-scalar-plot').evaluate((n:any)=>n.uplot?.series.length-1)).toBe(5);
-  await page.getByRole('button',{name:'Settings for Compare reconstructions'}).click();await dialog.getByRole('button',{name:'Image field',exact:true}).click();await expect(dialog.getByRole('listbox',{name:'Image field'}).getByText('image',{exact:true})).toHaveCount(2);await page.keyboard.press('Escape');await dialog.getByRole('button',{name:'Done',exact:true}).click();
+  await page.getByRole('button',{name:'Settings for Compare reconstructions'}).click();await dialog.getByRole('button',{name:'Image field',exact:true}).click();await expect(dialog.getByRole('listbox',{name:'Image field'}).getByText('image',{exact:true})).toHaveCount(1);await page.keyboard.press('Escape');await dialog.getByRole('button',{name:'Done',exact:true}).click();
 });
 
 test('run links open Overview; Workspace is an embedded run tab with the other inspection tabs available',async({page})=>{
   const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
   await fixture(page);await page.getByRole('button',{name:'Hide workspace-demo/b · v1',exact:true}).click();
-  await page.getByRole('button',{name:'Settings for Loss over training'}).click();await page.getByRole('dialog').getByLabel('Card title').fill('My project curve');await page.getByRole('dialog').getByRole('button',{name:'Done'}).click();
+  await page.getByRole('button',{name:'Settings for Loss over training'}).click();await page.getByRole('dialog').getByLabel('Title').fill('My project curve');await page.getByRole('dialog').getByRole('button',{name:'Done'}).click();
   await expect(page.getByRole('button',{name:'Save',exact:true})).toBeDisabled();
   await page.getByRole('link',{name:'Open run workspace-demo/b · v1',exact:true}).click();
   await expect(page).toHaveURL(/\/a\/b$/);await expect(page.getByRole('tab',{name:'Overview',exact:true})).toHaveAttribute('aria-selected','true');await expect(page.getByRole('heading',{name:'Metric trends'})).toBeVisible();await expect(page.locator('.workspace-page')).toHaveCount(0);
@@ -335,29 +335,62 @@ test('invalid and cross-project run links never fall back to project records',as
 test('settings apply while open, aggregate bands persist, and one undo restores the edit session',async({page})=>{
   await fixture(page);await page.getByRole('button',{name:'Settings for Loss over training'}).click();const dialog=page.getByRole('dialog');
   await expect(dialog.getByRole('button',{name:'Apply changes'})).toHaveCount(0);await expect(dialog.locator('select')).toHaveCount(0);
-  await dialog.getByLabel('Card title').fill('Grouped loss');
+  await dialog.getByLabel('Title').fill('Grouped loss');
   await expect(page.locator('main article[aria-label="Grouped loss"]')).toBeVisible();
-  await dialog.getByRole('tab',{name:'Mapping'}).click();await dialog.getByRole('button',{name:'Remove grouping @run'}).click();await chooseField(dialog,'Group center','Mean');await chooseField(dialog,'Group band','± standard deviation');await dialog.getByLabel('Show member runs').check();
+  await dialog.getByRole('button',{name:'Remove grouping @run'}).click();await chooseField(dialog,'Combine runs','Mean');await chooseField(dialog,'Band around it','± standard deviation');await dialog.getByLabel('Show every run behind it').check();
   const plot=page.locator('main article[aria-label="Grouped loss"] .workspace-scalar-plot');
   await expect.poll(()=>plot.evaluate((n:any)=>n.uplot?.series.length)).toBe(4);
   await dialog.getByRole('button',{name:'Done',exact:true}).click();await expect(page.getByRole('button',{name:'Save',exact:true})).toBeDisabled();await settled(page);await page.reload();
-  await page.getByRole('button',{name:'Settings for Grouped loss'}).click();await dialog.getByRole('tab',{name:'Mapping'}).click();await expect(dialog.getByRole('button',{name:'Group center',exact:true})).toHaveText('Mean');await expect(dialog.getByRole('button',{name:'Group band',exact:true})).toHaveText('± standard deviation');
-  await chooseField(dialog,'Group center','Median');await chooseField(dialog,'Group band','Min – max');await dialog.getByRole('button',{name:'Close dialog'}).click();await page.getByRole('button',{name:'Undo layout change'}).click();
-  await page.getByRole('button',{name:'Settings for Grouped loss'}).click();await dialog.getByRole('tab',{name:'Mapping'}).click();await expect(dialog.getByRole('button',{name:'Group center',exact:true})).toHaveText('Mean');await expect(dialog.getByRole('button',{name:'Group band',exact:true})).toHaveText('± standard deviation');
-  await dialog.getByRole('tab',{name:'Data'}).click();await dialog.getByLabel('Card title').fill('');await dialog.getByRole('button',{name:'Done',exact:true}).click();await expect(card(page,'Grouped loss')).toBeVisible();
+  await page.getByRole('button',{name:'Settings for Grouped loss'}).click();await expect(dialog.getByRole('button',{name:'Combine runs',exact:true})).toHaveText('Mean');await expect(dialog.getByRole('button',{name:'Band around it',exact:true})).toHaveText('± standard deviation');
+  await chooseField(dialog,'Combine runs','Median');await chooseField(dialog,'Band around it','Min – max');await dialog.getByRole('button',{name:'Close dialog'}).click();await page.getByRole('button',{name:'Undo layout change'}).click();
+  await page.getByRole('button',{name:'Settings for Grouped loss'}).click();await expect(dialog.getByRole('button',{name:'Combine runs',exact:true})).toHaveText('Mean');await expect(dialog.getByRole('button',{name:'Band around it',exact:true})).toHaveText('± standard deviation');
+  await dialog.getByLabel('Title').fill('');await dialog.getByRole('button',{name:'Done',exact:true}).click();await expect(card(page,'Grouped loss')).toBeVisible();
 });
 
-test('uPlot supports point inspection, drag zoom, reset, legend visibility and resized cards',async({page})=>{
+test('uPlot supports hover, drag zoom, reset, legend visibility and resized cards',async({page})=>{
   const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await fixture(page);
   const loss=card(page,'Loss over training'),plot=loss.locator('.workspace-scalar-plot');
   const point=await plot.evaluate((n:any)=>{const u=n.uplot,r=u.over.getBoundingClientRect();return {x:r.left+u.valToPos(1,'x'),y:r.top+u.valToPos(2,'y')};});
-  await page.mouse.move(point.x,point.y);await expect(loss.locator('.workspace-scalar-tooltip')).toContainText('step: 1');await page.mouse.click(point.x,point.y);await expect(page.getByRole('dialog',{name:'Record 2',exact:true})).toBeVisible();await page.getByRole('button',{name:'Close dialog'}).click();
+  await page.mouse.move(point.x,point.y);await expect(loss.locator('.workspace-scalar-tooltip')).toContainText('step: 1');await expect(loss.locator('.workspace-scalar-tooltip')).toContainText(/Time: .*2026.*Since start: 1\.0s/);await page.mouse.click(point.x,point.y);await expect(page.getByRole('dialog')).toHaveCount(0);
   const bounds=await loss.locator('.u-over').boundingBox();const before=await plot.evaluate((n:any)=>[n.uplot.scales.x.min,n.uplot.scales.x.max]);
   await page.mouse.move(bounds!.x+bounds!.width*.2,bounds!.y+bounds!.height*.2);await page.mouse.down();await page.mouse.move(bounds!.x+bounds!.width*.8,bounds!.y+bounds!.height*.8,{steps:8});await page.mouse.up();
   await expect.poll(()=>plot.evaluate((n:any)=>n.uplot.scales.x.max-n.uplot.scales.x.min)).toBeLessThan(before[1]-before[0]);await loss.getByRole('button',{name:'Reset plot zoom'}).click();await expect.poll(()=>plot.evaluate((n:any)=>[n.uplot.scales.x.min,n.uplot.scales.x.max])).toEqual(before);
   for(const name of ['workspace-demo/a · v2','workspace-demo/b · v1'])await loss.getByRole('button',{name,exact:true}).click();await expect(loss.locator('canvas')).toBeVisible();await loss.getByRole('button',{name:'workspace-demo/a · v2',exact:true}).click();
   await loss.getByRole('button',{name:'Resize Loss over training'}).press('ArrowDown');await expect.poll(()=>plot.evaluate((n:any)=>n.uplot.height===n.clientHeight)).toBe(true);
   expect(errors).toEqual([]);
+});
+
+test('runs are found by a pattern, kept by conditions in groups, and grouped by config',async({page})=>{
+  const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await fixture(page);
+  const main=page.locator('main'),panel=page.getByRole('complementary',{name:'Run selection'}),search=panel.getByLabel('Find runs · name, ID, status, tags');
+  const shown=()=>panel.getByRole('link').evaluateAll(links=>links.map(link=>link.getAttribute('aria-label')));
+  await chooseField(main,'Versions','All versions');
+  await search.fill('demo/[b]');await expect.poll(shown).toEqual(['Open run workspace-demo/b · v1']);
+  await search.fill('demo/(');await expect(search).toHaveAttribute('aria-invalid','true');await expect.poll(shown).toEqual([]);
+  await search.fill('workspace-demo/');
+  await panel.getByRole('button',{name:'Filter and group'}).click();const dialog=page.getByRole('dialog');
+  await dialog.getByRole('button',{name:'Add condition'}).click();await chooseField(dialog,'Filter field 1','config · seed');await dialog.getByLabel('Value').fill('2');
+  await expect.poll(shown).toEqual(['Open run workspace-demo/a · v2']);
+  await dialog.getByRole('button',{name:'Add group',exact:true}).click();await chooseField(dialog,'Combine','Any of these holds');
+  await chooseField(dialog,'Filter field 2.1','Run name');await chooseField(dialog,'Operator 2.1','contains');await dialog.getByLabel('Value').nth(1).fill('/b');
+  await expect.poll(shown).toEqual(['Open run workspace-demo/a · v2','Open run workspace-demo/b · v1']);
+  await chooseField(dialog,'Add grouping field','config · seed');await dialog.getByRole('button',{name:'Close dialog'}).click();
+  await expect.poll(()=>panel.getByRole('group').evaluateAll(groups=>groups.map(g=>[g.getAttribute('aria-label'),...[...g.querySelectorAll('a')].map(a=>a.getAttribute('aria-label'))]))).toEqual([['config · seed 1','Open run workspace-demo/b · v1'],['config · seed 2','Open run workspace-demo/a · v2']]);
+  await panel.getByRole('button',{name:'config · seed 2',exact:true}).click();await expect(page.locator('.workspace-data-status')).toContainText('1 run ·');
+  await panel.getByRole('button',{name:'Remove condition (Run name contains /b)'}).click();await expect.poll(shown).toEqual(['Open run workspace-demo/a · v2']);
+  expect(errors).toEqual([]);
+});
+
+test('scalar lines are smoothed over their original, and the original can go',async({page})=>{
+  await fixture(page);
+  const plot=card(page,'Loss over training').locator('.workspace-scalar-plot');
+  const lines=()=>plot.evaluate((n:any)=>n.uplot.data.slice(1).map((t:any)=>t[1].map((y:number)=>Math.round(y*100)/100)));
+  await page.getByRole('button',{name:'Settings for Loss over training'}).click();const dialog=page.getByRole('dialog');
+  await chooseField(dialog,'Smooth','Moving average');
+  await expect.poll(lines).toEqual([[3,2.6,1.96],[3,2,1],[3,2.2],[3,1]]);
+  await dialog.getByLabel('Show the original faded').uncheck();await expect.poll(lines).toEqual([[3,2.6,1.96],[3,2.2]]);
+  await chooseField(dialog,'Smooth','Running average');await expect.poll(lines).toEqual([[3,2.5,2],[3,2]]);
+  await chooseField(dialog,'Smooth','No');await expect.poll(lines).toEqual([[3,2,1],[3,1]]);
 });
 
 test('video fields become video cards that play inline and enlarge',async({page})=>{
@@ -378,7 +411,7 @@ test('palette menus work in media cards and no workspace selector uses native co
 test('new cards group per run and the compact picker applies selections without Add',async({page})=>{
   await fixture(page);await page.getByRole('button',{name:'Add card',exact:true}).click();const dialog=page.getByRole('dialog');
   for(const kind of ['Scalar','Image','Plotly']){
-    await dialog.getByRole('button',{name:kind,exact:true}).click();await dialog.getByRole('tab',{name:'Mapping'}).click();await expect(dialog.getByRole('button',{name:'Remove grouping @run',exact:true})).toHaveText('Run ×');
+    await dialog.getByRole('button',{name:kind,exact:true}).click();await expect(dialog.getByRole('button',{name:'Remove grouping @run',exact:true})).toHaveText('Run ×');
   }
   await expect(dialog.getByRole('button',{name:'Add',exact:true})).toHaveCount(0);
   await chooseField(dialog,'Add grouping field','camera');await expect(dialog.getByRole('button',{name:'Remove grouping camera',exact:true})).toBeVisible();
@@ -392,7 +425,7 @@ test('settings lock background scrolling, preserve position on close and release
   const start=await page.evaluate(()=>scrollY);await button.click();const dialog=page.getByRole('dialog');
   await expect.poll(()=>page.evaluate(()=>getComputedStyle(document.documentElement).overflow)).toBe('hidden');
   await page.mouse.move(5,350);await page.mouse.wheel(0,600);await page.waitForTimeout(150);expect(await page.evaluate(()=>scrollY)).toBe(start);
-  await dialog.getByRole('tab',{name:'Mapping'}).click();const controls=dialog.locator('.workspace-editor-controls');await controls.hover();await page.mouse.wheel(0,500);await expect.poll(()=>controls.evaluate(e=>e.scrollTop)).toBeGreaterThan(0);expect(await page.evaluate(()=>scrollY)).toBe(start);
+  const controls=dialog.locator('.workspace-editor-controls');await controls.hover();await page.mouse.wheel(0,500);await expect.poll(()=>controls.evaluate(e=>e.scrollTop)).toBeGreaterThan(0);expect(await page.evaluate(()=>scrollY)).toBe(start);
   await dialog.getByRole('button',{name:'Done',exact:true}).click();await expect.poll(()=>page.evaluate(()=>getComputedStyle(document.documentElement).overflow)).not.toBe('hidden');expect(await page.evaluate(()=>scrollY)).toBe(start);
   await page.mouse.move(800,600);await page.mouse.wheel(0,300);await expect.poll(()=>page.evaluate(()=>scrollY)).toBeGreaterThan(start);
   await page.getByRole('link',{name:'Open run workspace-demo/b · v1'}).click();await page.getByRole('tab',{name:'Workspace',exact:true}).click();await page.getByRole('button',{name:'Settings for Loss over training'}).click();
@@ -401,10 +434,9 @@ test('settings lock background scrolling, preserve position on close and release
 });
 
 test('closing a nested record inspector keeps the settings scroll lock',async({page})=>{
-  await fixture(page);await page.getByRole('button',{name:'Settings for Loss over training'}).click();const settings=page.getByRole('dialog',{name:'Card settings',exact:true});
-  const point=await settings.locator('.workspace-scalar-plot').evaluate((n:any)=>{const u=n.uplot,r=u.over.getBoundingClientRect();return {x:r.left+u.valToPos(1,'x'),y:r.top+u.valToPos(2,'y')};});
-  await page.mouse.move(point.x,point.y);await expect(settings.locator('.workspace-scalar-tooltip')).toBeVisible();await page.mouse.click(point.x,point.y);
-  const inspector=page.getByRole('dialog',{name:'Record 2',exact:true});await expect(inspector).toBeVisible();await inspector.getByRole('button',{name:'Close dialog'}).click();await expect(settings).toBeVisible();expect(await page.evaluate(()=>getComputedStyle(document.documentElement).overflow)).toBe('hidden');
+  await fixture(page);await page.getByRole('button',{name:'Settings for Compare reconstructions'}).click();const settings=page.getByRole('dialog',{name:'Card settings',exact:true});
+  await settings.getByRole('button',{name:/^#\d+$/}).first().click();
+  const inspector=page.getByRole('dialog',{name:/^Record \d+$/});await expect(inspector).toBeVisible();await inspector.getByRole('button',{name:'Close dialog'}).click();await expect(settings).toBeVisible();expect(await page.evaluate(()=>getComputedStyle(document.documentElement).overflow)).toBe('hidden');
   await settings.getByRole('button',{name:'Close dialog'}).click();expect(await page.evaluate(()=>getComputedStyle(document.documentElement).overflow)).not.toBe('hidden');
 });
 
@@ -429,12 +461,12 @@ test('log axes render filtered tick labels, retain positive padded bounds and su
   const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await fixture(page);
   await serveRecords(page,()=>[[-1,-1],[0,0],[1,.01],[10,.1],[100,1]].map(([step,loss])=>({step,loss})));
   await page.getByRole('button',{name:'Refresh workspace'}).click();await expect(page.locator('.workspace-data-status')).toContainText('10 records');
-  const loss=card(page,'Loss over training'),plot=loss.locator('.workspace-scalar-plot');await loss.getByRole('button',{name:'Settings for Loss over training'}).click();const dialog=page.getByRole('dialog');await dialog.getByRole('tab',{name:'Appearance'}).click();
+  const loss=card(page,'Loss over training'),plot=loss.locator('.workspace-scalar-plot');await loss.getByRole('button',{name:'Settings for Loss over training'}).click();const dialog=page.getByRole('dialog');
   await dialog.getByLabel('Logarithmic X').check();await dialog.getByLabel('Logarithmic Y').check();await dialog.getByRole('button',{name:'Done'}).click();
   const logarithmic=()=>plot.evaluate((n:any)=>{const u=n.uplot;return {x:u.scales.x.distr,y:u.scales.y.distr,xRange:[u.scales.x.min,u.scales.x.max],yRange:[u.scales.y.min,u.scales.y.max],dx:[u.valToPos(10,'x')-u.valToPos(1,'x'),u.valToPos(100,'x')-u.valToPos(10,'x')],dy:[u.valToPos(.01,'y')-u.valToPos(.1,'y'),u.valToPos(.1,'y')-u.valToPos(1,'y')],valid:u.data.slice(1).every((s:any)=>s[0].every((x:number|null,i:number)=>x===null||s[1][i]===null||x>0&&s[1][i]>0))};});
   let log=await logarithmic();expect(log.x).toBe(3);expect(log.y).toBe(3);expect(log.xRange[0]).toBeGreaterThan(0);expect(log.xRange[0]).toBeLessThan(1);expect(log.xRange[1]).toBeGreaterThan(100);expect(log.yRange[0]).toBeGreaterThan(0);expect(log.yRange[0]).toBeLessThan(.01);expect(log.yRange[1]).toBeGreaterThan(1);expect(log.dx[0]).toBeCloseTo(log.dx[1]);expect(log.dy[0]).toBeCloseTo(log.dy[1]);expect(log.valid).toBe(true);
   await settled(page);await page.reload();await expect(plot.locator('canvas')).toBeVisible();log=await logarithmic();expect(log.x).toBe(3);expect(log.y).toBe(3);
-  await loss.getByRole('button',{name:'Settings for Loss over training'}).click();await dialog.getByRole('tab',{name:'Appearance'}).click();await dialog.getByLabel('Logarithmic X').uncheck();await dialog.getByLabel('Logarithmic Y').uncheck();await dialog.getByRole('button',{name:'Done'}).click();await expect.poll(()=>plot.evaluate((n:any)=>[n.uplot.scales.x.distr,n.uplot.scales.y.distr])).toEqual([1,1]);expect(errors).toEqual([]);
+  await loss.getByRole('button',{name:'Settings for Loss over training'}).click();await dialog.getByLabel('Logarithmic X').uncheck();await dialog.getByLabel('Logarithmic Y').uncheck();await dialog.getByRole('button',{name:'Done'}).click();await expect.poll(()=>plot.evaluate((n:any)=>[n.uplot.scales.x.distr,n.uplot.scales.y.distr])).toEqual([1,1]);expect(errors).toEqual([]);
 });
 
 test('each run separately shows every record card once per run, with only that run’s records',async({page})=>{
@@ -459,7 +491,7 @@ test('workspaces written elsewhere open here, and a stale save does not overwrit
   await page.getByRole('button',{name:'Save as…',exact:true}).click();await page.getByRole('dialog').getByLabel('Name',{exact:true}).fill('Sweep');await page.getByRole('dialog').getByRole('button',{name:'Save layout',exact:true}).click();await settled(page);
   const item=servers.get(page)!.items.find(i=>i.name==='Sweep')!;
   item.layout={...item.layout,cards:item.layout.cards.map((c:any)=>c.kind==='scalar'?{...c,title:'Agent loss'}:c)};item.revision++;
-  await page.getByRole('button',{name:'Settings for Loss over training',exact:true}).click();const dialog=page.getByRole('dialog');await dialog.getByLabel('Card title').fill('Mine');await dialog.getByRole('button',{name:'Done',exact:true}).click();
+  await page.getByRole('button',{name:'Settings for Loss over training',exact:true}).click();const dialog=page.getByRole('dialog');await dialog.getByLabel('Title').fill('Mine');await dialog.getByRole('button',{name:'Done',exact:true}).click();
   await expect(page.getByRole('alert')).toContainText('changed elsewhere');expect(JSON.stringify(item.layout)).toContain('Agent loss');expect(JSON.stringify(item.layout)).not.toContain('Mine');
   await page.goto(`/p/${project}/workspace`);await expect(card(page,'Agent loss').first()).toBeVisible();
 });
@@ -471,4 +503,34 @@ test('layouts a browser kept before are offered to the project',async({page})=>{
   await page.goto(`/p/${project}/workspace`);await page.getByRole('button',{name:'Move to the project',exact:true}).click();
   await expect.poll(()=>stored(page,'Old local')?.id).toBe('old');await expect(page.getByText('saved only in this browser')).toHaveCount(0);
   expect(await page.evaluate(()=>localStorage.getItem('cairn:workspace:v1:workspace-tests:workspace-test'))).toBeNull();
+});
+
+test('a drag on a scalar plot survives records that arrive, and its zoom stays',async({page})=>{
+  let count=3;await fixture(page);await page.unroute('**/ui-api/observations');
+  await serveRecords(page,()=>Array.from({length:count},(_,step)=>({step,loss:10-step%7})),false,true);
+  await page.getByRole('button',{name:'Refresh workspace',exact:true}).click();
+  const loss=card(page,'Loss over training'),plot=loss.locator('.workspace-scalar-plot');
+  const points=()=>plot.evaluate((n:any)=>n.uplot.data[1][0].length);
+  await expect.poll(points).toBe(3);
+  const r=(await loss.locator('.u-over').boundingBox())!;
+  await page.mouse.move(r.x+.2*r.width,r.y+.5*r.height);await page.mouse.down();await page.mouse.move(r.x+.6*r.width,r.y+.52*r.height,{steps:5});
+  const selected=()=>plot.evaluate((n:any)=>n.uplot.select.width);const width=await selected();expect(width).toBeGreaterThan(50);
+  count=40;await page.waitForResponse('**/ui-api/observations');await page.waitForTimeout(2500);
+  expect(await selected()).toBeCloseTo(width,0);expect(await points()).toBe(3);
+  await page.mouse.up();await expect.poll(points).toBeGreaterThan(3);
+  const x=()=>plot.evaluate((n:any)=>[n.uplot.scales.x.min,n.uplot.scales.x.max]);const zoomed=await x();expect(zoomed[1]).toBeLessThan(3);
+  count=80;await expect.poll(points,{timeout:10000}).toBe(80);expect(await x()).toEqual(zoomed);
+});
+
+test('every image of a card zooms and pans together, and a double click fits them',async({page})=>{
+  await fixture(page);const comparison=card(page,'Compare reconstructions');await comparison.scrollIntoViewIfNeeded();
+  const layers=()=>comparison.locator('.workspace-pane > .workspace-held').evaluateAll(nodes=>nodes.map(n=>(n as HTMLElement).style.transform.replace(/[\d.]+px/g,v=>`${Math.round(parseFloat(v)/2)*2}px`)));
+  await expect.poll(async()=>(await layers()).length).toBe(2);
+  const before=await page.evaluate(()=>scrollY);
+  const pane=comparison.locator('.workspace-pane').first();await pane.hover();await page.mouse.wheel(0,-300);
+  await expect.poll(async()=>(await layers())[0]).toContain('scale(2.');
+  const [a,b]=await layers();expect(a).toBe(b);expect(await page.evaluate(()=>scrollY)).toBe(before);
+  const box=(await pane.boundingBox())!;await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+box.width/2+30,box.y+box.height/2+10,{steps:4});await page.mouse.up();
+  const moved=await layers();expect(moved[0]).not.toBe(a);expect(moved[0]).toBe(moved[1]);
+  await page.mouse.dblclick(box.x+box.width/2,box.y+box.height/2);await expect.poll(layers).toEqual(['','']);
 });

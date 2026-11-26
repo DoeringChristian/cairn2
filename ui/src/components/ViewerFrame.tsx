@@ -4,9 +4,9 @@ import { api, resolve as find, type Json } from '../api';
 import { heightOf, keepHeight } from '../report/heights';
 import { ErrorNote, Loading } from './States';
 
-export type View = { viewer: string; caption?: string; settings: Record<string, Json> };
+export type View = { viewer: string; caption?: string; height?: number; settings: Record<string, Json> };
 /** A view block: YAML whose viewer names the HTML file, caption the figure's caption,
- * and every other key is the viewer's own setting. */
+ * and every other key is the viewer's own setting; `width: 50%` and `height: 300px` also size it. */
 export function readView(text: string): View {
   const value = parse(text);
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -16,6 +16,7 @@ export function readView(text: string): View {
   return {
     viewer: viewer.replace(/^cairn:/, ''),
     caption: typeof caption === 'string' ? caption : undefined,
+    height: Number(/^(\d+)px$/.exec(String(settings.height))?.[1]) || undefined,
     settings,
   };
 }
@@ -36,7 +37,9 @@ export function ViewerFrame({
     [src, setSrc] = useState<string>(),
     [error, setError] = useState<Error>(),
     [height, setHeight] = useState(() => heightOf(`viewer:${viewer}`) ?? 480);
-  const identity = JSON.stringify([viewer, settings, project]);
+  const { width: _width, height: _height, ...own } = settings;
+  const size = (value: Json | undefined) => (/^[\d.]+(%|px)$/.test(String(value)) ? null : (value ?? null));
+  const identity = JSON.stringify([viewer, own, size(_width), size(_height), project]);
   useEffect(() => {
     const receive = (event: MessageEvent) => {
       if (event.source !== frame.current?.contentWindow || event.data?.type !== 'cairn-html-size') return;

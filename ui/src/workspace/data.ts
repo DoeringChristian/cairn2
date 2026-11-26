@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ApiError, getArtifact, operate, type Artifact, type Run } from '../api';
+import { ApiError, getArtifact, last, operate, type Artifact, type Json, type Run } from '../api';
 import { decode, decodeRecord } from '../protocol';
 import { useRefreshMode } from '../refresh';
 import type { Observation } from './model';
 
-export function useRuns(project: string, revision: number, enabled = true) {
+/** The runs of a project, with the last value they logged at each of `values`. */
+export function useRuns(project: string, revision: number, enabled = true, values: string[] = []) {
   const [state, setState] = useState<{ items: Artifact[]; loading: boolean; error?: Error }>({
     items: [],
     loading: true,
@@ -25,7 +26,7 @@ export function useRuns(project: string, revision: number, enabled = true) {
         while (items.length < total) {
           const result = await operate<{ items: Artifact[]; total: number }>(
             'find',
-            { project, namespaces: ['runs'], values: ['_outcome'], offset: items.length, limit: 1000 },
+            { project, namespaces: ['runs'], values: ['_outcome', ...values], offset: items.length, limit: 1000 },
             controller.signal,
           );
           total = result.total;
@@ -43,8 +44,31 @@ export function useRuns(project: string, revision: number, enabled = true) {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [project, revision, paused, enabled]);
+  }, [project, revision, paused, enabled, values.join('\n')]);
   return state;
+}
+
+// A run's config is its first record: once read, it stays.
+const configs = new Map<string, Json>();
+/** The config of each run, read only while something asks for it. */
+export function useConfigs(runs: Artifact[], enabled: boolean) {
+  const [known, setKnown] = useState<Record<string, Json>>({});
+  const missing = enabled ? runs.filter((run) => !configs.has(run.id)).map((run) => run.id) : [];
+  useEffect(() => {
+    const controller = new AbortController();
+    const queue = [...missing];
+    const show = () => !controller.signal.aborted && setKnown(Object.fromEntries(configs));
+    show();
+    const work = async () => {
+      for (let id = queue.shift(); id; id = queue.shift()) {
+        const found = await last(id, ['_config'], controller.signal).catch(() => undefined);
+        if (found) configs.set(id, found._config ?? null);
+      }
+    };
+    void Promise.all(Array.from({ length: 4 }, work)).then(show);
+    return () => controller.abort();
+  }, [missing.join(',')]);
+  return known;
 }
 type Loaded = { run: Run; rows: Observation[]; cutoff: number; complete: boolean };
 type Row = { ordinal: number; created: number; data: Observation['data'] };
@@ -104,6 +128,7 @@ async function read(
       page.records.forEach((record, i) => {
         const data = decodeRecord(record);
         const created = data._time as number;
+        run!.started ??= created;
         // What Cairn logs about the run itself is no observation.
         for (const key of Object.keys(data))
           if (key[0] === '_') {
@@ -165,6 +190,7 @@ export function useObservations(project: string, runs: Artifact[], revision: num
     function add(run: Run, added: Row[], cutoff: number) {
       const previous = cache.current.get(run.id);
       run.config ??= previous?.run.config;
+      run.started = previous?.run.started ?? run.started;
       const same =
         previous &&
         previous.run.finished === run.finished &&

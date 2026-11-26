@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as Press, type ReactNode } from 'react';
+import { GripVertical } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { parse } from 'yaml';
 import { artifactPath, blobPath, envelope, last, operate, reference as nameOf, resolve, useLoaded, type Artifact, type BlobRef, type Json } from '../api';
@@ -14,6 +15,7 @@ import { isKind, newCard } from '../workspace/cards';
 import { useObservations } from '../workspace/data';
 import { baseCard, type Card } from '../workspace/model';
 import { heightOf, keepHeight } from './heights';
+import { tenths } from './markdown';
 import type { Actions, Element } from './preview';
 
 /** A file a report shows, known with its size before anything is drawn. */
@@ -43,7 +45,7 @@ function Figure({ source, caption, project, inline, known, report }: { source: s
     const [artifact] = await resolve([ref], project, signal);
     return { artifact, value: path ? await valueAt(artifact.id, path, signal) : undefined };
   }, `figure:${project}:${source}`, pulse);
-  if (path.endsWith('.html')) return <Captioned caption={caption}><ViewerFrame viewer={source} settings={{}} project={project} title={caption || path} /></Captioned>;
+  if (path.endsWith('.html')) return <Captioned caption={caption}><div className="md-sized"><ViewerFrame viewer={source} settings={{}} project={project} title={caption || path} /><Resize /></div></Captioned>;
   if (found.error && !found.data) return inline ? <span className="md-missing" title={found.error.message}>{source}</span> : <ErrorNote error={found.error} />;
   if (!found.data && known && path && shown(known)) return <Captioned caption={caption}><Media blob={known} alt={caption || path} origin={origin} /></Captioned>;
   if (!found.data) return inline ? <span className="muted">…</span> : <Waiting what={source} />;
@@ -123,47 +125,73 @@ const Captioned = ({ caption = '', children }: { caption?: string; children: Rea
   </figure>
 );
 
-const snaps: [string, number][] = [['1/4', 25], ['1/3', 100 / 3], ['1/2', 50], ['2/3', 200 / 3], ['3/4', 75], ['full', 100]];
-/** Drags the width of a figure (in a row, those beside it give way), or the height of a block. */
-function Resize({ vertical = false, height }: { vertical?: boolean; height?: number }) {
-  const { dom, actions } = useContext(Handled)!;
+/** Pumice's handle (plugins/core-editor/src/resize.ts): the width of what is shown, in a row
+ * with those beside it giving way, and the height of a block. */
+const snaps: [string, number][] = [['1/4', 1 / 4], ['1/3', 1 / 3], ['1/2', 1 / 2], ['2/3', 2 / 3], ['3/4', 3 / 4], ['full', 1]];
+const snapWithin = 14;
+const rowGap = 12;
+const rowMin = 60;
+type Mate = { el: HTMLElement; share: number; aspect: number; width: number };
+/** The widths at which a figure of a row is as high as one of the others. */
+function sameHeight(line: number, aspect: number, mates: Mate[]) {
+  const gap = rowGap - rowGap / (mates.length + 1);
+  const total = mates.reduce((sum, mate) => sum + mate.share, 0);
+  return mates.map((mate) => (line * (mate.share / total) * aspect + gap * (mate.aspect - aspect)) / (mate.aspect + (mate.share / total) * aspect));
+}
+function Resize() {
+  const { dom, element, actions } = useContext(Handled)!;
   const [label, setLabel] = useState('');
+  const block = element.kind !== 'figure';
   function press(event: Press<HTMLSpanElement>) {
     if (event.button) return;
     event.preventDefault();
     event.stopPropagation();
     const handle = event.currentTarget;
     const start = { x: event.clientX, y: event.clientY };
+    const target = handle.parentElement!;
+    const box = target.getBoundingClientRect();
     const line = dom.parentElement!.getBoundingClientRect().width;
-    const media = dom.querySelector<HTMLElement>('.md-sized, .md-card')!;
-    const box = media.getBoundingClientRect();
-    const others = vertical ? [] : [...dom.parentElement!.querySelectorAll<HTMLElement>(':scope > .md-embed')].filter((el) => el !== dom);
-    const shares = others.map((el) => el.getBoundingClientRect().width);
-    const before = [dom, ...others].map((el) => [el, el.style.getPropertyValue('--share'), el.classList.contains('is-sized')] as const);
-    const total = shares.reduce((sum, share) => sum + share, 0);
-    let size: { width?: number; others?: { el: HTMLElement; width: number }[]; height?: number } | undefined;
+    const mates: Mate[] = element.place !== 'row' ? [] : [...dom.parentElement!.querySelectorAll<HTMLElement>(':scope > .md-embed')]
+      .filter((el) => el !== dom)
+      .map((el) => {
+        const { width, height } = (el.querySelector('.md-sized') ?? el).getBoundingClientRect();
+        return { el, share: Math.max(1, width), aspect: width / Math.max(1, height), width: 0 };
+      });
+    const total = mates.reduce((sum, mate) => sum + mate.share, 0);
+    const before = [dom, ...mates.map((mate) => mate.el)].map((el) => [el, el.style.getPropertyValue('--share'), el.classList.contains('is-sized')] as const);
+    const tall = target.style.height;
+    // In a row, the space to the next one belongs to the width.
+    const width = mates.length ? box.width + rowGap - rowGap / (mates.length + 1) : box.width;
+    const limit = line - mates.length * rowMin;
+    // What stands in the middle grows on both sides.
+    const pace = element.place === 'line' ? 2 : 1;
+    let size: Parameters<Actions['size']>[0] | undefined;
     const set = (el: HTMLElement, share: number) => {
       el.style.setProperty('--share', String(share));
       el.classList.add('is-sized');
     };
     const move = (e: globalThis.PointerEvent) => {
-      if (vertical) {
-        const tall = Math.round(Math.max(160, Math.min(1200, (height ?? box.height) + e.clientY - start.y)) / 10) * 10;
-        media.style.height = `${tall}px`;
-        size = { height: tall };
-        setLabel(`${tall} px`);
-        return;
+      const free = Math.max(40, Math.min(limit, width + (e.clientX - start.x) * pace));
+      const near: [string, number][] = e.altKey ? [] : snaps.map(([name, share]) => [name, share * line]);
+      if (!e.altKey && mates.length) near.push(...sameHeight(line, box.width / box.height, mates).map((at): [string, number] => ['same height', at]));
+      const distance = (at: number) => Math.abs(at - free);
+      const snap = near.filter(([, at]) => at <= limit && distance(at) <= snapWithin).sort((a, b) => distance(a[1]) - distance(b[1]))[0];
+      const share = tenths(((snap?.[1] ?? free) / line) * 100);
+      set(dom, share);
+      let left = tenths(100 - share);
+      mates.forEach((mate, i) => {
+        mate.width = i === mates.length - 1 ? left : tenths(((100 - share) * mate.share) / total);
+        left = tenths(left - mate.width);
+        set(mate.el, mate.width);
+      });
+      size = { width: share, others: mates };
+      let shown = `${snap ? `${snap[0]} · ` : ''}${Math.round(share)}%`;
+      if (block) {
+        size.height = Math.round(Math.max(80, Math.min(4000, box.height + e.clientY - start.y)));
+        target.style.height = `${size.height}px`;
+        shown += ` × ${size.height}`;
       }
-      // A figure alone stands in the middle, so both its edges move.
-      const grown = (e.clientX - start.x) * (others.length ? 1 : 2);
-      const free = Math.max(8, Math.min(100 - 8 * others.length, ((box.width + grown) / line) * 100));
-      const snap = e.altKey ? undefined : snaps.find(([, share]) => Math.abs(share - free) < 2);
-      const width = Math.round(snap?.[1] ?? free);
-      set(dom, width);
-      const given = others.map((el, i) => ({ el, width: Math.max(8, Math.round(((100 - width) * shares[i]) / total)) }));
-      given.forEach((one) => set(one.el, one.width));
-      size = { width, others: given };
-      setLabel(`${snap ? `${snap[0]} · ` : ''}${width}%`);
+      setLabel(shown);
     };
     const end = (e: globalThis.PointerEvent) => {
       handle.removeEventListener('pointermove', move);
@@ -177,7 +205,7 @@ function Resize({ vertical = false, height }: { vertical?: boolean; height?: num
         else el.style.removeProperty('--share');
         el.classList.toggle('is-sized', sized);
       }
-      if (vertical) media.style.height = `${height}px`;
+      target.style.height = tall;
     };
     handle.setPointerCapture(event.pointerId);
     dom.classList.add('is-resizing');
@@ -187,6 +215,7 @@ function Resize({ vertical = false, height }: { vertical?: boolean; height?: num
   }
   return (
     <span className="md-resize" title="Drag to resize" draggable={false} onPointerDown={press} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); }}>
+      <GripVertical size={12} />
       {label && <span className="md-resize-label">{label}</span>}
     </span>
   );
@@ -201,7 +230,7 @@ const sides = (value: Json) => {
 /** Media in the space its size asks for; a video whose size is not known gets 16:9. */
 function Media({ blob, alt, origin }: { blob: Known; alt: string; origin: Origin }) {
   const media = blob.media_type || '';
-  if (media === plotly) return <PlotlyFigure src={blobPath(blob)} />;
+  if (media === plotly) return <div className="md-sized"><PlotlyFigure src={blobPath(blob)} /><Resize /></div>;
   if (media.startsWith('audio/')) return <div className="md-audio"><MediaPlayback src={blobPath(blob)} mime={media} label={alt} source={origin} /></div>;
   const video = media.startsWith('video/');
   const known = blob.width && blob.height;
@@ -241,7 +270,14 @@ function View({ source, project }: { source: string; project: string }) {
   } catch (error) {
     return <ErrorNote error={error as Error} />;
   }
-  return <Captioned caption={view.caption}><ViewerFrame viewer={view.viewer} settings={view.settings} project={project} title={view.caption || view.viewer} /></Captioned>;
+  return (
+    <Captioned caption={view.caption}>
+      <div className={`md-sized${view.height ? ' md-tall' : ''}`} style={{ height: view.height }}>
+        <ViewerFrame viewer={view.viewer} settings={view.settings} project={project} title={view.caption || view.viewer} />
+        <Resize />
+      </div>
+    </Captioned>
+  );
 }
 
 type Spec = { runs: string[]; card: Card; caption: string };
@@ -249,8 +285,9 @@ type Spec = { runs: string[]; card: Card; caption: string };
 function readCard(source: string): Spec {
   const value = parse(source);
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('A card is YAML, e.g. runs: runs/sweep/*');
-  const { runs, caption, kind = 'scalar', ...rest } = value as Record<string, unknown>;
+  const { runs, caption, kind = 'scalar', width, ...rest } = value as Record<string, unknown>;
   if (!isKind(kind) || kind === 'viewer') throw new Error('A card’s kind is scalar, image, video or plotly');
+  if (width !== undefined && typeof width !== 'number' && !/^[\d.]+%$/.test(String(width))) throw new Error('A card’s width is a share of the line, e.g. 50%');
   const list = typeof runs === 'string' ? [runs] : runs;
   if (!Array.isArray(list) || !list.length || list.some((run) => typeof run !== 'string')) throw new Error('A card needs runs, e.g. runs: [runs/a@v1, runs/sweep/*]');
   const card = newCard(kind, '');
@@ -288,9 +325,9 @@ function Runs({ spec, project }: { spec: Spec; project: string }) {
   if (runs.error || data.error) return <ErrorNote error={(runs.error || data.error)!} />;
   return (
     <Captioned caption={spec.caption}>
-      <div className="workspace-card md-card" style={{ height: spec.card.height }}>
+      <div className="workspace-card md-card md-sized" style={{ height: spec.card.height }}>
         {!runs.data || (data.loading && !data.rows.length) ? <Loading what="Loading runs" /> : <CardContent card={spec.card} rows={data.rows} />}
-        <Resize vertical height={spec.card.height} />
+        <Resize />
       </div>
     </Captioned>
   );

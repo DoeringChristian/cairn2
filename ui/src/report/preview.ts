@@ -4,7 +4,7 @@ import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, typ
 import { copyText } from '../components/useCopyText';
 import { heightOf } from './heights';
 import { beginEmbedDrag } from './drag';
-import { callout, calloutKinds, embedsIn, embedText, setting, type Embed } from './markdown';
+import { blockShare, callout, calloutKinds, embedsIn, embedText, setting, tenths, type Embed } from './markdown';
 import { mediaHandling, type Span } from './media';
 import { copyButton, type Cite } from './reference';
 import { revealChanged, revealedAt, revealedLines, revealTracking, setFocused } from './reveal';
@@ -19,7 +19,7 @@ export type Actions = {
   copy: () => void;
   remove: () => void;
   caption: (text: string) => void;
-  /** Widths as shares of the line, of this one and (in a row) of those beside it; or a block's height. */
+  /** Widths as shares of the line, of this one and (in a row) of those beside it; and a block's height. */
   size: (size: { width?: number; others?: { el: HTMLElement; width: number }[]; height?: number }) => void;
 };
 export type Mounts = { add: (dom: HTMLElement, element: Element, actions: Actions) => void; update: (dom: HTMLElement, element: Element) => void; menu: (dom: HTMLElement, at: { x: number; y: number }) => void; remove: (dom: HTMLElement) => void; follow: (href: string) => void; cite: Cite };
@@ -105,7 +105,10 @@ class ElementWidget extends WidgetType {
         else write(setting(shown.get(dom)!.text, 'caption', caption), 'input.caption');
       },
       size: ({ width, others = [], height }) => {
-        if (height !== undefined) return write(setting(shown.get(dom)!.text, 'height', Math.round(height)), 'input.resize');
+        if (!figure) {
+          const sized = setting(shown.get(dom)!.text, 'width', width && width < 100 ? `${tenths(width)}%` : undefined);
+          return write(height === undefined ? sized : setting(sized, 'height', embed().kind === 'view' ? `${height}px` : height), 'input.resize');
+        }
         const changes = [{ el: dom, width }, ...others].map((one) => ({ ...span(one.el), insert: embedText({ ...embed(one.el), width: one.width }) }));
         view.dispatch({ changes, userEvent: 'input.resize' });
       },
@@ -289,7 +292,7 @@ function blocks(state: EditorState, mounts: Mounts): DecorationSet {
     }
     if (asked(state, span.from, span.to) || within(state, span)) continue;
     const block = /^```\s*(view|card)\s*\n([\s\S]*?)\n?```\s*$/.exec(text);
-    if (block) found.push(Decoration.replace({ media: true, block: true, widget: new ElementWidget({ kind: block[1] as 'view' | 'card', source: block[2], caption: '', place: 'line' }, text, mounts) }).range(span.from, span.to));
+    if (block) found.push(Decoration.replace({ media: true, block: true, widget: new ElementWidget({ kind: block[1] as 'view' | 'card', source: block[2], caption: '', place: 'line', width: blockShare(block[2]) }, text, mounts) }).range(span.from, span.to));
   } while (cursor.nextSibling());
   return Decoration.set(found, true);
 }
@@ -577,6 +580,11 @@ export function preview(mounts: Mounts) {
       };
     }),
   ];
+  const atCode = EditorView.editorAttributes.of(({ state }) => {
+    for (let node = syntaxTree(state).resolveInner(state.doc.lineAt(state.selection.main.head).to, -1); node.parent; node = node.parent)
+      if (node.name === 'FencedCode' || node.name === 'CodeBlock') return { class: 'md-at-code' };
+    return null;
+  });
   const handling = mediaHandling({ atoms: (view) => view.plugin(inside)?.atoms, blocks: (state) => state.field(blockField(mounts), false) });
-  return [clicks, follow, revealTracking, sourceField, inside, blockField(mounts), handling];
+  return [clicks, follow, atCode, revealTracking, sourceField, inside, blockField(mounts), handling];
 }

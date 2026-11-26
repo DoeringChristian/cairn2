@@ -24,6 +24,7 @@ CARD = {*TEXT, *FLAGS, *SIZES, *CHOICES, "kind", "filters", "split", "pointOrder
 OPERATORS = ("eq", "ne", "lt", "le", "gt", "ge", "contains", "exists")
 CENTERS = ("none", "mean", "median", "min", "max")
 BANDS = ("none", "minmax", "std", "sem")
+SMOOTHING = {"ema": 0.999, "twema": 0.999, "gaussian": 50, "window": 200}
 LAYOUT = {"version", "id", "name", "search", "versions", "status", "selected", "sections", "cards"}
 
 
@@ -44,8 +45,27 @@ def _strings(value):
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
 
 
+def _filter(item, where):
+    _keys(item, ("field", "op", "value"), where=f"a filter of {where}")
+    if not isinstance(item["field"], str) or not isinstance(item["value"], str):
+        _fail(f"{where}: a filter's field and value are strings")
+    if item["op"] not in OPERATORS:
+        _fail(f"{where}: a filter's op is one of {', '.join(OPERATORS)}")
+
+
+def _conditions(group):
+    _keys(group, ("mode", "items"), where="a group of conditions")
+    if group["mode"] not in ("all", "any") or not isinstance(group["items"], list):
+        _fail("a group of conditions has mode all or any, and a list of items")
+    for item in group["items"]:
+        if isinstance(item, dict) and "items" in item:
+            _conditions(item)
+        else:
+            _filter(item, "the runs")
+
+
 def _card(card, sections):
-    _keys(card, CARD, ("aggregation",), "a card")
+    _keys(card, CARD, ("aggregation", "smoothing"), "a card")
     where = f"card {card['id']!r}" if isinstance(card["id"], str) else "a card"
     if card["kind"] not in KINDS:
         _fail(f"{where} has kind {card['kind']!r}; kinds are {', '.join(KINDS)}")
@@ -68,11 +88,7 @@ def _card(card, sections):
     if not isinstance(card["filters"], list):
         _fail(f"{where}: filters must be a list")
     for item in card["filters"]:
-        _keys(item, ("field", "op", "value"), where=f"a filter of {where}")
-        if not isinstance(item["field"], str) or not isinstance(item["value"], str):
-            _fail(f"{where}: a filter's field and value are strings")
-        if item["op"] not in OPERATORS:
-            _fail(f"{where}: a filter's op is one of {', '.join(OPERATORS)}")
+        _filter(item, where)
     order = card["pointOrder"]
     _keys(order, ("field", "descending"), where=f"pointOrder of {where}")
     if not isinstance(order["field"], str) or not isinstance(order["descending"], bool):
@@ -86,11 +102,19 @@ def _card(card, sections):
             or not isinstance(aggregation["showMembers"], bool)
         ):
             _fail(f"{where}: aggregation center, band or showMembers is invalid")
+    if "smoothing" in card:
+        smoothing = card["smoothing"]
+        _keys(smoothing, ("kind", "value", "original"), where=f"smoothing of {where}")
+        kind, value = smoothing["kind"], smoothing["value"]
+        if type(value) not in (int, float) or not 0 < value <= SMOOTHING.get(kind, 0):
+            _fail(f"{where}: smoothing is {', '.join(SMOOTHING)}, with a value in its range")
+        if not isinstance(smoothing["original"], bool):
+            _fail(f"{where}: smoothing original is true or false")
 
 
 def validate_layout(layout, name):
     """Check a layout as the workspace page does; its name must be the workspace's."""
-    _keys(layout, LAYOUT, ("view",))
+    _keys(layout, LAYOUT, ("view", "conditions", "groupRuns"))
     if len(json.dumps(layout)) > LAYOUT_LIMIT:
         _fail("larger than 1 MiB")
     if layout["version"] != 1:
@@ -104,6 +128,10 @@ def validate_layout(layout, name):
         _fail("versions is latest or all")
     if layout["selected"] is not None and not _strings(layout["selected"]):
         _fail("selected is null or a list of run IDs")
+    if "conditions" in layout:
+        _conditions(layout["conditions"])
+    if "groupRuns" in layout and not _strings(layout["groupRuns"]):
+        _fail("groupRuns is a list of fields")
     if layout.get("view", "together") not in ("together", "runs"):
         _fail("view is together or runs")
     sections = layout["sections"]

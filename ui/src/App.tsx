@@ -48,7 +48,7 @@ function Rail({ authenticated, noAuth, logout }: {authenticated: boolean; noAuth
   const inList = location.pathname === projectPath(project);
   const inWorkspace = !!matchPath('/p/:project/workspace',location.pathname);
   const pulse = useRefresh(authenticated), paused = useRefreshMode();
-  const projects = useProjects(authenticated, pulse);
+  const projects = useProjects(authenticated, `${pulse}:${project}`);
   useEffect(() => setOpen(false), [location.pathname, location.search]);
   return <aside className={`rail ${open ? 'open' : ''} ${expanded?'expanded':'collapsed'}`} aria-label="Main navigation"><Link className="brand" to="/"><span>C</span><span className="site-title">Cairn</span></Link><button className="rail-fold" aria-label={expanded?'Collapse navigation':'Expand navigation'} title={expanded?'Collapse navigation':'Expand navigation'} aria-expanded={expanded} onClick={()=>setExpanded(!expanded)}>{expanded?<PanelLeftClose size={18}/>:<PanelLeftOpen size={18}/>}</button>
     <button className="rail-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>Browse</button>
